@@ -4,6 +4,7 @@
 # User-specific settings and portable-mode state
 terra-config.json
 data/
+config-backups/
 
 # Test and PowerShell runtime output
 TestResults/
