@@ -116,11 +116,39 @@ function Save-Settings {
     @(Get-ChildItem -LiteralPath $backupDir -File -Filter 'terra-config-*.json' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 20) | Remove-Item -Force
     Write-Line 'Settings saved successfully.' 'Green'
 }
+function Test-SettingsShape($Settings) {
+    return ($null -ne $Settings -and $Settings.projects -and @($Settings.projects).Count -gt 0 -and $Settings.budget -and $Settings.execution -and $Settings.logs)
+}
+function Get-LatestValidConfigBackup {
+    $backupDir = Join-Path (Get-ConfigRoot) 'config-backups'
+    if (-not (Test-Path -LiteralPath $backupDir -PathType Container)) { return $null }
+    foreach ($file in @(Get-ChildItem -LiteralPath $backupDir -File -Filter 'terra-config-*.json' | Sort-Object LastWriteTimeUtc -Descending)) {
+        try {
+            $settings = Get-Content -LiteralPath $file.FullName -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable -Depth 60
+            if (Test-SettingsShape $settings) { return $file }
+        } catch { }
+    }
+    return $null
+}
+function Restore-LatestConfigBackup {
+    $backup = Get-LatestValidConfigBackup
+    if ($null -eq $backup) { return $false }
+    Write-Line "The active configuration is invalid. Latest valid backup: $($backup.FullName)" 'Yellow'
+    Write-Line "Backup timestamp: $($backup.LastWriteTime.ToString('u'))" 'Yellow'
+    if (-not (Confirm 'Restore this backup?')) { return $false }
+    $corrupt = $script:ConfigFile + '.corrupt-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+    if (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf) { Move-Item -LiteralPath $script:ConfigFile -Destination $corrupt -Force }
+    Copy-Item -LiteralPath $backup.FullName -Destination $script:ConfigFile -Force
+    Write-Line "Configuration restored. Corrupt copy: $corrupt" 'Green'
+    return $true
+}
 function Load-Settings {
     try { $script:Settings = Get-Content -LiteralPath $script:ConfigFile -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable -Depth 60 }
-    catch { throw "Configuration is invalid. Restore a backup from '$(Join-Path (Get-ConfigRoot) 'config-backups')'." }
-    if (-not $script:Settings.projects -or @($script:Settings.projects).Count -eq 0) { throw 'Configuration has no projects.' }
-    if (-not $script:Settings.budget -or -not $script:Settings.execution -or -not $script:Settings.logs) { throw 'Configuration is incomplete.' }
+    catch {
+        if (-not (Restore-LatestConfigBackup)) { throw "Configuration is invalid. No restore was performed; backups are in '$(Join-Path (Get-ConfigRoot) 'config-backups')'." }
+        $script:Settings = Get-Content -LiteralPath $script:ConfigFile -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable -Depth 60
+    }
+    if (-not (Test-SettingsShape $script:Settings)) { throw 'Configuration is incomplete.' }
     if ([int]$script:Settings.schemaVersion -lt 3) { $script:Settings.schemaVersion = 3 }
     if (-not $script:ProjectId -or @($script:Settings.projects | Where-Object { $_.id -eq $script:ProjectId }).Count -ne 1) { $script:ProjectId = [string]$script:Settings.projects[0].id }
 }
@@ -180,6 +208,9 @@ function Initialize-Configuration {
         Copy-Item -LiteralPath $legacy -Destination $script:ConfigFile -Force
         $script:Settings = Get-Content -LiteralPath $script:ConfigFile -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable -Depth 60
         if (-not [IO.Path]::IsPathRooted([string]$script:Settings.logs.root)) { $script:Settings.logs.root = Join-Path (Get-ConfigRoot) 'projects' }
+        foreach ($project in @($script:Settings.projects)) {
+            if ($null -eq $project.taskIdPattern -and [string]$project.roadmap -match '^NTD-') { $project.taskIdPattern = 'NTD-\d{4,}' }
+        }
         Save-Settings
         Write-Line "Legacy settings copied to $script:ConfigFile" 'Green'
         return $true

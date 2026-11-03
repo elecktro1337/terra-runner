@@ -75,6 +75,7 @@ try {
     $env:TERRA_MOCK_COST = '50.0'  # Deliberately above the daily limit.
     $env:TERRA_MOCK_ALL_COST = '20.0'
     $cfg.budget.mode = 'balance'
+    $cfg.schemaVersion = 3 # No taskIdPattern: all Markdown checkbox tasks are actionable.
     $cfg.budget.balance.source = 'snapshot'
     $cfg.budget.balance.id = 'mock-user-balance'
     $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
@@ -89,6 +90,7 @@ try {
 
     $env:TERRA_MOCK_ALL_COST = '95.0' # $25 left, should be allowed regardless of the day cost.
     [IO.File]::WriteAllText((Join-Path $repo 'NTD-ROADMAP.md'),"- [x] **NTD-0001** — Completed`n- [ ] **NTD-0002** — Next mock task`n")
+    Add-Content -LiteralPath (Join-Path $repo 'NTD-ROADMAP.md') -Value '- [ ] Generic checkbox task'
     & git -C $repo add NTD-ROADMAP.md | Out-Null
     & git -C $repo commit -qm 'test: add second pending task'
     & git -C $repo push -q origin codex/terra
