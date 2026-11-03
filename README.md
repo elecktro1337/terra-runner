@@ -41,7 +41,7 @@ Each project has a stable ID and its own logs, reports, control state, and stop 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\terra-ui-selftest.ps1
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\terra-selftest.ps1
-Invoke-Pester .\tests\TerraRunner.Regression.Tests.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester .\tests\TerraRunner.Regression.Tests.ps1"
 ```
 
 The tests use a local mock OpenCode and temporary repositories. They make no paid requests.

@@ -21,10 +21,13 @@ try {
     & git -C $repo remote add origin $bare
     & git -C $repo push -q -u origin codex/terra
     # Tests must never inherit a user's active budget mode or project settings.
-    $cfg = Get-Content -Raw -LiteralPath (Join-Path $runnerRoot 'terra-config.v1.3.example.json') | ConvertFrom-Json -AsHashtable
+    # Use the checked-in current configuration as the schema template. Runtime
+    # values below are replaced with the isolated mock project and temp storage.
+    $cfg = Get-Content -Raw -LiteralPath (Join-Path $runnerRoot 'terra-config.json') | ConvertFrom-Json -AsHashtable
     $cfg.projects[0].id = 'mock-project'
     $cfg.projects[0].path = $repo
     $cfg.openCodeCommand = $fake
+    $cfg.budget.mode = 'daily'
     $cfg.logs.root = (Join-Path $tempRoot 'project-data')
     $cfg.execution.pollSeconds = 1
     $cfg.execution.maxIterationMinutes = 2
