@@ -28,6 +28,33 @@ try {
     $cfg.logs.root = (Join-Path $tempRoot 'project-data')
     $cfg.execution.pollSeconds = 1
     $cfg.execution.maxIterationMinutes = 2
+    $cfg.logs.maxIterationsPerProject = 1
+    $cfg.logs.retainDays = 1
+    $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
+    # Rotation is limited to the selected project's logs and must never remove budget snapshots.
+    $rotationLogs = Join-Path $tempRoot 'project-data/mock-project/logs/rotation'
+    [void][IO.Directory]::CreateDirectory($rotationLogs)
+    $oldBundle = Join-Path $rotationLogs 'old.events.jsonl'
+    $newBundle = Join-Path $rotationLogs 'new.events.jsonl'
+    [IO.File]::WriteAllText($oldBundle,'old'); [IO.File]::WriteAllText($newBundle,'new')
+    (Get-Item -LiteralPath $oldBundle).LastWriteTimeUtc = [datetime]::UtcNow.AddDays(-3)
+    $protectedBudget = Join-Path $tempRoot 'project-data/budgets/protected.json'
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $protectedBudget)); [IO.File]::WriteAllText($protectedBudget,'{}')
+    $env:TERRA_MOCK_COST = '0.15'; $env:TERRA_MOCK_ALL_COST = '0.15'; $env:TERRA_MOCK_BROKEN_STATS = '0'
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun
+    if (Test-Path -LiteralPath $oldBundle) { throw 'Rotation did not remove expired selected-project logs.' }
+    if (-not (Test-Path -LiteralPath $newBundle) -or -not (Test-Path -LiteralPath $protectedBudget)) { throw 'Rotation touched retained logs or protected budget data.' }
+    Write-Host 'PASS: project log rotation preserves budget snapshots.' -ForegroundColor Green
+    # The global accounting lock blocks concurrent runners before they can launch an agent.
+    $lockPath = Join-Path $tempRoot 'project-data/global-runner.lock'
+    $lock = [IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    try {
+        $locked = $false
+        try { & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun } catch { $locked = $true }
+        if (-not $locked) { throw 'Runner did not reject a held global accounting lock.' }
+    } finally { $lock.Dispose() }
+    Write-Host 'PASS: global accounting lock blocks concurrent runner starts.' -ForegroundColor Green
+    $cfg.logs.maxIterationsPerProject = 150
     $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
     $env:TERRA_MOCK_COST = '0.15'
     $env:TERRA_MOCK_BROKEN_STATS = '0'
