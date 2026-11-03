@@ -39,6 +39,29 @@ Describe 'Terra Runner safe command dispatch' {
         & $runner -Project safe-project -Config $script:config
         (Test-Path -LiteralPath $script:calls) | Should Be $false
     }
+    It 'creates and clears only the selected project control files' {
+        & $runner -Project safe-project -Config $script:config -Stop
+        $projectData = Join-Path $script:state 'safe-project'
+        (Test-Path -LiteralPath (Join-Path $projectData 'STOP')) | Should Be $true
+        & $runner -Project safe-project -Config $script:config -Abort
+        (Test-Path -LiteralPath (Join-Path $projectData 'ABORT')) | Should Be $true
+        & $runner -Project safe-project -Config $script:config -ClearStop
+        (Test-Path -LiteralPath (Join-Path $projectData 'STOP')) | Should Be $false
+        (Test-Path -LiteralPath (Join-Path $projectData 'ABORT')) | Should Be $false
+        (Test-Path -LiteralPath $script:calls) | Should Be $false
+    }
+    It 'keeps reports isolated by project ID' {
+        $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable
+        $secondRepo = Join-Path $script:root 'second-project'
+        [void][IO.Directory]::CreateDirectory($secondRepo)
+        $settings.projects += [ordered]@{ id='second-project'; path=$secondRepo; branch='main'; roadmap='ROADMAP.md'; progress='PROGRESS.md' }
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
+        & $runner -Project safe-project -Config $script:config -Report
+        & $runner -Project second-project -Config $script:config -Report
+        (Test-Path -LiteralPath (Join-Path $script:state 'safe-project/reports')) | Should Be $true
+        (Test-Path -LiteralPath (Join-Path $script:state 'second-project/reports')) | Should Be $true
+        (Test-Path -LiteralPath $script:calls) | Should Be $false
+    }
     It 'accepts dot and comma decimal balance input without binding it as an iteration limit' {
         $module = Join-Path $here 'terra-core.psm1'
         Import-Module $module -Force

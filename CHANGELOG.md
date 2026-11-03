@@ -3,6 +3,7 @@
 ## 1.5.0 - 2026-11-03
 
 - Added generic Markdown checkbox roadmap tracking with optional project `taskIdPattern` metadata, and replaced runtime daily report output with English reports.
+- Added isolated regression coverage for control files and project-scoped report storage.
 - Fixed unsafe UI-to-runner argument forwarding. Commands are dispatched with named parameters and positional binding is disabled at public boundaries.
 - Made agent execution opt-in: only `-Once` and `-Continuous` may start OpenCode.
 - Added invariant decimal parsing for user-entered money; both decimal separators are accepted and balances use two fractional digits.
