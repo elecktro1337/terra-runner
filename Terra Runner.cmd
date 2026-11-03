@@ -11,7 +11,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-title Terra Runner 1.4
+title Terra Runner 1.5
 if "%~1"=="" (
   pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0terra-ui.ps1"
 ) else (
