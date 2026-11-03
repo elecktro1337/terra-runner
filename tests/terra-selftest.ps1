@@ -50,7 +50,7 @@ try {
     if ($readable -notmatch 'Все') { throw 'Readable event log must repair CP866/UTF-8 mojibake.' }
     $dailyReport = Join-Path (Join-Path $tempRoot 'project-data/mock-project/reports') ((Get-Date -Format 'yyyy-MM-dd') + '.md')
     if (-not (Test-Path -LiteralPath $dailyReport)) { throw 'Missing daily project report.' }
-    if ((Get-Content -Raw $dailyReport) -notmatch 'Итераций:') { throw 'Daily project report content missing.' }
+    if ((Get-Content -Raw $dailyReport) -notmatch 'Iterations:') { throw 'Daily project report content missing.' }
     if ((Get-Content -Raw $dailyReport) -notmatch 'NTD-0001') { throw 'Daily report must contain task IDs.' }
     Write-Host 'PASS: readable logs, tool errors, and daily reports.' -ForegroundColor Green
     Write-Host 'PASS: one iteration, TODO update, commit, push and project log.' -ForegroundColor Green

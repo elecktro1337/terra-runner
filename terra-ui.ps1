@@ -125,11 +125,11 @@ function Load-Settings {
     if (-not $script:ProjectId -or @($script:Settings.projects | Where-Object { $_.id -eq $script:ProjectId }).Count -ne 1) { $script:ProjectId = [string]$script:Settings.projects[0].id }
 }
 
-function New-DefaultSettings([string]$ProjectId,[string]$ProjectPath,[string]$Branch,[string]$Roadmap,[string]$Progress,[string]$OpenCode) {
+function New-DefaultSettings([string]$ProjectId,[string]$ProjectPath,[string]$Branch,[string]$Roadmap,[string]$Progress,[string]$OpenCode,[string]$TaskIdPattern = '') {
     $root = Get-ConfigRoot
     return [ordered]@{
         schemaVersion=3; openCodeCommand=$OpenCode; agent='build'; model=''
-        projects=@([ordered]@{ id=$ProjectId; path=$ProjectPath; branch=$Branch; roadmap=$Roadmap; progress=$Progress; prompt='terra-prompt.md' })
+        projects=@([ordered]@{ id=$ProjectId; path=$ProjectPath; branch=$Branch; roadmap=$Roadmap; progress=$Progress; prompt='terra-prompt.md'; taskIdPattern=$TaskIdPattern })
         budget=[ordered]@{ mode='daily'; dailyUsd=5.0; reserveUsd=0.5; emergencyStopUsd=4.95; allowUnlimited=$false; requireGlobalOpenCodeStats=$true; stopOnZeroCostWithTokens=$true; balance=[ordered]@{ source='snapshot'; id='default-account'; minimumUsd=5.0; iterationReserveUsd=0.5; maxAgeMinutes=5; command=''; arguments=@() } }
         execution=[ordered]@{ pollSeconds=20; maxIterationMinutes=45; maxIterationsPerRun=500; maxConsecutiveNoProgress=3; maxConsecutiveDocumentationOnly=12; maxToolErrorsPerIteration=15; pauseBetweenIterationsSeconds=3; maxRawLogMiB=80 }
         logs=[ordered]@{ root=(Join-Path $root 'projects'); retainDays=21; maxIterationsPerProject=150; maxTotalMiBPerProject=300; reportRetainDays=60 }
@@ -157,10 +157,11 @@ function Start-SetupWizard {
     $branch = Read-Text 'Git branch' 'main' $true
     $roadmap = Read-Text 'Roadmap file' 'ROADMAP.md' $true
     $progress = Read-Text 'Progress file' 'PROGRESS.md' $true
+    $taskIdPattern = Read-Text 'Optional task ID pattern (blank tracks all checklist items)'
     Write-Line 'Budget modes: 1 Daily limit, 2 Balance floor, 3 Hybrid, 4 Unlimited.' 'Gray'
     $mode = switch (Read-Choice 'Budget mode [1]') { '2' { 'balance' } '3' { 'hybrid' } '4' { 'unlimited' } default { 'daily' } }
     if ($mode -eq 'unlimited' -and -not (Confirm 'Unlimited mode removes Terra Runner monetary limits. Continue?')) { $mode = 'daily' }
-    $script:Settings = New-DefaultSettings $id $path $branch $roadmap $progress $openCode
+    $script:Settings = New-DefaultSettings $id $path $branch $roadmap $progress $openCode $taskIdPattern
     $script:Settings.budget.mode = $mode
     $script:Settings.budget.allowUnlimited = ($mode -eq 'unlimited')
     $script:ProjectId = $id
@@ -267,8 +268,8 @@ function Show-ProjectsMenu {
         Write-Line '  A  Add project'; Write-Line '  E  Edit selected project'; Write-Line '  R  Remove selected project'; Write-Line '  0  Back'
         $choice=Read-Choice 'Choose an option'
         if ($choice -eq '0') { return }
-        if ($choice -eq 'a') { $path=Read-Text 'Project folder' '' $true; if (-not (Test-Path -LiteralPath $path -PathType Container)) { Write-Line 'Folder does not exist.' 'Yellow'; Pause-Menu; continue }; $path=(Resolve-Path -LiteralPath $path).ProviderPath; $id=Read-Text 'Project ID' ((Split-Path $path -Leaf) -replace '[^A-Za-z0-9_.-]','-') $true; if ($id -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$' -or @($projects | Where-Object id -eq $id).Count) { Write-Line 'Project ID is invalid or already in use.' 'Yellow'; Pause-Menu; continue }; $script:Settings.projects += [ordered]@{ id=$id; path=$path; branch=(Read-Text 'Git branch' 'main' $true); roadmap=(Read-Text 'Roadmap file' 'ROADMAP.md' $true); progress=(Read-Text 'Progress file' 'PROGRESS.md' $true); prompt='terra-prompt.md' }; $script:ProjectId=$id; Save-Settings; continue }
-        if ($choice -eq 'e') { $p=Get-SelectedProject; $p.path=Read-Text 'Project folder' $p.path $true; $p.branch=Read-Text 'Git branch' $p.branch $true; $p.roadmap=Read-Text 'Roadmap file' $p.roadmap $true; $p.progress=Read-Text 'Progress file' $p.progress $true; Save-Settings; continue }
+        if ($choice -eq 'a') { $path=Read-Text 'Project folder' '' $true; if (-not (Test-Path -LiteralPath $path -PathType Container)) { Write-Line 'Folder does not exist.' 'Yellow'; Pause-Menu; continue }; $path=(Resolve-Path -LiteralPath $path).ProviderPath; $id=Read-Text 'Project ID' ((Split-Path $path -Leaf) -replace '[^A-Za-z0-9_.-]','-') $true; if ($id -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$' -or @($projects | Where-Object id -eq $id).Count) { Write-Line 'Project ID is invalid or already in use.' 'Yellow'; Pause-Menu; continue }; $script:Settings.projects += [ordered]@{ id=$id; path=$path; branch=(Read-Text 'Git branch' 'main' $true); roadmap=(Read-Text 'Roadmap file' 'ROADMAP.md' $true); progress=(Read-Text 'Progress file' 'PROGRESS.md' $true); prompt='terra-prompt.md'; taskIdPattern=(Read-Text 'Optional task ID pattern') }; $script:ProjectId=$id; Save-Settings; continue }
+        if ($choice -eq 'e') { $p=Get-SelectedProject; $p.path=Read-Text 'Project folder' $p.path $true; $p.branch=Read-Text 'Git branch' $p.branch $true; $p.roadmap=Read-Text 'Roadmap file' $p.roadmap $true; $p.progress=Read-Text 'Progress file' $p.progress $true; $p.taskIdPattern=Read-Text 'Optional task ID pattern' ([string]$p.taskIdPattern); Save-Settings; continue }
         if ($choice -eq 'r') { if ($projects.Count -eq 1) { Write-Line 'At least one project must remain configured.' 'Yellow'; Pause-Menu; continue }; if (Confirm "Remove configuration for $($script:ProjectId)? Project files will not be deleted.") { $script:Settings.projects=@($projects | Where-Object id -ne $script:ProjectId); $script:ProjectId=[string]$script:Settings.projects[0].id; Save-Settings }; continue }
         $index=0; if ([int]::TryParse($choice,[ref]$index) -and $index -ge 1 -and $index -le $projects.Count) { $script:ProjectId=[string]$projects[$index-1].id }
     }

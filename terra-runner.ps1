@@ -211,17 +211,24 @@ function Get-EventErrors([string]$EventsFile) {
         VerificationExamples = @($verificationExamples.ToArray())
     }
 }
-function Count-Completed([string]$RoadmapFile) {
+function Test-RoadmapTask([string]$Line, [bool]$Completed, [string]$TaskIdPattern = '') {
+    $checkbox = if ($Completed) { '^\s*-\s*\[[xX]\]' } else { '^\s*-\s*\[ \]' }
+    if ($Line -notmatch $checkbox) { return $false }
+    if ([string]::IsNullOrWhiteSpace($TaskIdPattern)) { return $true }
+    try { return $Line -match $TaskIdPattern }
+    catch { throw "Invalid project taskIdPattern: $TaskIdPattern" }
+}
+function Count-Completed([string]$RoadmapFile, [string]$TaskIdPattern = '') {
     $count = 0
     foreach ($line in [System.IO.File]::ReadLines($RoadmapFile)) {
-        if ($line -match '^\s*-\s*\[[xX]\].*\bNTD-\d{4,}\b') { $count++ }
+        if (Test-RoadmapTask $line $true $TaskIdPattern) { $count++ }
     }
     return $count
 }
-function Count-Pending([string]$RoadmapFile) {
+function Count-Pending([string]$RoadmapFile, [string]$TaskIdPattern = '') {
     $count = 0
     foreach ($line in [System.IO.File]::ReadLines($RoadmapFile)) {
-        if ($line -match '^\s*-\s*\[ \].*\bNTD-\d{4,}\b') { $count++ }
+        if (Test-RoadmapTask $line $false $TaskIdPattern) { $count++ }
     }
     return $count
 }
@@ -476,11 +483,13 @@ function Get-ChangedFiles([string]$Directory, [string]$From, [string]$To) {
     }
     return [pscustomobject]@{ Code=$code; Docs=$docs; Tests=$tests; Other=$other; Paths=$paths }
 }
-function Get-CompletionIds([string]$Directory, [string]$RoadmapFile, [string]$BeforeHead) {
+function Get-CompletionIds([string]$Directory, [string]$RoadmapFile, [string]$BeforeHead, [string]$TaskIdPattern = '') {
+    if ([string]::IsNullOrWhiteSpace($TaskIdPattern)) { return @() }
     $relative = [IO.Path]::GetRelativePath($Directory, $RoadmapFile).Replace('\','/')
     $old = Invoke-Cli 'git' @('-C',$Directory,'show',("${BeforeHead}:$relative")) $Directory
     $new = Get-Content -LiteralPath $RoadmapFile -Raw -Encoding UTF8
-    $regex = [regex]'(?m)^\s*-\s*\[[xX]\].*\b(NTD-\d{4,})\b'
+    try { $regex = [regex]::new('(?m)^\s*-\s*\[[xX]\].*?(' + $TaskIdPattern + ')') }
+    catch { throw "Invalid project taskIdPattern: $TaskIdPattern" }
     $already = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($match in $regex.Matches($old)) { [void]$already.Add($match.Groups[1].Value) }
     $justDone = [System.Collections.Generic.List[string]]::new()
@@ -574,6 +583,47 @@ function Write-DailyReport([string]$DataDirectory, [string]$Date) {
     })
     return (Join-Path $reportsDir "$Date.md")
 }
+function Write-EnglishDailyReport([string]$DataDirectory, [string]$Date) {
+    if ($Date -notmatch '^\d{4}-\d{2}-\d{2}$') { throw 'ReportDate must be YYYY-MM-DD.' }
+    $logDirectory = Join-Path (Join-Path $DataDirectory 'logs') $Date
+    $summaries = @()
+    if (Test-Path -LiteralPath $logDirectory) {
+        $summaries = @(Get-ChildItem -LiteralPath $logDirectory -Filter '*.summary.json' -File | Sort-Object Name |
+            ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable })
+    }
+    $reportDirectory = Join-Path $DataDirectory 'reports'
+    Ensure-Directory $reportDirectory
+    $cost = 0.0; $tasks = 0; $pushes = 0; $code = 0; $tests = 0; $docs = 0; $errors = 0
+    $ids = [System.Collections.Generic.HashSet[string]]::new(); $commits = [System.Collections.Generic.List[string]]::new()
+    foreach ($summary in $summaries) {
+        $delta = Read-Member $summary 'costDeltaUSD'; if ($null -ne $delta) { $cost += [double]$delta }
+        $tasks += [Math]::Max(0,[int](Read-Member $summary 'doneAfter')-[int](Read-Member $summary 'doneBefore'))
+        if ([bool](Read-Member $summary 'pushVerified')) { $pushes++ }
+        $code += [int](Read-Member $summary 'codeFilesChanged'); $tests += [int](Read-Member $summary 'testFilesChanged'); $docs += [int](Read-Member $summary 'documentationFilesChanged'); $errors += [int](Read-Member $summary 'toolErrors')
+        foreach ($id in @(Read-Member $summary 'completedTaskIds')) { if ($id) { [void]$ids.Add([string]$id) } }
+        foreach ($commit in @(Read-Member $summary 'commits')) { if ($commit) { $commits.Add(([string](Read-Member $commit 'hash') + ' ' + [string](Read-Member $commit 'subject'))) } }
+    }
+    $rows = [System.Collections.Generic.List[string]]::new()
+    $rows.Add("# Terra Runner daily report — $Date"); $rows.Add(''); $rows.Add("Project: **$(Split-Path $DataDirectory -Leaf)**"); $rows.Add('')
+    $rows.Add("- Iterations: **$($summaries.Count)**; completed roadmap tasks: **$tasks**; verified pushes: **$pushes**")
+    $rows.Add(('- Estimated local OpenCode usage during iterations: **${0:N4}**' -f $cost))
+    $rows.Add("- Changed files: code **$code**, tests **$tests**, documentation **$docs**; tool errors **$errors**")
+    if ($ids.Count) { $rows.Add('- Completed task IDs: ' + (@($ids | Sort-Object) -join ', ')) }
+    if ($commits.Count) { $rows.Add(''); $rows.Add('## Commits'); foreach ($commit in $commits) { $rows.Add('- ' + $commit) } }
+    $rows.Add(''); $rows.Add('| Time | Iteration | Tasks | Code | Tests | Docs | Cost | Push | Stop reason |'); $rows.Add('|---|---|---:|---:|---:|---:|---:|---|---|')
+    foreach ($summary in $summaries) {
+        $started = [string](Read-Member $summary 'started'); $time = if ($started.Length -ge 19) { $started.Substring(11,8) } else { '--:--:--' }
+        $completed = [Math]::Max(0,[int](Read-Member $summary 'doneAfter')-[int](Read-Member $summary 'doneBefore'))
+        $delta = Read-Member $summary 'costDeltaUSD'; $displayCost = if ($null -eq $delta) { '?' } else { ('$' + ([double]$delta).ToString('F4',$Invariant)) }
+        $reason = [string](Read-Member $summary 'stoppedReason'); if (-not $reason) { $reason = '-' }
+        $rows.Add(('| {0} | `{1}` | {2} | {3} | {4} | {5} | {6} | {7} | {8} |' -f $time,[string](Read-Member $summary 'id'),$completed,[int](Read-Member $summary 'codeFilesChanged'),[int](Read-Member $summary 'testFilesChanged'),[int](Read-Member $summary 'documentationFilesChanged'),$displayCost,([bool](Read-Member $summary 'pushVerified')),$reason.Replace('|','/')))
+    }
+    $rows.Add(''); $rows.Add('Usage is derived from local OpenCode statistics. It is an estimate, not a provider-reported account balance. Verification commands observed in agent logs do not by themselves prove successful tests.')
+    $markdown = Join-Path $reportDirectory "$Date.md"
+    [IO.File]::WriteAllText($markdown,(($rows -join "`n") + "`n"),[Text.UTF8Encoding]::new($false))
+    Save-Json (Join-Path $reportDirectory "$Date.json") ([ordered]@{ project=(Split-Path $DataDirectory -Leaf); date=$Date; iterations=$summaries.Count; tasksCompleted=$tasks; pushesVerified=$pushes; costDeltaUsd=[Math]::Round($cost,6); codeFilesChanged=$code; testFilesChanged=$tests; documentationFilesChanged=$docs; toolErrors=$errors; completedTaskIds=@($ids | Sort-Object); commits=@($commits.ToArray()); generatedAt=(Get-Date).ToString('o') })
+    return $markdown
+}
 function Rotate-Reports([string]$DataDirectory, $Settings) {
     $dir = Join-Path $DataDirectory 'reports'
     if (-not (Test-Path -LiteralPath $dir)) { return }
@@ -662,7 +712,7 @@ if ($maxCycles -lt 1) { throw 'No iterations configured.' }
 
 if ($Report) {
     $date = if ($ReportDate) { $ReportDate } else { (Get-Date).ToString('yyyy-MM-dd') }
-    $reportFile = Write-DailyReport $projectData $date
+    $reportFile = Write-EnglishDailyReport $projectData $date
     Rotate-Reports $projectData $cfg.logs
     Write-Host "Project daily report: $reportFile"
     return
@@ -704,6 +754,8 @@ try {
     }
     $roadmap = Join-Path $repo ([string]$projectConfig.roadmap)
     $progress = Join-Path $repo ([string]$projectConfig.progress)
+    $taskIdPattern = [string](Read-Member $projectConfig 'taskIdPattern')
+    if ([string]::IsNullOrWhiteSpace($taskIdPattern) -and [int]$cfg.schemaVersion -lt 3) { $taskIdPattern = 'NTD-\d{4,}' }
     foreach ($f in @($roadmap,$progress)) {
         if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { throw "Required project file is missing: $f" }
     }
@@ -749,10 +801,10 @@ try {
         Show-Usage $usageBefore $cfg.budget
         $budgetBlock = Get-BudgetStopReason $usageBefore $cfg.budget $false
         if ($budgetBlock) { Write-Host "Cannot start next iteration: $budgetBlock"; break }
-        $pending = Count-Pending $roadmap
-        if ($pending -eq 0) { Write-Host 'No pending NTD-ID tasks found in roadmap. Stopping.'; break }
+        $pending = Count-Pending $roadmap $taskIdPattern
+        if ($pending -eq 0) { Write-Host 'No pending roadmap checkbox tasks found. Stopping.'; break }
         $headBefore = Get-Head $repo
-        $doneBefore = Count-Completed $roadmap
+        $doneBefore = Count-Completed $roadmap $taskIdPattern
         $runId = (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-' + [guid]::NewGuid().ToString('N').Substring(0,6)
         $runDirectory = Join-Path $logsPath (Get-Date -Format 'yyyy-MM-dd')
         Ensure-Directory $runDirectory
@@ -821,7 +873,7 @@ try {
         try { $usageAfter = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot }
         catch { $usageError = $_.Exception.Message }
         $headAfter = Get-Head $repo
-        $doneAfter = Count-Completed $roadmap
+        $doneAfter = Count-Completed $roadmap $taskIdPattern
         $eventErrors = 0
         $toolErrors = 0
         $toolErrorExamples = @()
@@ -867,7 +919,7 @@ try {
         $changedFiles = $null
         $completedIds = @(); $iterationCommits = @()
         try {
-            $completedIds = @(Get-CompletionIds $repo $roadmap $headBefore)
+            $completedIds = @(Get-CompletionIds $repo $roadmap $headBefore $taskIdPattern)
             $iterationCommits = @(Get-CommitsInIteration $repo $headBefore $headAfter)
         } catch { if (-not $termination) { $termination = "git-commit-audit-error: $($_.Exception.Message)" } }
         try { $changedFiles = Get-ChangedFiles $repo $headBefore $headAfter }
@@ -898,7 +950,7 @@ try {
             noActionableTasksReported = $noTasksReported
             workingTreeClean = ($gitStatus.Trim() -eq '')
             doneBefore = $doneBefore; doneAfter = $doneAfter
-            pendingAfter = (Count-Pending $roadmap)
+            pendingAfter = (Count-Pending $roadmap $taskIdPattern)
             costBeforeUSD = $usageBefore.Daily.CostUSD
             costAfterUSD = $(if ($null -ne $usageAfter) { $usageAfter.Daily.CostUSD } else { $null })
             costDeltaUSD = $(if ($null -ne $usageAfter) {
@@ -926,7 +978,7 @@ try {
             errorFile = [IO.Path]::GetFileName($stderrPath)
         }
         Save-Json $summaryPath $summary
-        $reportPath = Write-DailyReport $projectData $begin.ToString('yyyy-MM-dd')
+        $reportPath = Write-EnglishDailyReport $projectData $begin.ToString('yyyy-MM-dd')
         Write-Host "Iteration finished: exit=$exitCode new completed tasks=$($doneAfter-$doneBefore) changedHEAD=$($headAfter -ne $headBefore) code=$($changedFiles.Code) tests=$($changedFiles.Tests) docs=$($changedFiles.Docs) toolErrors=$toolErrors"
         if ($null -ne $usageAfter) { Show-Usage $usageAfter $cfg.budget }
         Write-Host "Daily project report: $reportPath"
