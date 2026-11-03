@@ -1,5 +1,14 @@
+# Local IDE metadata
 .idea/
+
+# User-specific settings and portable-mode state
 terra-config.json
-data/projects/*/
-data/projects/global-runner.lock
+data/
+
+# Test and PowerShell runtime output
+TestResults/
+*.clixml
+*.coverage.xml
 *.tmp
+Thumbs.db
+.DS_Store

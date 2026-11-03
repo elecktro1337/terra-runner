@@ -1,7 +1,0 @@
-{
-  "formatVersion": 1,
-  "observedBalanceUsd": 96.11,
-  "baselineAllTimeCostUsd": 4.7038891,
-  "observedAt": "2026-11-03T21:05:34.0986930+03:00",
-  "accounting": "estimated-from-local-opencode-all-time"
-}

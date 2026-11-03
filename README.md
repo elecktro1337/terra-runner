@@ -8,6 +8,10 @@ Double-click `Terra Runner.cmd`. PowerShell 7 is required. On first launch, Terr
 
 For a normal installation, settings and state are stored in `%LOCALAPPDATA%\TerraRunner`. An existing configuration beside the scripts is copied there with a timestamped backup. The original configuration is not overwritten. Use `-Portable` to retain installation-folder storage.
 
+## Repository hygiene
+
+Personal configuration, portable-mode state, logs, reports, balance snapshots, locks, IDE metadata, and Pester output are excluded by `.gitignore`. Existing local runtime data is deliberately preserved when it is removed from Git tracking.
+
 ## Safe commands
 
 All commands use named parameters; positional parameters are rejected. OpenCode starts only with an explicit command:
@@ -51,4 +55,3 @@ Start the UI once and accept the automatic local copy migration. Review the gene
 - [Configuration reference](CONFIGURATION.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 - [Architecture overview](ARCHITECTURE.md)
-- [v1.4 upgrade notes](README-v1.4.md)
