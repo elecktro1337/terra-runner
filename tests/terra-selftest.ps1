@@ -34,7 +34,7 @@ try {
     $cfg.logs.maxIterationsPerProject = 1
     $cfg.logs.retainDays = 1
     $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
-    # Rotation is limited to the selected project's logs and must never remove budget snapshots.
+    # Dry runs are validation only: they must not rotate user logs or touch budget snapshots.
     $rotationLogs = Join-Path $tempRoot 'project-data/mock-project/logs/rotation'
     [void][IO.Directory]::CreateDirectory($rotationLogs)
     $oldBundle = Join-Path $rotationLogs 'old.events.jsonl'
@@ -45,9 +45,8 @@ try {
     [void][IO.Directory]::CreateDirectory((Split-Path -Parent $protectedBudget)); [IO.File]::WriteAllText($protectedBudget,'{}')
     $env:TERRA_MOCK_COST = '0.15'; $env:TERRA_MOCK_ALL_COST = '0.15'; $env:TERRA_MOCK_BROKEN_STATS = '0'
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun
-    if (Test-Path -LiteralPath $oldBundle) { throw 'Rotation did not remove expired selected-project logs.' }
-    if (-not (Test-Path -LiteralPath $newBundle) -or -not (Test-Path -LiteralPath $protectedBudget)) { throw 'Rotation touched retained logs or protected budget data.' }
-    Write-Host 'PASS: project log rotation preserves budget snapshots.' -ForegroundColor Green
+    if (-not (Test-Path -LiteralPath $oldBundle) -or -not (Test-Path -LiteralPath $newBundle) -or -not (Test-Path -LiteralPath $protectedBudget)) { throw 'Dry run modified logs or budget snapshots.' }
+    Write-Host 'PASS: dry run leaves logs and budget snapshots unchanged.' -ForegroundColor Green
     # The global accounting lock blocks concurrent runners before they can launch an agent.
     $lockPath = Join-Path $tempRoot 'project-data/global-runner.lock'
     $lock = [IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
@@ -64,6 +63,9 @@ try {
     $env:TERRA_MOCK_ALL_COST = '0.15'
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once -ShowProgress
     if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw 'Runner returned non-zero exit code' }
+    if (Test-Path -LiteralPath $oldBundle) { throw 'Iteration rotation did not remove expired selected-project logs.' }
+    if (-not (Test-Path -LiteralPath $newBundle) -or -not (Test-Path -LiteralPath $protectedBudget)) { throw 'Iteration rotation touched retained logs or protected budget data.' }
+    Write-Host 'PASS: project log rotation preserves budget snapshots.' -ForegroundColor Green
     $roadmapResult = Get-Content -Raw -LiteralPath (Join-Path $repo 'NTD-ROADMAP.md')
     if ($roadmapResult -notmatch '\[x\]') { throw 'Mock task was not completed.' }
     $remoteHash = (& git -C $repo ls-remote --heads origin refs/heads/codex/terra) -split '\s+' | Select-Object -First 1

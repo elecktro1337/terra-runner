@@ -251,6 +251,10 @@ function Invoke-RunnerCommand([hashtable]$Command) {
     catch { Write-Line "Error: $($_.Exception.Message)" 'Red' }
     Pause-Menu
 }
+function Format-ProjectMenuEntry([int]$Number, $Project, [string]$SelectedProjectId) {
+    $marker = if ([string]$Project.id -eq $SelectedProjectId) { '* ' } else { '  ' }
+    return ("  {0}  {1}{2}" -f $Number,$marker,$Project.id)
+}
 function Show-DevelopmentMenu {
     while ($true) {
         Show-Header
@@ -295,7 +299,7 @@ function Show-ProjectsMenu {
     while ($true) {
         Show-Header; $projects=@($script:Settings.projects)
         Write-Line 'Projects' 'White'
-        for ($i=0; $i -lt $projects.Count; $i++) { Write-Line ("  {0}  {1}{2}" -f ($i+1),(if ($projects[$i].id -eq $script:ProjectId) {'* '} else {'  '}),$projects[$i].id) }
+        for ($i=0; $i -lt $projects.Count; $i++) { Write-Line (Format-ProjectMenuEntry ($i + 1) $projects[$i] $script:ProjectId) }
         Write-Line '  A  Add project'; Write-Line '  E  Edit selected project'; Write-Line '  R  Remove selected project'; Write-Line '  0  Back'
         $choice=Read-Choice 'Choose an option'
         if ($choice -eq '0') { return }
@@ -338,8 +342,12 @@ function Invoke-UiSelfTest {
     }
     $money = ConvertTo-TerraMoney -Text '96,11'
     if ((Format-TerraMoney -Amount $money) -ne '$96.11') { throw 'Money parser or formatter failed.' }
+    $selected = [pscustomobject]@{ id='selected-project' }
+    $other = [pscustomobject]@{ id='other-project' }
+    if ((Format-ProjectMenuEntry 1 $selected 'selected-project') -ne '  1  * selected-project') { throw 'Selected project menu rendering failed.' }
+    if ((Format-ProjectMenuEntry 2 $other 'selected-project') -ne '  2    other-project') { throw 'Unselected project menu rendering failed.' }
     Write-Line 'PASS: UI, runner, and core scripts parse successfully.' 'Green'
-    Write-Line 'PASS: English UI text and decimal money formatting are valid.' 'Green'
+    Write-Line 'PASS: English UI text, money, and project list formatting are valid.' 'Green'
 }
 
 if (-not (Test-Path -LiteralPath $script:Runner -PathType Leaf)) { throw "Runner is missing: $script:Runner" }

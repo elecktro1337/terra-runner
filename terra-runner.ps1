@@ -709,12 +709,12 @@ try {
     }
     $initialUsage = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot
     Show-Usage $initialUsage $cfg.budget
-    Rotate-ProjectLogs $logsPath $cfg.logs
-    Rotate-Reports $projectData $cfg.logs
     if ($DryRun) {
         Write-Host "DRY RUN OK: project=$Project branch=$branch iterations=$maxCycles; would launch agent '$($cfg.agent)'."
         return
     }
+    Rotate-ProjectLogs $logsPath $cfg.logs
+    Rotate-Reports $projectData $cfg.logs
     if (Test-Path -LiteralPath $stopPath) { throw "STOP flag exists: $stopPath. Use -ClearStop after review." }
     if (Test-Path -LiteralPath $abortPath) { throw "ABORT flag exists: $abortPath. Use -ClearStop after review." }
 
