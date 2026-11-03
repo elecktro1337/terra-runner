@@ -45,3 +45,9 @@ The tests use a local mock OpenCode and temporary repositories. They make no pai
 ## Upgrade from 1.4
 
 Start the UI once and accept the automatic local copy migration. Review the generated settings before running development. Existing legacy files remain in place; copy any historical project data deliberately if it is required for reporting.
+
+## Reference
+
+- [Configuration reference](CONFIGURATION.md)
+- [Troubleshooting](TROUBLESHOOTING.md)
+- [Architecture overview](ARCHITECTURE.md)
