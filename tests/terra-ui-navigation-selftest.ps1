@@ -4,10 +4,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
+$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('terra-ui-navigation-' + [guid]::NewGuid().ToString('N'))
+$config = Join-Path $tempRoot 'terra-config.json'
+$null = [IO.Directory]::CreateDirectory($tempRoot)
+Copy-Item -LiteralPath (Join-Path $root 'terra-config.json') -Destination $config
 $answers = [System.Collections.Generic.Queue[string]]::new()
-# Open and return from every menu that has no state-changing command selected,
-# run UI diagnostics, then exit the application.
-foreach ($answer in @('1','0','2','0','3','0','4','0','5','0','6','','0')) { $answers.Enqueue($answer) }
+# Open every menu, edit a legacy project while keeping its values, run UI
+# diagnostics, then exit. The temporary config preserves user settings.
+foreach ($answer in @('1','0','2','e','','','','','','0','3','0','4','0','5','0','6','','0')) { $answers.Enqueue($answer) }
 
 function global:Clear-Host { }
 function global:Read-Host([string]$Prompt) {
@@ -16,11 +20,14 @@ function global:Read-Host([string]$Prompt) {
 }
 
 try {
-    & (Join-Path $root 'terra-ui.ps1') -Config (Join-Path $root 'terra-config.json')
+    & (Join-Path $root 'terra-ui.ps1') -Config $config
     if ($answers.Count -ne 0) { throw 'The UI did not consume the expected navigation inputs.' }
-    Write-Host 'PASS: actual UI navigation opens every safe menu and returns to the main menu.' -ForegroundColor Green
+    $saved = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json -AsHashtable
+    if (-not $saved.projects[0].Contains('taskIdPattern')) { throw 'Editing a legacy project did not persist taskIdPattern.' }
+    Write-Host 'PASS: actual UI navigation opens every menu and safely edits a legacy project.' -ForegroundColor Green
 }
 finally {
     Remove-Item Function:global:Clear-Host -ErrorAction SilentlyContinue
     Remove-Item Function:global:Read-Host -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

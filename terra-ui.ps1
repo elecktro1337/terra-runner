@@ -65,6 +65,16 @@ function Read-Money([string]$Prompt, [decimal]$Current, [decimal]$Minimum = 0) {
         catch { Write-Line $_.Exception.Message 'Yellow' }
     }
 }
+function Read-SettingMember($Value, [string]$Name) {
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [System.Collections.IDictionary]) {
+        if ($Value.Contains($Name)) { return $Value[$Name] }
+        return $null
+    }
+    $property = $Value.PSObject.Properties[$Name]
+    if ($null -ne $property) { return $property.Value }
+    return $null
+}
 
 function Get-ConfigRoot { return (Split-Path -Parent $script:ConfigFile) }
 function Get-StorageRoot {
@@ -209,7 +219,7 @@ function Initialize-Configuration {
         $script:Settings = Get-Content -LiteralPath $script:ConfigFile -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable -Depth 60
         if (-not [IO.Path]::IsPathRooted([string]$script:Settings.logs.root)) { $script:Settings.logs.root = Join-Path (Get-ConfigRoot) 'projects' }
         foreach ($project in @($script:Settings.projects)) {
-            if ($null -eq $project.taskIdPattern -and [string]$project.roadmap -match '^NTD-') { $project.taskIdPattern = 'NTD-\d{4,}' }
+            if ($null -eq (Read-SettingMember $project 'taskIdPattern') -and [string]$project.roadmap -match '^NTD-') { $project.taskIdPattern = 'NTD-\d{4,}' }
         }
         Save-Settings
         Write-Line "Legacy settings copied to $script:ConfigFile" 'Green'
@@ -304,7 +314,7 @@ function Show-ProjectsMenu {
         $choice=Read-Choice 'Choose an option'
         if ($choice -eq '0') { return }
         if ($choice -eq 'a') { $path=Read-Text 'Project folder' '' $true; if (-not (Test-Path -LiteralPath $path -PathType Container)) { Write-Line 'Folder does not exist.' 'Yellow'; Pause-Menu; continue }; $path=(Resolve-Path -LiteralPath $path).ProviderPath; $id=Read-Text 'Project ID' ((Split-Path $path -Leaf) -replace '[^A-Za-z0-9_.-]','-') $true; if ($id -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$' -or @($projects | Where-Object id -eq $id).Count) { Write-Line 'Project ID is invalid or already in use.' 'Yellow'; Pause-Menu; continue }; $script:Settings.projects += [ordered]@{ id=$id; path=$path; branch=(Read-Text 'Git branch' 'main' $true); roadmap=(Read-Text 'Roadmap file' 'ROADMAP.md' $true); progress=(Read-Text 'Progress file' 'PROGRESS.md' $true); prompt='terra-prompt.md'; taskIdPattern=(Read-Text 'Optional task ID pattern') }; $script:ProjectId=$id; Save-Settings; continue }
-        if ($choice -eq 'e') { $p=Get-SelectedProject; $p.path=Read-Text 'Project folder' $p.path $true; $p.branch=Read-Text 'Git branch' $p.branch $true; $p.roadmap=Read-Text 'Roadmap file' $p.roadmap $true; $p.progress=Read-Text 'Progress file' $p.progress $true; $p.taskIdPattern=Read-Text 'Optional task ID pattern' ([string]$p.taskIdPattern); Save-Settings; continue }
+        if ($choice -eq 'e') { $p=Get-SelectedProject; $p.path=Read-Text 'Project folder' $p.path $true; $p.branch=Read-Text 'Git branch' $p.branch $true; $p.roadmap=Read-Text 'Roadmap file' $p.roadmap $true; $p.progress=Read-Text 'Progress file' $p.progress $true; $p.taskIdPattern=Read-Text 'Optional task ID pattern' ([string](Read-SettingMember $p 'taskIdPattern')); Save-Settings; continue }
         if ($choice -eq 'r') { if ($projects.Count -eq 1) { Write-Line 'At least one project must remain configured.' 'Yellow'; Pause-Menu; continue }; if (Confirm "Remove configuration for $($script:ProjectId)? Project files will not be deleted.") { $script:Settings.projects=@($projects | Where-Object id -ne $script:ProjectId); $script:ProjectId=[string]$script:Settings.projects[0].id; Save-Settings }; continue }
         $index=0; if ([int]::TryParse($choice,[ref]$index) -and $index -ge 1 -and $index -le $projects.Count) { $script:ProjectId=[string]$projects[$index-1].id }
     }
