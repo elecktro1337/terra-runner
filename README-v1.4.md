@@ -1,71 +1,29 @@
-# Terra Runner 1.4 — Запуск двойным щелчком
+# Terra Runner 1.4 legacy notes
 
-Это обновление интерфейса для Terra Runner 1.3. **Ядро исполнения, бюджеты, Git-проверки и логи 1.3 сохраняются.** Ничего в рабочем Git-проекте NTD менять не нужно.
+This file documents the v1.4 generation for users upgrading an existing installation. The current product documentation is [README.md](README.md).
 
-## Установка патча
+## Upgrade safely
 
-1. Закрой работающие процессы Runner (особенно если сейчас идёт автономный цикл).
-2. На всякий случай скопируй текущий каталог `terra-runner` в резервную папку.
-3. Распакуй ZIP **в папку `D:\Cloud\Разработка\Сайты\Проекты\erranix.agency`** с заменой файлов, так чтобы появился `terra-runner\Terra Runner.cmd`.
-4. `terra-config.json`, `data\`, промпт и журналы патч не перезаписывает.
-5. Дважды щёлкни по **`Terra Runner.cmd`**. Терминал откроется сам, с меню на русском языке.
+1. Stop any running Terra Runner process.
+2. Back up the existing Terra Runner directory before replacing program files.
+3. Start `Terra Runner.cmd` once after upgrading.
+4. When prompted, allow the application to copy the legacy configuration to `%LOCALAPPDATA%\\TerraRunner`. The original configuration remains untouched.
+5. Review the selected project and settings. Run **Dry run** before starting a real iteration.
 
-Не нужно предварительно открывать PowerShell, устанавливать ExecutionPolicy или запускать `.ps1` вручную. Для быстрого доступа можно создать ярлык на `Terra Runner.cmd` на рабочем столе. Достаточно уже установленного `pwsh.exe` версии 7+ и существующего рабочего OpenCode. Если `pwsh.exe` отсутствует, launcher покажет объяснение.
+Terra Runner 1.5 does not require user projects to be beside the installation directory. Each selected project is stored with an absolute path and a stable project ID.
 
-> Launcher применяет `-ExecutionPolicy Bypass` **только для дочернего процесса** PowerShell. Постоянная политика Windows не меняется. Запускай только файлы, содержимое которых проверил и которым доверяешь. Принудительные ограничения организации (Group Policy) могут запрещать запуск независимо от этих параметров.
+## Data retained from v1.4
 
-## Главное меню
+- Existing configuration fields are retained during migration whenever they are still supported.
+- Existing prompt templates are preserved.
+- Logs, reports, and balance snapshots are not deleted by the migration.
+- Project data remains separated by project ID.
 
-- **1** — одна оплачиваемая итерация агента.
-- **2** — автономный цикл с подтверждением перед стартом.
-- **3** — `DryRun` без вызова модели.
-- **4** — проверка реальной статистики OpenCode и бюджета (`-Status`).
-- **5** — конфигурация бюджетов: `daily`, `balance`, `hybrid`, `unlimited`, лимиты/резервы, ручная сверка баланса или внешний источник.
-- **6** — модель, агент и ограничения итераций.
-- **7** — выбор, добавление и редактирование настроек проекта.
-- **8** — ротация и размещение логов по проектам.
-- **9** — ежедневный отчёт по текущему проекту.
-- **T** — выполнить оба офлайн-самотеста (без API-расходов).
-- **L** — открыть папку логов текущего проекта в Проводнике.
-- **S** — попросить завершить работу после текущей итерации.
-- **A** — аварийно прервать текущую итерацию (действует при следующем опросе).
-- **C** — снять флаги остановки после проверки причины.
-- **0** — выход.
+## Important differences in 1.5
 
-Если агент сейчас работает в первом окне, для **S / A** открой `Terra Runner.cmd` **ещё раз в отдельном окне** и выбери команду остановки. Само окно выполнения занято до конца текущего цикла.
+- Informational commands never start OpenCode. Only explicit **Run one iteration** or **Start continuous development** actions may do so.
+- Money input accepts either `96.11` or `96,11`, and balance values are displayed with two decimal places.
+- The UI, reports, and current documentation are English.
+- Project logs and reports are isolated from the application installation directory by default.
 
-В шапке показываются проект, ветка, модель, текущий режим бюджета, процент выполнения задач roadmap и последняя сводка итерации. **Статистика стоимости в шапке намеренно не подменяет live-данные:** актуальный остаток проверяется пунктом **4**.
-
-Во время выполнения отображаются штатные индикаторы PowerShell: прогресс текущего запуска по лимиту времени, общий прогресс по запрошенному числу итераций, сводка бюджета. **Это индикаторы времени/итераций, не процент выполненного программного кода.** Следующая итерация начнётся только после завершения предыдущей и контрольных проверок.
-
-## Бюджеты
-
-Конфигурацию можно полностью выполнить из меню без редактирования JSON вручную. Для режима остатка выбери **5 → 1 → 2** и затем **5 → 5**, введи **реальный** баланс у провайдера, например 100 USD. Можно установить неснижаемый остаток, например 5 USD. Для режима без ограничений требуется буквальное подтверждение `UNLIMITED`.
-
-**Важно:** снимок баланса не является прямой проверкой кошелька провайдера. Он корректируется на изменение накопленного локального расхода OpenCode; внешние расходы/пополнения требуют ручной сверки. Даже аварийная остановка не может гарантировать, что уже отправленный API-запрос не превысит лимит. Реальный hard cap возможен только у провайдера, если он его поддерживает.
-
-## Существующий CLI сохраняется
-
-```powershell
-.\terra-runner.ps1 -DryRun
-.\terra-runner.ps1 -Once
-.\terra-runner.ps1
-.\terra-runner.ps1 -Report
-```
-
-Если хочешь запускать без интерактивного меню двойным щелчком через `.cmd`, можно указать аргументы в ярлыке: `"...\Terra Runner.cmd" -Once`. Сам `.cmd` без аргументов открывает меню.
-
-## Тестирование (PowerShell 7)
-
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\terra-ui-selftest.ps1
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\terra-selftest.ps1
-```
-
-Первый проверяет интерфейс и запись временной конфигурации **без API-вызовов**. Второй использует mock OpenCode, локальные временные Git-репозитории и проверяет основной цикл. После тестов используй меню 3 (DryRun) и затем 1 (одна реальная итерация). Лишь после этого включай автономный цикл 2.
-
-## Обработка конфигурации
-
-UI сохраняет изменения в `terra-config.json`, а предыдущую версию — в `data/config-backups/` (не более 20 резервных копий). Поля существующего конфигурационного JSON сохраняются. Журналы итераций и отчёты остаются в отдельных каталогах `data/projects/<project-id>/`.
-
-Снимки баланса и их история также остаются в `data/projects/budgets/` и не удаляются ротацией проектных логов. Оберегай директорию `data/` от публикации: там могут находиться конфиденциальные данные диагностики.
+For configuration details, see [CONFIGURATION.md](CONFIGURATION.md). For problems during startup or migration, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).

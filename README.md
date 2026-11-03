@@ -51,3 +51,4 @@ Start the UI once and accept the automatic local copy migration. Review the gene
 - [Configuration reference](CONFIGURATION.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 - [Architecture overview](ARCHITECTURE.md)
+- [v1.4 upgrade notes](README-v1.4.md)
