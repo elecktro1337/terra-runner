@@ -20,7 +20,8 @@ try {
     & git -C $repo commit -qm 'Initial mock files'
     & git -C $repo remote add origin $bare
     & git -C $repo push -q -u origin codex/terra
-    $cfg = Get-Content -Raw -LiteralPath (Join-Path $runnerRoot 'terra-config.json') | ConvertFrom-Json -AsHashtable
+    # Tests must never inherit a user's active budget mode or project settings.
+    $cfg = Get-Content -Raw -LiteralPath (Join-Path $runnerRoot 'terra-config.v1.3.example.json') | ConvertFrom-Json -AsHashtable
     $cfg.projects[0].id = 'mock-project'
     $cfg.projects[0].path = $repo
     $cfg.openCodeCommand = $fake

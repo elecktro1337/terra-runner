@@ -3,21 +3,28 @@
   This UI changes only the runner configuration and invokes the existing runner.
   It never edits the development repository directly.
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding=$false)]
 param(
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    [switch]$Portable,
+    [string]$Config = ''
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or newer is required.' }
 $script:Root = $PSScriptRoot
-$script:ConfigFile = Join-Path $script:Root 'terra-config.json'
 $script:Runner = Join-Path $script:Root 'terra-runner.ps1'
 $script:Project = ''
 $script:Settings = $null
 $script:Invariant = [System.Globalization.CultureInfo]::InvariantCulture
+Import-Module (Join-Path $script:Root 'terra-core.psm1') -Force -ErrorAction Stop
+if ([string]::IsNullOrWhiteSpace($Config) -and -not $Portable) {
+    $script:ConfigFile = Join-Path (Get-TerraAppDataRoot -InstallRoot $script:Root) 'terra-config.json'
+} else {
+    $script:ConfigFile = Resolve-TerraConfigPath -Config $Config -Portable:$Portable -InstallRoot $script:Root
+}
 try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) } catch { }
-try { $Host.UI.RawUI.WindowTitle = 'Terra Runner 1.4 | OpenCode' } catch { }
+try { $Host.UI.RawUI.WindowTitle = 'Terra Runner 1.5 | OpenCode' } catch { }
 
 function Read-Settings {
     if (-not (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf)) { throw "Missing configuration: $script:ConfigFile" }
@@ -59,7 +66,7 @@ function Render-Bar([double]$Fraction,[int]$Width = 28) {
     $filled = [int][Math]::Round($ratio*$Width)
     return ('█'*$filled) + ('░'*($Width-$filled))
 }
-function Money([double]$Value) { return ('$' + $Value.ToString('N2',$script:Invariant)) }
+function Money([decimal]$Value) { return (Format-TerraMoney $Value) }
 function Pause-Menu { [void](Read-Host '  Нажмите Enter, чтобы вернуться в меню') }
 function Read-Choice([string]$Prompt) { return ([string](Read-Host ('  ' + $Prompt))).Trim().ToLowerInvariant() }
 function Read-Text([string]$Title,[string]$Current,[bool]$AllowEmpty=$false) {
@@ -72,27 +79,20 @@ function Read-Text([string]$Title,[string]$Current,[bool]$AllowEmpty=$false) {
         Write-Line '  Требуется значение.' 'Yellow'
     }
 }
-function Read-Decimal([string]$Title,[double]$Current,[double]$Min=0.0,[double]$Max=1000000000.0) {
+function Read-Decimal([string]$Title,[decimal]$Current,[decimal]$Min=0,[decimal]$Max=1000000000) {
     while ($true) {
         $raw = Read-Host ('  {0} [{1}]' -f $Title,$Current.ToString('0.####',$script:Invariant))
         if ([string]::IsNullOrWhiteSpace($raw)) { return $Current }
-        $val = 0.0
-        if ([double]::TryParse($raw.Trim().Replace(',','.'),[Globalization.NumberStyles]::Float,$script:Invariant,[ref]$val) -and
-            -not [double]::IsNaN($val) -and -not [double]::IsInfinity($val) -and $val -ge $Min -and $val -le $Max) {
-            return $val
-        }
+        try { return (ConvertTo-TerraMoney -Text $raw -Minimum $Min -Maximum $Max) }
+        catch { }
         Write-Line "  Введите число от $Min to $Max." 'Yellow'
     }
 }
 function Read-RequiredAmount([string]$Title) {
     while ($true) {
-        $raw = (Read-Host ('  ' + $Title + ' (обязательно введите число)')).Trim().Replace(',','.')
-        $value = 0.0
-        if ($raw -and [double]::TryParse($raw,[Globalization.NumberStyles]::Float,$script:Invariant,[ref]$value) -and
-                -not [double]::IsNaN($value) -and -not [double]::IsInfinity($value) -and $value -ge 0) {
-            return $value
-        }
-        Write-Line '  Требуется явно ввести фактический остаток (неотрицательное число).' 'Yellow'
+        $entered = Read-Host ('  ' + $Title + ' (enter an amount)')
+        try { return (ConvertTo-TerraMoney -Text $entered) }
+        catch { Write-Line $_.Exception.Message 'Yellow' }
     }
 }
 function Read-Integer([string]$Title,[int]$Current,[int]$Min=1,[int]$Max=1000000) {
@@ -105,7 +105,7 @@ function Read-Integer([string]$Title,[int]$Current,[int]$Min=1,[int]$Max=1000000
     }
 }
 function Confirm([string]$Message) {
-    return ((Read-Choice "$Message [yes/no]") -eq 'yes')
+    return ((Read-Choice "$Message [y/n]") -in @('y','yes'))
 }
 function Get-SelectedProject {
     $matches = @($script:Settings.projects | Where-Object { $_.id -eq $script:Project })
@@ -114,7 +114,7 @@ function Get-SelectedProject {
 }
 function Get-StorageRoot {
     $root = [string]$script:Settings.logs.root
-    if (-not [IO.Path]::IsPathRooted($root)) { $root = Join-Path $script:Root $root }
+    if (-not [IO.Path]::IsPathRooted($root)) { $root = Join-Path (Split-Path -Parent $script:ConfigFile) $root }
     return $root
 }
 function Get-BudgetStatePath {
@@ -171,12 +171,17 @@ function Show-Header {
     }
     Divider
 }
-function Invoke-Runner([string[]]$Arguments) {
+function Invoke-Runner {
+    [CmdletBinding(PositionalBinding=$false)]
+    param([Parameter(Mandatory)][hashtable]$Command)
+    $Arguments = @($Command.Keys | Sort-Object | ForEach-Object { "-$_" })
     Write-Line ''
     Write-Line ('  Запуск: ' + ($Arguments -join ' ')) 'Cyan'
     Divider
     try {
-        & $script:Runner -Project $script:Project -Config $script:ConfigFile @Arguments
+        $invokeParameters = @{ Project=$script:Project; Config=$script:ConfigFile }
+        foreach ($key in $Command.Keys) { $invokeParameters[$key] = $Command[$key] }
+        & $script:Runner @invokeParameters
         Write-Line ''
         Write-Line '  Команда завершена.' 'Green'
     } catch {
@@ -284,11 +289,11 @@ function Configure-Budget {
                     if (-not (Confirm ('Set recorded balance to ' + (Money $actual) + '?'))) { break }
                     $existing = Test-Path -LiteralPath (Get-BudgetStatePath)
                     if ($existing -and -not (Confirm 'Снимок уже есть. Пересверить по текущему остатку?')) { break }
-                    $runnerArgs = @('-SetBalanceUsd', $actual.ToString($script:Invariant))
-                    if ($existing) { $runnerArgs += '-ReconcileBalance' }
-                    Invoke-Runner $runnerArgs
+                    $runnerArgs = @{ SetBalanceUsd=$actual.ToString($script:Invariant) }
+                    if ($existing) { $runnerArgs.ReconcileBalance = $true }
+                    Invoke-Runner -Command $runnerArgs
                 }
-                '6' { Invoke-Runner @('-Status') }
+                '6' { Invoke-Runner -Command @{ Status=$true } }
                 default { Write-Line '  Неизвестный пункт.' 'Yellow'; Start-Sleep -Milliseconds 550 }
             }
         } catch { Write-Line ('  ОШИБКА: ' + $_.Exception.Message) 'Red'; Pause-Menu; Read-Settings }
@@ -446,7 +451,52 @@ function Invoke-SelfTest {
     }
 }
 
+function Initialize-TerraConfiguration {
+    if (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf) { return $true }
+    $legacyConfig = Join-Path $script:Root 'terra-config.json'
+    if (-not $Portable -and (Test-Path -LiteralPath $legacyConfig -PathType Leaf)) {
+        $targetRoot = Split-Path -Parent $script:ConfigFile
+        [void][IO.Directory]::CreateDirectory($targetRoot)
+        $backup = Join-Path $targetRoot ('legacy-config-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.json')
+        Copy-Item -LiteralPath $legacyConfig -Destination $backup -Force
+        Copy-Item -LiteralPath $legacyConfig -Destination $script:ConfigFile -Force
+        $migrated = Get-Content -LiteralPath $script:ConfigFile -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable -Depth 60
+        if ($migrated.logs -and -not [IO.Path]::IsPathRooted([string]$migrated.logs.root)) {
+            $migrated.logs.root = Join-Path $targetRoot 'projects'
+            $migrated.schemaVersion = 3
+            [IO.File]::WriteAllText($script:ConfigFile,(ConvertTo-Json $migrated -Depth 60),[Text.UTF8Encoding]::new($false))
+        }
+        Write-Host "Migrated a copy of the legacy configuration to $script:ConfigFile" -ForegroundColor Green
+        return $true
+    }
+
+    Write-Host 'Welcome to Terra Runner. Setup creates configuration only; it never starts OpenCode.' -ForegroundColor Cyan
+    $projectPath = Read-Host 'Project folder (leave blank to cancel setup)'
+    if ([string]::IsNullOrWhiteSpace($projectPath)) { return $false }
+    if (-not (Test-Path -LiteralPath $projectPath -PathType Container)) { throw 'Project folder does not exist.' }
+    $projectPath = (Resolve-Path -LiteralPath $projectPath).ProviderPath
+    $projectId = ([IO.Path]::GetFileName($projectPath) -replace '[^a-zA-Z0-9_.-]','-').Trim('-').ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($projectId)) { $projectId = 'project-' + [guid]::NewGuid().ToString('N').Substring(0,8) }
+    $branch = Read-Host 'Git branch [main]'; if ([string]::IsNullOrWhiteSpace($branch)) { $branch = 'main' }
+    $roadmap = Read-Host 'Roadmap file [ROADMAP.md]'; if ([string]::IsNullOrWhiteSpace($roadmap)) { $roadmap = 'ROADMAP.md' }
+    $progress = Read-Host 'Progress file [PROGRESS.md]'; if ([string]::IsNullOrWhiteSpace($progress)) { $progress = 'PROGRESS.md' }
+    $openCode = Read-Host 'OpenCode command [opencode]'; if ([string]::IsNullOrWhiteSpace($openCode)) { $openCode = 'opencode' }
+    $root = Split-Path -Parent $script:ConfigFile
+    [void][IO.Directory]::CreateDirectory($root)
+    $settings = [ordered]@{
+        schemaVersion=3; openCodeCommand=$openCode; agent='build'; model=''
+        projects=@([ordered]@{ id=$projectId; path=$projectPath; branch=$branch; roadmap=$roadmap; progress=$progress })
+        budget=[ordered]@{ mode='daily'; dailyUsd=5.0; reserveUsd=0.5; emergencyStopUsd=4.95; allowUnlimited=$false; requireGlobalOpenCodeStats=$true; stopOnZeroCostWithTokens=$true; balance=[ordered]@{ source='snapshot'; id='default-account'; minimumUsd=5.0; iterationReserveUsd=0.5; maxAgeMinutes=5; command=''; arguments=@() } }
+        execution=[ordered]@{ pollSeconds=20; maxIterationMinutes=45; maxIterationsPerRun=500; maxConsecutiveNoProgress=3; maxConsecutiveDocumentationOnly=12; maxToolErrorsPerIteration=15; pauseBetweenIterationsSeconds=3; maxRawLogMiB=80 }
+        logs=[ordered]@{ root=(Join-Path $root 'projects'); retainDays=21; maxIterationsPerProject=150; maxTotalMiBPerProject=300; reportRetainDays=60 }
+    }
+    [IO.File]::WriteAllText($script:ConfigFile,((ConvertTo-Json $settings -Depth 60) + "`n"),[Text.UTF8Encoding]::new($false))
+    Write-Host 'Settings saved. Run Validate project before starting development.' -ForegroundColor Green
+    return $true
+}
+
 if (-not (Test-Path -LiteralPath $script:Runner -PathType Leaf)) { throw "Main runner script missing: $script:Runner" }
+if (-not (Initialize-TerraConfiguration)) { Write-Host 'Setup cancelled.'; return }
 Read-Settings
 if ($SelfTest) { Invoke-SelfTest; return }
 while ($true) {
@@ -470,30 +520,30 @@ while ($true) {
     Divider
     $choice = Read-Choice 'Выберите пункт'
     switch ($choice) {
-        '1' { Invoke-Runner @('-Once','-ShowProgress') }
+        '1' { Invoke-Runner -Command @{ Once=$true; ShowProgress=$true } }
         '2' {
             Write-Line '  Это запустит платные API-запросы до остановки по лимитам.' 'Yellow'
-            if (Confirm 'Начать автономную разработку?') { Invoke-Runner @('-ShowProgress') }
+            if (Confirm 'Начать автономную разработку?') { Invoke-Runner -Command @{ Continuous=$true; ShowProgress=$true } }
         }
-        '3' { Invoke-Runner @('-DryRun') }
-        '4' { Invoke-Runner @('-Status') }
+        '3' { Invoke-Runner -Command @{ DryRun=$true } }
+        '4' { Invoke-Runner -Command @{ Status=$true } }
         '5' { Configure-Budget }
         '6' { Configure-Execution }
         '7' { Configure-Projects }
         '8' { Configure-Logs }
-        '9' { Invoke-Runner @('-Report') }
+        '9' { Invoke-Runner -Command @{ Report=$true } }
         't' {
             try { Invoke-OfflineTests }
             catch { Write-Line ('  Ошибка самотеста: ' + $_.Exception.Message) 'Red' }
             Pause-Menu
         }
         'l' { Open-LogFolder }
-        's' { Invoke-Runner @('-Stop') }
+        's' { Invoke-Runner -Command @{ Stop=$true } }
         'a' {
             Write-Line '  Активный OpenCode завершится при следующей проверке.' 'Red'
-            if (Confirm 'Аварийно остановить текущую итерацию?') { Invoke-Runner @('-Abort') }
+            if (Confirm 'Аварийно остановить текущую итерацию?') { Invoke-Runner -Command @{ Abort=$true } }
         }
-        'c' { Invoke-Runner @('-ClearStop') }
+        'c' { Invoke-Runner -Command @{ ClearStop=$true } }
         '0' { return }
         default { Write-Line '  Выберите допустимый пункт.' 'Yellow'; Start-Sleep -Milliseconds 550 }
     }

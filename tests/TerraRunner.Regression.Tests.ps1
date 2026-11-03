@@ -1,0 +1,53 @@
+# Requires PowerShell 7 and Pester. All cases run in temporary directories.
+$here = Split-Path -Parent $PSScriptRoot
+$runner = Join-Path $here 'terra-runner.ps1'
+$mock = Join-Path $PSScriptRoot 'mock-opencode.ps1'
+
+Describe 'Terra Runner safe command dispatch' {
+    BeforeEach {
+        $script:root = Join-Path ([IO.Path]::GetTempPath()) ('terra-runner-regression-' + [guid]::NewGuid().ToString('N'))
+        $script:repo = Join-Path $script:root 'project'
+        $script:state = Join-Path $script:root 'state'
+        $script:calls = Join-Path $script:root 'opencode.calls.log'
+        [void][IO.Directory]::CreateDirectory($script:repo)
+        $script:config = Join-Path $script:root 'config.json'
+        $settings = [ordered]@{
+            schemaVersion=2; openCodeCommand=$mock; agent='build'; model='test/model'
+            projects=@([ordered]@{ id='safe-project'; path=$script:repo; branch='main'; roadmap='ROADMAP.md'; progress='PROGRESS.md' })
+            budget=[ordered]@{ mode='daily'; dailyUsd=5.0; reserveUsd=0.5; emergencyStopUsd=4.95; allowUnlimited=$false; requireGlobalOpenCodeStats=$true; stopOnZeroCostWithTokens=$true; balance=[ordered]@{ source='snapshot'; id='test-account'; minimumUsd=1.0; iterationReserveUsd=0.5; maxAgeMinutes=5; command=''; arguments=@() } }
+            execution=[ordered]@{ pollSeconds=1; maxIterationMinutes=1; maxIterationsPerRun=2; maxConsecutiveNoProgress=2; maxConsecutiveDocumentationOnly=2; maxRawLogMiB=1 }
+            logs=[ordered]@{ root=$script:state; retainDays=7; maxIterationsPerProject=10; maxTotalMiBPerProject=10; reportRetainDays=7 }
+        }
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
+        $env:TERRA_MOCK_CALL_LOG = $script:calls
+        $env:TERRA_MOCK_COST = '0.15'
+        $env:TERRA_MOCK_ALL_COST = '0.15'
+    }
+    AfterEach {
+        Remove-Item Env:TERRA_MOCK_CALL_LOG,Env:TERRA_MOCK_COST,Env:TERRA_MOCK_ALL_COST -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $script:root -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    It 'does not start an agent for Status' {
+        & $runner -Project safe-project -Config $script:config -Status
+        (Get-Content -LiteralPath $script:calls -Raw) | Should Not Match '(?m)^run(?:\s|$)'
+    }
+    It 'does not start an agent for Report' {
+        & $runner -Project safe-project -Config $script:config -Report
+        (Test-Path -LiteralPath $script:calls) | Should Be $false
+    }
+    It 'does not start an agent when no execution command is selected' {
+        & $runner -Project safe-project -Config $script:config
+        (Test-Path -LiteralPath $script:calls) | Should Be $false
+    }
+    It 'accepts dot and comma decimal balance input without binding it as an iteration limit' {
+        $module = Join-Path $here 'terra-core.psm1'
+        Import-Module $module -Force
+        (ConvertTo-TerraMoney '96.11') | Should Be ([decimal]96.11)
+        (ConvertTo-TerraMoney '96,11') | Should Be ([decimal]96.11)
+        foreach ($invalid in @('1,000.00','-1','NaN')) {
+            $threw = $false
+            try { $null = ConvertTo-TerraMoney $invalid } catch { $threw = $true }
+            $threw | Should Be $true
+        }
+    }
+}

@@ -15,11 +15,13 @@
 .EXAMPLE
     ./terra-runner.ps1 -Project ntd-terra -Stop
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding=$false)]
 param(
     [string]$Project = 'ntd-terra',
-    [string]$Config = (Join-Path $PSScriptRoot 'terra-config.json'),
+    [string]$Config = '',
+    [switch]$Portable,
     [switch]$Once,
+    [switch]$Continuous,
     [switch]$DryRun,
     [switch]$Status,
     [switch]$Stop,
@@ -27,7 +29,7 @@ param(
     [switch]$ClearStop,
     [switch]$Report,
     [string]$ReportDate = '',
-    [double]$SetBalanceUsd = -1,
+    [string]$SetBalanceUsd = '',
     [switch]$ReconcileBalance,
     [switch]$ShowProgress,
     [ValidateRange(0, 1000)][int]$MaxIterations = 0
@@ -37,6 +39,16 @@ $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7+ is required. Run with pwsh.' }
 $Invariant = [System.Globalization.CultureInfo]::InvariantCulture
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Import-Module (Join-Path $ScriptDir 'terra-core.psm1') -Force -ErrorAction Stop
+$Config = Resolve-TerraConfigPath -Config $Config -Portable:$Portable -InstallRoot $ScriptDir
+if (-not (Test-Path -LiteralPath $Config -PathType Leaf)) {
+    throw "Configuration not found: $Config. Start Terra Runner without CLI arguments to run Setup Wizard."
+}
+$hasSetBalance = -not [string]::IsNullOrWhiteSpace($SetBalanceUsd)
+$setBalanceAmount = $null
+if ($hasSetBalance) { $setBalanceAmount = ConvertTo-TerraMoney -Text $SetBalanceUsd }
+if ($Once -and $Continuous) { throw 'Use either -Once or -Continuous, not both.' }
+if ($ReconcileBalance -and -not $hasSetBalance) { throw '-ReconcileBalance requires -SetBalanceUsd.' }
 
 function Ensure-Directory([string]$Path) {
     [void][System.IO.Directory]::CreateDirectory($Path)
@@ -572,7 +584,7 @@ function Rotate-Reports([string]$DataDirectory, $Settings) {
 }
 
 $cfg = Get-Content -LiteralPath $Config -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 40
-if ([int]$cfg.schemaVersion -notin @(1,2)) { throw 'Unsupported terra-config.json schemaVersion.' }
+if ([int]$cfg.schemaVersion -notin @(1,2,3)) { throw 'Unsupported terra-config.json schemaVersion.' }
 $projectConfig = @($cfg.projects | Where-Object { $_.id -eq $Project })
 if ($projectConfig.Count -ne 1) { throw "Expected exactly one project with id '$Project'." }
 $projectConfig = $projectConfig[0]
@@ -583,7 +595,7 @@ $repo = (Resolve-Path -LiteralPath $repo).ProviderPath
 $openCode = [string]$cfg.openCodeCommand
 if ([string]::IsNullOrWhiteSpace($openCode)) { throw 'openCodeCommand is required.' }
 $logRoot = [string]$cfg.logs.root
-if (-not [System.IO.Path]::IsPathRooted($logRoot)) { $logRoot = Join-Path $ScriptDir $logRoot }
+if (-not [System.IO.Path]::IsPathRooted($logRoot)) { $logRoot = Join-Path (Split-Path -Parent $Config) $logRoot }
 $projectData = Join-Path $logRoot $Project
 $logsPath = Join-Path $projectData 'logs'
 $stopPath = Join-Path $projectData 'STOP'
@@ -629,10 +641,10 @@ if ($budgetMode -in @('balance','hybrid')) {
     if ($cfg.budget.balance.source -eq 'snapshot') { [void](Get-BalanceStatePath $logRoot $cfg.budget.balance) }
     elseif ($cfg.budget.balance.source -ne 'command') { throw 'budget.balance.source must be snapshot or command.' }
 }
-if ($SetBalanceUsd -ge 0 -and $budgetMode -notin @('balance','hybrid')) {
+if ($hasSetBalance -and $budgetMode -notin @('balance','hybrid')) {
     throw '-SetBalanceUsd is only available in balance/hybrid modes.'
 }
-if ($SetBalanceUsd -ge 0 -and $cfg.budget.balance.source -ne 'snapshot') {
+if ($hasSetBalance -and $cfg.budget.balance.source -ne 'snapshot') {
     throw '-SetBalanceUsd is only available for balance.source=snapshot.'
 }
 Require-PositiveNumber $cfg.execution.pollSeconds 'execution.pollSeconds' | Out-Null
@@ -662,6 +674,12 @@ if ($Status) {
     if ($reason) { Write-Host "No new iteration allowed: $reason" }
     Write-Host "Project logs: $logsPath"
     Write-Host "STOP: $(Test-Path -LiteralPath $stopPath); ABORT: $(Test-Path -LiteralPath $abortPath)"
+    return
+}
+
+if (-not ($Once -or $Continuous -or $DryRun -or $hasSetBalance)) {
+    Write-Host 'No development command was selected. Use -Once or -Continuous to start OpenCode.'
+    Write-Host 'Informational commands such as -Status and -Report never start an agent.'
     return
 }
 
@@ -704,11 +722,11 @@ try {
     }
     $statsHelp = Invoke-Cli $openCode @('stats','--help') $repo
     if ($statsHelp -notmatch '\-\-json') { throw 'Installed OpenCode lacks stats --json; update to compatible OpenCode v2.' }
-    if ($SetBalanceUsd -ge 0) {
+    if ($hasSetBalance) {
         $all = Get-Usage $openCode $repo $cfg.budget 'all'
         $stateFile = Get-BalanceStatePath $logRoot $cfg.budget.balance
-        Set-BalanceSnapshot $stateFile $SetBalanceUsd $all ([bool]$ReconcileBalance)
-        Write-Host ('Balance snapshot saved: ${0:N4}; OpenCode lifetime baseline ${1:N4}; file: {2}' -f $SetBalanceUsd,$all.CostUSD,$stateFile)
+        Set-BalanceSnapshot $stateFile ([double]$setBalanceAmount) $all ([bool]$ReconcileBalance)
+        Write-Host ('Balance snapshot saved: {0}; OpenCode lifetime baseline ${1:N4}; file: {2}' -f (Format-TerraMoney $setBalanceAmount),$all.CostUSD,$stateFile)
         return
     }
     $initialUsage = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot

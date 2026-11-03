@@ -1,0 +1,5 @@
+.idea/
+terra-config.json
+data/projects/*/
+data/projects/global-runner.lock
+*.tmp

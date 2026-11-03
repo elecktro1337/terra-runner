@@ -4,6 +4,9 @@ param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest)
 $ErrorActionPreference = 'Stop'
 if ($Rest.Count -eq 0) { exit 2 }
 $cmd = $Rest[0]
+if ($env:TERRA_MOCK_CALL_LOG) {
+    [System.IO.File]::AppendAllText($env:TERRA_MOCK_CALL_LOG,($Rest -join ' ') + "`n",[System.Text.UTF8Encoding]::new($false))
+}
 if ($cmd -eq 'stats') {
     if ($Rest -contains '--help') { 'Stats options: --days --json'; exit 0 }
     if ($env:TERRA_MOCK_BROKEN_STATS -eq '1') { 'unavailable'; exit 0 }
