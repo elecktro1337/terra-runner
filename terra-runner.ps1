@@ -211,6 +211,31 @@ function Get-EventErrors([string]$EventsFile) {
         VerificationExamples = @($verificationExamples.ToArray())
     }
 }
+function Test-TransientNetworkFailure([string]$EventsFile, [string]$ErrorFile) {
+    $content = ''
+    foreach ($file in @($EventsFile,$ErrorFile)) {
+        if (Test-Path -LiteralPath $file -PathType Leaf) {
+            try { $content += [IO.File]::ReadAllText($file,[Text.UTF8Encoding]::new($false)) + "`n" }
+            catch { }
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($content)) { return $false }
+    return $content -match '(?is)(?:\b(?:tls|ssl)\b.{0,120}\b(?:handshake|connection|socket|network|reset|timeout|certificate)\b|\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|SSL_ERROR|CERT_|UNABLE_TO_VERIFY)\b)'
+}
+function Wait-ForOpenCodeRecovery([string]$Executable, [string]$Directory, $Budget, [string]$LogRoot, [int]$Attempts, [int]$DelaySeconds) {
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        Write-Warning "Transient TLS/SSL or network failure. Waiting $DelaySeconds seconds before connection check ($attempt/$Attempts)."
+        Start-Sleep -Seconds $DelaySeconds
+        try {
+            [void](Get-BudgetSnapshot $Executable $Directory $Budget $LogRoot)
+            Write-Host 'OpenCode connection check succeeded. Retrying the interrupted iteration.'
+            return $true
+        } catch {
+            Write-Warning "OpenCode connection check failed: $($_.Exception.Message)"
+        }
+    }
+    return $false
+}
 function Test-RoadmapTask([string]$Line, [bool]$Completed, [string]$TaskIdPattern = '') {
     $checkbox = if ($Completed) { '^\s*-\s*\[[xX]\]' } else { '^\s*-\s*\[ \]' }
     if ($Line -notmatch $checkbox) { return $false }
@@ -632,6 +657,10 @@ Require-PositiveNumber $cfg.logs.maxTotalMiBPerProject 'logs.maxTotalMiBPerProje
 if ($null -ne (Read-Member $cfg.logs 'reportRetainDays')) { Require-PositiveNumber $cfg.logs.reportRetainDays 'logs.reportRetainDays' | Out-Null }
 if ([int]$cfg.execution.maxConsecutiveNoProgress -lt 1) { throw 'maxConsecutiveNoProgress must be >= 1.' }
 if ($null -ne (Read-Member $cfg.execution 'maxConsecutiveDocumentationOnly') -and [int]$cfg.execution.maxConsecutiveDocumentationOnly -lt 1) { throw 'maxConsecutiveDocumentationOnly must be >= 1.' }
+$maxTransientRetries = if ($null -ne (Read-Member $cfg.execution 'maxTransientRetries')) { [int]$cfg.execution.maxTransientRetries } else { 3 }
+$transientRetryDelaySeconds = if ($null -ne (Read-Member $cfg.execution 'transientRetryDelaySeconds')) { [int]$cfg.execution.transientRetryDelaySeconds } else { 30 }
+if ($maxTransientRetries -lt 1) { throw 'maxTransientRetries must be >= 1.' }
+if ($transientRetryDelaySeconds -lt 1) { throw 'transientRetryDelaySeconds must be >= 1.' }
 $maxCycles = if ($MaxIterations -gt 0) { $MaxIterations } else { [int]$cfg.execution.maxIterationsPerRun }
 if ($Once) { $maxCycles = 1 }
 if ($maxCycles -lt 1) { throw 'No iterations configured.' }
@@ -719,6 +748,7 @@ try {
     if (Test-Path -LiteralPath $abortPath) { throw "ABORT flag exists: $abortPath. Use -ClearStop after review." }
 
     $noProgress = 0
+    $transientFailures = 0
     $activeChild = $null
     for ($i = 1; $i -le $maxCycles; $i++) {
         if (Test-Path -LiteralPath $stopPath) { Write-Host 'STOP detected; exiting after previous iteration.'; break }
@@ -819,6 +849,8 @@ try {
         } catch {
             if (-not $termination) { $termination = "invalid-event-output: $($_.Exception.Message)" }
         }
+        $transientNetworkFailure = Test-TransientNetworkFailure $eventsPath $stderrPath
+        if ($transientNetworkFailure) { $termination = 'transient-tls-or-ssl-failure' }
         if ($eventErrors -gt 0 -and -not $termination) { $termination = "opencode-reported-$eventErrors-errors" }
         $maxToolErrors = if ($null -ne (Read-Member $cfg.execution 'maxToolErrorsPerIteration')) { [int]$cfg.execution.maxToolErrorsPerIteration } else { 15 }
         if ($toolErrors -gt $maxToolErrors -and -not $termination) { $termination = "too-many-tool-errors-$toolErrors" }
@@ -856,8 +888,8 @@ try {
         if (Test-Path -LiteralPath $stateFile) {
             $state = Get-Content -LiteralPath $stateFile -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable
         }
-        $noProgressNow = ($doneAfter -le $doneBefore)
-        $noProgress = if ($noProgressNow) { [int]$state.noProgress + 1 } else { 0 }
+        $noProgressNow = ($doneAfter -le $doneBefore) -and -not $transientNetworkFailure
+        $noProgress = if ($transientNetworkFailure) { [int]$state.noProgress } elseif ($noProgressNow) { [int]$state.noProgress + 1 } else { 0 }
         $docsOnlyNow = ($changedFiles.Docs -gt 0 -and $changedFiles.Code -eq 0 -and $changedFiles.Tests -eq 0)
         $docsOnly = if ($docsOnlyNow) { [int]$state.documentationOnly + 1 } else { 0 }
         Save-Json $stateFile ([ordered]@{ noProgress=$noProgress; documentationOnly=$docsOnly; lastRunId=$runId; updatedAt=(Get-Date).ToString('o') })
@@ -898,6 +930,7 @@ try {
             documentationOnly = $docsOnlyNow
             consecutiveDocumentationOnly = $docsOnly
             consecutiveNoProgress = $noProgress
+            transientNetworkFailure = $transientNetworkFailure
             usageError = $usageError
             eventsFile = [IO.Path]::GetFileName($eventsPath)
             readableEventsFile = [IO.Path]::GetFileName($readablePath)
@@ -910,13 +943,30 @@ try {
         Write-Host "Daily project report: $reportPath"
         Rotate-ProjectLogs $logsPath $cfg.logs
         Rotate-Reports $projectData $cfg.logs
+        if ($transientNetworkFailure) {
+            $transientFailures++
+            if ($transientFailures -gt $maxTransientRetries) {
+                Write-Warning "Transient TLS/SSL failure retry limit ($maxTransientRetries) reached; stopping safely. See $summaryPath"
+                break
+            }
+            if (-not (Wait-ForOpenCodeRecovery $openCode $repo $cfg.budget $logRoot $maxTransientRetries $transientRetryDelaySeconds)) {
+                Write-Warning "OpenCode did not recover after $maxTransientRetries connection checks; stopping safely. See $summaryPath"
+                break
+            }
+            $i--
+            continue
+        }
         if ($termination -or $exitCode -ne 0 -or $usageError) {
             Write-Warning "Stopped on error or safety condition. Reason=$termination exit=$exitCode usage=$usageError; see $summaryPath"
             break
         }
         if ($noTasksReported) {
-            Write-Host 'Agent reported NO_ACTIONABLE_TASKS; stopping.'
-            break
+            $pendingAfter = Count-Pending $roadmap $taskIdPattern
+            if ($pendingAfter -eq 0) {
+                Write-Host 'Agent reported NO_ACTIONABLE_TASKS and no roadmap checkbox tasks remain; stopping.'
+                break
+            }
+            Write-Warning "Agent reported NO_ACTIONABLE_TASKS, but $pendingAfter roadmap checkbox task(s) remain. Continuing; no-progress protection is still active."
         }
         if ($noProgress -ge [int]$cfg.execution.maxConsecutiveNoProgress) {
             Write-Warning "$noProgress consecutive iterations without completed TODO. Stopping to avoid a spend loop."
@@ -927,6 +977,7 @@ try {
             Write-Warning "$docsOnly consecutive documentation-only iterations. Stopping for a code-progress review."
             break
         }
+        $transientFailures = 0
         if ($i -lt $maxCycles) { Start-Sleep -Seconds ([int]$cfg.execution.pauseBetweenIterationsSeconds) }
     }
     Write-Host "Terra Runner finished. Project logs: $logsPath"

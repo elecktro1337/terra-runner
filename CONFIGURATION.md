@@ -15,3 +15,7 @@ Each project has an ID, absolute path, Git branch, roadmap, and progress file. P
 ## Recovery
 
 Settings are written atomically and backups are retained in `config-backups`. If the active JSON is invalid, Terra Runner offers the newest valid backup. Accepting recovery preserves the invalid file as a timestamped `.corrupt-*` copy.
+
+## Transient connection retries
+
+`execution.maxTransientRetries` defaults to `3` and `execution.transientRetryDelaySeconds` defaults to `30`. When an OpenCode event or worker error indicates a TLS, SSL, or transient network failure, Terra Runner waits, checks OpenCode usage statistics without launching an agent, and retries the interrupted iteration only after that check succeeds. It stops safely if connection checks or the retry limit are exhausted.

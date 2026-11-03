@@ -147,11 +147,54 @@ try {
     catch { $blocked = $true }
     if (-not $blocked) { throw 'Balance model must reject decreasing lifetime usage.' }
     Write-Host 'PASS: missing consistency in lifetime usage fails closed.' -ForegroundColor Green
+
+    # NO_ACTIONABLE_TASKS is advisory while the selected roadmap still has pending checkboxes.
+    $cfg.budget.mode = 'daily'
+    $cfg.execution.maxConsecutiveNoProgress = 3
+    $cfg.execution.maxTransientRetries = 2
+    $cfg.execution.transientRetryDelaySeconds = 1
+    $cfg.execution.pauseBetweenIterationsSeconds = 0
+    $env:TERRA_MOCK_COST = '0.15'; $env:TERRA_MOCK_ALL_COST = '0.15'
+    [IO.File]::WriteAllText((Join-Path $repo 'NTD-ROADMAP.md'),"- [ ] **NTD-0101** — First pending task`n- [ ] **NTD-0102** — Second pending task`n")
+    & git -C $repo add NTD-ROADMAP.md | Out-Null
+    & git -C $repo commit -qm 'test: add pending tasks for advisory signal'
+    # Copy the local test commit into the temporary bare repository so the
+    # runner's remote-head verification sees the same revision.
+    & git -C $bare fetch -q $repo codex/terra:refs/heads/codex/terra
+    $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
+    $summaryDirectory = Join-Path $tempRoot 'project-data/mock-project/logs'
+    $beforeNoAction = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
+    $env:TERRA_MOCK_NO_ACTIONABLE = '1'
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 2
+    Remove-Item Env:TERRA_MOCK_NO_ACTIONABLE -ErrorAction SilentlyContinue
+    $afterNoAction = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
+    if ($afterNoAction.Count -ne ($beforeNoAction + 2)) { throw 'NO_ACTIONABLE_TASKS incorrectly stopped the next iteration.' }
+    if ((Get-Content -Raw -LiteralPath (Join-Path $repo 'NTD-ROADMAP.md')) -notmatch '\[ \]') { throw 'NO_ACTIONABLE_TASKS simulation unexpectedly changed the roadmap.' }
+    $advisorySummaries = @($afterNoAction | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 2 | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json })
+    if (@($advisorySummaries | Where-Object { -not $_.noActionableTasksReported }).Count -ne 0) { throw 'NO_ACTIONABLE_TASKS signal was not recorded.' }
+    Write-Host 'PASS: NO_ACTIONABLE_TASKS is advisory while roadmap tasks remain.' -ForegroundColor Green
+
+    # A TLS interruption must be checked and retried without counting as no progress.
+    $beforeTls = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
+    $env:TERRA_MOCK_TLS_ONCE = '1'
+    $env:TERRA_MOCK_STATE_DIR = Join-Path $tempRoot 'mock-state'
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 1
+    Remove-Item Env:TERRA_MOCK_TLS_ONCE -ErrorAction SilentlyContinue
+    Remove-Item Env:TERRA_MOCK_STATE_DIR -ErrorAction SilentlyContinue
+    $afterTls = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
+    if ($afterTls.Count -ne ($beforeTls + 2)) { throw 'TLS interruption was not retried as the same iteration.' }
+    $tlsSummary = @($afterTls | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json } | Where-Object { $_.transientNetworkFailure } | Select-Object -Last 1)
+    if ($tlsSummary.Count -ne 1 -or $tlsSummary[0].consecutiveNoProgress -ne 2) { throw 'TLS interruption was not classified or incorrectly counted as no progress.' }
+    if ((Get-Content -Raw -LiteralPath (Join-Path $repo 'NTD-ROADMAP.md')) -notmatch '\[x\]') { throw 'Recovered TLS retry did not complete the pending task.' }
+    Write-Host 'PASS: TLS failure waits for a connection check and retries the same iteration.' -ForegroundColor Green
     Write-Host 'ALL OFFLINE SELF-TESTS PASSED' -ForegroundColor Green
 }
 finally {
     Remove-Item Env:TERRA_MOCK_COST -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_BROKEN_STATS -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_ALL_COST -ErrorAction SilentlyContinue
+    Remove-Item Env:TERRA_MOCK_NO_ACTIONABLE -ErrorAction SilentlyContinue
+    Remove-Item Env:TERRA_MOCK_TLS_ONCE -ErrorAction SilentlyContinue
+    Remove-Item Env:TERRA_MOCK_STATE_DIR -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
 }

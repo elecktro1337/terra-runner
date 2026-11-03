@@ -18,6 +18,20 @@ if ($cmd -eq 'stats') {
 }
 if ($cmd -eq 'run') {
     if ($Rest -contains '--help') { 'Run options: --agent --format --auto --model'; exit 0 }
+    if ($env:TERRA_MOCK_TLS_ONCE -eq '1') {
+        if ([string]::IsNullOrWhiteSpace($env:TERRA_MOCK_STATE_DIR)) { throw 'TERRA_MOCK_STATE_DIR is required for TLS simulation.' }
+        [void][IO.Directory]::CreateDirectory($env:TERRA_MOCK_STATE_DIR)
+        $marker = Join-Path $env:TERRA_MOCK_STATE_DIR 'tls-once.marker'
+        if (-not (Test-Path -LiteralPath $marker)) {
+            [IO.File]::WriteAllText($marker,'failed once')
+            '{"type":"error","error":{"message":"TLS handshake connection reset"}}'
+            exit 1
+        }
+    }
+    if ($env:TERRA_MOCK_NO_ACTIONABLE -eq '1') {
+        '{"type":"text","part":{"text":"NO_ACTIONABLE_TASKS"}}'
+        exit 0
+    }
     $repo = (Get-Location).Path
     $roadmap = Join-Path $repo 'NTD-ROADMAP.md'
     $text = Get-Content -LiteralPath $roadmap -Raw
