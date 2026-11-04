@@ -28,6 +28,10 @@ if ($cmd -eq 'run') {
             exit 1
         }
     }
+    if ($env:TERRA_MOCK_BLOCKED -eq '1') {
+        '{"type":"text","part":{"text":"NO_ACTIONABLE_TASKS`n`nNTD-0101 is blocked: local Docker daemon is unavailable. Roadmap dependencies prohibit the next stage."}}'
+        exit 0
+    }
     if ($env:TERRA_MOCK_NO_ACTIONABLE -eq '1') {
         '{"type":"text","part":{"text":"NO_ACTIONABLE_TASKS"}}'
         exit 0

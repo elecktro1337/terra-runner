@@ -169,6 +169,7 @@ function Get-EventErrors([string]$EventsFile) {
     $verificationErrors = 0
     $verificationExamples = [System.Collections.Generic.List[string]]::new()
     $noTasks = $false
+    $noTaskMessage = ''
     $toolExamples = [System.Collections.Generic.List[string]]::new()
     foreach ($line in [System.IO.File]::ReadLines($EventsFile, [System.Text.Encoding]::UTF8)) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -201,12 +202,15 @@ function Get-EventErrors([string]$EventsFile) {
         }
         if ($eventType -eq 'text') {
             $body = [string](Read-Member $part 'text')
-            if ($body -match '\bNO_ACTIONABLE_TASKS\b') { $noTasks = $true }
+            if ($body -match '\bNO_ACTIONABLE_TASKS\b') {
+                $noTasks = $true
+                if ([string]::IsNullOrWhiteSpace($noTaskMessage)) { $noTaskMessage = $body.Substring(0,[Math]::Min(1200,$body.Length)) }
+            }
         }
     }
     return [pscustomobject]@{
         Errors = $streamErrors; ToolErrors = $toolErrorIds.Count
-        ToolErrorExamples = @($toolExamples.ToArray()); NoTasks = $noTasks
+        ToolErrorExamples = @($toolExamples.ToArray()); NoTasks = $noTasks; NoTaskMessage = $noTaskMessage
         VerificationCommands = $verificationIds.Count; VerificationCommandErrors = $verificationErrors
         VerificationExamples = @($verificationExamples.ToArray())
     }
@@ -843,6 +847,7 @@ try {
         $verificationCommandErrors = 0
         $verificationExamples = @()
         $noTasksReported = $false
+        $noTaskMessage = ''
         try {
             $eventsReview = Get-EventErrors $eventsPath
             $eventErrors = $eventsReview.Errors
@@ -852,6 +857,7 @@ try {
             $verificationCommandErrors = $eventsReview.VerificationCommandErrors
             $verificationExamples = @($eventsReview.VerificationExamples)
             $noTasksReported = $eventsReview.NoTasks
+            $noTaskMessage = [string]$eventsReview.NoTaskMessage
         } catch {
             if (-not $termination) { $termination = "invalid-event-output: $($_.Exception.Message)" }
         }
@@ -912,6 +918,7 @@ try {
             completedTaskIds = @($completedIds)
             commits = @($iterationCommits)
             noActionableTasksReported = $noTasksReported
+            noActionableTasksMessage = $noTaskMessage
             workingTreeClean = ($gitStatus.Trim() -eq '')
             doneBefore = $doneBefore; doneAfter = $doneAfter
             pendingAfter = (Count-Pending $roadmap $taskIdPattern)
@@ -970,6 +977,13 @@ try {
             $pendingAfter = Count-Pending $roadmap $taskIdPattern
             if ($pendingAfter -eq 0) {
                 Write-Host 'Agent reported NO_ACTIONABLE_TASKS and no roadmap checkbox tasks remain; stopping.'
+                break
+            }
+            if ($noTaskMessage -match '(?i)\b(blocked|blocker|dependency|dependencies|unavailable|cannot|prohibit|prerequisite)\b') {
+                $shortMessage = ($noTaskMessage -replace '\s+',' ').Trim()
+                if ($shortMessage.Length -gt 600) { $shortMessage = $shortMessage.Substring(0,600) + '…' }
+                Write-Warning "OpenCode reported a project blocker while $pendingAfter roadmap checkbox task(s) remain. Development is paused; resolve the blocker and start again."
+                Write-Host "Blocker report: $shortMessage"
                 break
             }
             Write-Warning "Agent reported NO_ACTIONABLE_TASKS, but $pendingAfter roadmap checkbox task(s) remain. Continuing; no-progress protection is still active."

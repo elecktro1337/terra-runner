@@ -191,6 +191,21 @@ try {
     if ($tlsSummary.Count -ne 1 -or $tlsSummary[0].consecutiveNoProgress -ne 2) { throw 'TLS interruption was not classified or incorrectly counted as no progress.' }
     if ((Get-Content -Raw -LiteralPath (Join-Path $repo 'NTD-ROADMAP.md')) -notmatch '\[x\]') { throw 'Recovered TLS retry did not complete the pending task.' }
     Write-Host 'PASS: TLS failure waits for a connection check and retries the same iteration.' -ForegroundColor Green
+
+    # An explicit project blocker must be shown and stop before an expensive retry loop.
+    [IO.File]::WriteAllText((Join-Path $repo 'NTD-ROADMAP.md'),"- [ ] **NTD-0201** — Blocked task`n")
+    & git -C $repo add NTD-ROADMAP.md | Out-Null
+    & git -C $repo commit -qm 'test: add blocked task'
+    & git -C $bare fetch -q $repo codex/terra:refs/heads/codex/terra
+    $beforeBlocked = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
+    $env:TERRA_MOCK_BLOCKED = '1'
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 2
+    Remove-Item Env:TERRA_MOCK_BLOCKED -ErrorAction SilentlyContinue
+    $afterBlocked = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
+    if ($afterBlocked.Count -ne ($beforeBlocked + 1)) { throw 'Explicit blocker should stop before a second paid iteration.' }
+    $blockedSummary = Get-Content -Raw -LiteralPath ($afterBlocked | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).FullName | ConvertFrom-Json
+    if ($blockedSummary.noActionableTasksMessage -notmatch 'Docker daemon is unavailable') { throw 'Blocker reason was not preserved in the summary.' }
+    Write-Host 'PASS: explicit roadmap blocker is displayed and stops safely.' -ForegroundColor Green
     Write-Host 'ALL OFFLINE SELF-TESTS PASSED' -ForegroundColor Green
 }
 finally {
@@ -200,5 +215,6 @@ finally {
     Remove-Item Env:TERRA_MOCK_NO_ACTIONABLE -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_TLS_ONCE -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_STATE_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:TERRA_MOCK_BLOCKED -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
 }
