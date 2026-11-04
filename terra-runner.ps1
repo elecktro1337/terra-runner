@@ -391,7 +391,7 @@ function Get-QuotaSnapshot($Account) {
     $remaining = Require-NonNegativeNumber (Read-Member $quota 'remaining') 'quota.remaining'
     $reserve = Require-NonNegativeNumber (Read-Member $quota 'reserve') 'quota.reserve'
     $observedAt = [string](Read-Member $quota 'observedAt')
-    try { $observed = [DateTimeOffset]::Parse($observedAt,$Invariant) } catch { throw 'Provider snapshot has no valid observation time. Refresh it in Profiles.' }
+    try { $observed = [DateTimeOffset]::Parse($observedAt,$Invariant,([Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal)) } catch { throw 'Provider snapshot has no valid observation time. Refresh it in Profiles.' }
     $maxAge = Require-PositiveNumber (Read-Member $quota 'maxAgeMinutes') 'quota.maxAgeMinutes'
     $age = ([DateTimeOffset]::UtcNow - $observed.ToUniversalTime()).TotalMinutes
     if ($age -lt -2 -or $age -gt $maxAge) { throw "Provider snapshot is stale ($([Math]::Round($age,1)) minutes). Refresh it in Profiles before development." }
@@ -496,6 +496,13 @@ function Get-BudgetSnapshot([string]$Executable, [string]$Directory, $Budget, [s
 }
 function Get-BudgetStopReason($Snapshot, $Budget, [bool]$Emergency) {
     if ($Snapshot.Kind -in @('local','oauth','unlimited')) { return '' }
+    if ($Snapshot.Kind -eq 'quota') {
+        $cutoff = [double]$Snapshot.QuotaReserve
+        if ([double]$Snapshot.QuotaRemaining -le $cutoff) {
+            return "provider snapshot threshold reached (reported $($Snapshot.QuotaRemaining) $($Snapshot.QuotaUnit), threshold $cutoff $($Snapshot.QuotaUnit))"
+        }
+        return ''
+    }
     $mode = $Snapshot.Mode
     if ($mode -eq 'hourly') {
         $cap = [double]$Budget.hourlyUsd
@@ -523,6 +530,11 @@ function Show-Usage($Snapshot, $Budget) {
     if ($Snapshot.Kind -eq 'local') { Write-Host 'Local model: no provider balance or quota limits are configured.'; return }
     if ($Snapshot.Kind -eq 'oauth') { Write-Host 'OpenCode OAuth: usage and reset windows are managed by the provider; no local quota is estimated.'; return }
     if ($Snapshot.Kind -eq 'unlimited') { Write-Host 'WARNING: provider limits are disabled for this profile.' -ForegroundColor Yellow; return }
+    if ($Snapshot.Kind -eq 'quota') {
+        Write-Host ('Provider snapshot: {0:N2} {1} remaining; launch threshold {2:N2} {1}' -f [double]$Snapshot.QuotaRemaining,$Snapshot.QuotaUnit,[double]$Snapshot.QuotaReserve)
+        Show-ProgressMeters $Snapshot $Budget
+        return
+    }
     $usage = $Snapshot.Daily
     $message = ('Day {0}: OpenCode cost ${1:N4}; tokens {2:N0}' -f $usage.Day,$usage.CostUSD,$usage.Tokens)
     if ($Snapshot.Mode -in @('daily','hybrid')) {
