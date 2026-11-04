@@ -1022,14 +1022,11 @@ try {
                 Write-Host 'Agent reported NO_ACTIONABLE_TASKS and no roadmap checkbox tasks remain; stopping.'
                 break
             }
-            if ($noTaskMessage -match '(?i)\b(blocked|blocker|dependency|dependencies|unavailable|cannot|prohibit|prerequisite)\b') {
-                $shortMessage = ($noTaskMessage -replace '\s+',' ').Trim()
-                if ($shortMessage.Length -gt 600) { $shortMessage = $shortMessage.Substring(0,600) + '…' }
-                Write-Warning "OpenCode reported a project blocker while $pendingAfter roadmap checkbox task(s) remain. Development is paused; resolve the blocker and start again."
-                Write-Host "Blocker report: $shortMessage"
-                break
-            }
-            Write-Warning "Agent reported NO_ACTIONABLE_TASKS, but $pendingAfter roadmap checkbox task(s) remain. Continuing; no-progress protection is still active."
+            $shortMessage = ($noTaskMessage -replace '\s+',' ').Trim()
+            if ($shortMessage.Length -gt 600) { $shortMessage = $shortMessage.Substring(0,600) + '…' }
+            Write-Warning "OpenCode could not select safe work while $pendingAfter roadmap checkbox task(s) remain. Development is paused to avoid a spend loop."
+            if ($shortMessage) { Write-Host "Blocker report: $shortMessage" }
+            break
         }
         if ($noProgress -ge [int]$cfg.execution.maxConsecutiveNoProgress) {
             Write-Warning "$noProgress consecutive iterations without completed TODO. Stopping to avoid a spend loop."
