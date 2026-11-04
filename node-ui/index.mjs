@@ -82,6 +82,13 @@ function usageSourceSummary(profile) {
   const unit = source.unit === 'usd' ? 'USD' : 'percent'; const value = source.remaining == null ? 'not set' : `${source.remaining} ${unit}`;
   return `Snapshot: ${value}; reserve ${source.reserve ?? 0} ${unit}; refresh within ${source.maxAgeMinutes ?? 120} min`;
 }
+function snapshotFreshness(profile) {
+  if (!profile || profile.policy === 'local' || profile.limitPolicy?.mode === 'unlimited') return { ok: true, detail: 'not required' };
+  const snapshot = profile.usageSource || {}; if (snapshot.remaining == null || !snapshot.observedAt) return { ok: false, detail: 'snapshot is not configured' };
+  const observed = Date.parse(snapshot.observedAt); const maxAge = Number(snapshot.maxAgeMinutes || 120); const age = (Date.now() - observed) / 60000;
+  if (!Number.isFinite(observed) || age < -2 || age > maxAge) return { ok: false, detail: `snapshot is stale (${Math.max(0, age).toFixed(1)} min; refresh interval ${maxAge} min)` };
+  return { ok: true, detail: `fresh (${age.toFixed(1)} min old)` };
+}
 function profileKindLabel(profile) {
   if (profile.policy === 'local') return chalk.green('[LOCAL]');
   if (profile.policy === 'oauth-managed') return chalk.magenta('[OAUTH]');
@@ -208,8 +215,15 @@ async function profilesMenu(settings) {
     if (!choice) return; if (choice === '__create') await createProfile(settings); else await profileScreen(settings, profiles.find(profile => profile.id === choice));
   }
 }
-async function runRunner(settings, mode) { const profile = activeProfile(settings); if (!profile) { console.log(chalk.yellow('Create and select a profile first.')); return pause(); } applyProfile(settings, profile); await save(settings); const project = selectedProject(settings); if (!project) { console.log(chalk.red('No project is configured.')); return pause(); } if (mode !== 'dry' && !(await yesNo(mode === 'continuous' ? 'Start continuous development?' : 'Run one development iteration?'))) return; const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-ShowProgress', mode === 'continuous' ? '-Continuous' : mode === 'dry' ? '-DryRun' : '-Once']; if (mode === 'continuous' && Number(profile.runControls?.maxIterations || 0) > 0) runnerArgs.push('-MaxIterations', String(profile.runControls.maxIterations)); try { await execute('pwsh.exe', runnerArgs, root, true); } catch (error) { console.log(chalk.yellow(`Runner ended: ${error.message}`)); } return pause(); }
-async function developmentMenu(settings) { const action = await pick('Development', [{ name: 'Run one iteration', value: 'once' }, { name: 'Run continuously', value: 'continuous' }, { name: 'Validate project (dry run)', value: 'dry' }]); if (action) await runRunner(settings, action); }
+async function runPreflight(settings) { header(settings); console.log(chalk.bold('PROJECT PREFLIGHT')); const project = selectedProject(settings); const profile = activeProfile(settings); const checks = [];
+  try { await fs.stat(project.path); checks.push(['Project directory', true, project.path]); } catch { checks.push(['Project directory', false, 'not found']); }
+  try { const branch = (await execute('git', ['-C', project.path, 'branch', '--show-current'])).trim(); checks.push(['Git branch', branch === project.branch, branch || 'detached HEAD']); } catch { checks.push(['Git branch', false, 'Git unavailable']); }
+  for (const [name, file] of [['Roadmap', project.roadmap], ['Progress file', project.progress]]) { try { await fs.access(path.join(project.path, file)); checks.push([name, true, file]); } catch { checks.push([name, false, `${file} missing`]); } }
+  try { checks.push(['OpenCode command', true, await resolveCommand(settings.openCodeCommand || 'opencode')]); } catch (error) { checks.push(['OpenCode command', false, error.message]); }
+  const fresh = snapshotFreshness(profile); checks.push(['Provider snapshot', fresh.ok, fresh.detail]);
+  for (const [name, ok, detail] of checks) console.log(`  ${ok ? chalk.green('✓') : chalk.red('×')} ${chalk.bold(name)}  ${detail}`); return pause(); }
+async function runRunner(settings, mode) { const profile = activeProfile(settings); if (!profile) { console.log(chalk.yellow('Create and select a profile first.')); return pause(); } const freshness = snapshotFreshness(profile); if (!freshness.ok) { header(settings); console.log(chalk.red('DEVELOPMENT NOT STARTED')); console.log(`  ${freshness.detail}`); console.log(chalk.gray('Refresh the provider snapshot in Profiles before running development.')); return pause(); } applyProfile(settings, profile); await save(settings); const project = selectedProject(settings); if (!project) { console.log(chalk.red('No project is configured.')); return pause(); } if (!(await yesNo(mode === 'continuous' ? 'Start continuous development?' : 'Run one development iteration?'))) return; const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-ShowProgress', mode === 'continuous' ? '-Continuous' : '-Once']; if (mode === 'continuous' && Number(profile.runControls?.maxIterations || 0) > 0) runnerArgs.push('-MaxIterations', String(profile.runControls.maxIterations)); try { await execute('pwsh.exe', runnerArgs, root, true); } catch (error) { console.log(chalk.yellow(`Runner ended: ${error.message}`)); } return pause(); }
+async function developmentMenu(settings) { const action = await pick('Development', [{ name: 'Run one iteration', value: 'once' }, { name: 'Run continuously', value: 'continuous' }, { name: 'Project preflight (no agent)', value: 'preflight' }]); if (action === 'preflight') await runPreflight(settings); else if (action) await runRunner(settings, action); }
 async function readProjectId(message, projects, currentId = '') {
   while (true) { const id = (await input({ message, default: currentId })).trim(); const error = validateProjectId(id, projects, currentId); if (!error) return id; console.log(chalk.yellow(error)); }
 }
