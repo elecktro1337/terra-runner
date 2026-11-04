@@ -215,8 +215,20 @@ async function reportsMenu(settings) {
   try { await execute('pwsh.exe', runnerArgs, root, true); } catch (error) { console.log(chalk.yellow(`Report command ended: ${error.message}`)); } return pause();
 }
 async function systemMenu(settings) {
-  const action = await pick('System', [{ name: 'Refresh OpenCode accounts and models', value: 'refresh' }, { name: 'Show configuration path', value: 'config' }]); if (!action) return;
+  const action = await pick('System', [{ name: 'Run diagnostics (read-only)', value: 'diagnostics' }, { name: 'Refresh OpenCode accounts and models', value: 'refresh' }, { name: 'Show configuration path', value: 'config' }]); if (!action) return;
   if (action === 'config') { console.log(`\n${configPath}`); return pause(); }
+  if (action === 'diagnostics') {
+    header(settings); console.log(chalk.bold('SYSTEM DIAGNOSTICS')); const project = selectedProject(settings); const checks = [];
+    checks.push({ label: 'Configuration', ok: true, detail: configPath });
+    try { await fs.stat(project?.path || ''); checks.push({ label: 'Project directory', ok: true, detail: project.path }); } catch { checks.push({ label: 'Project directory', ok: false, detail: project?.path || 'not configured' }); }
+    try { const branch = (await execute('git', ['-C', project.path, 'branch', '--show-current'])).trim(); checks.push({ label: 'Git branch', ok: branch === project.branch, detail: branch || 'detached HEAD' }); } catch { checks.push({ label: 'Git branch', ok: false, detail: 'Git is not available for this project' }); }
+    for (const [label, file] of [['Roadmap', project?.roadmap], ['Progress file', project?.progress]]) {
+      try { await fs.access(path.join(project.path, file)); checks.push({ label, ok: true, detail: file }); } catch { checks.push({ label, ok: false, detail: file || 'not configured' }); }
+    }
+    try { const executable = await resolveCommand(settings.openCodeCommand || 'opencode'); checks.push({ label: 'OpenCode command', ok: true, detail: executable }); } catch (error) { checks.push({ label: 'OpenCode command', ok: false, detail: error.message }); }
+    for (const check of checks) console.log(`  ${check.ok ? chalk.green('✓') : chalk.red('×')} ${chalk.bold(check.label)}  ${check.detail}`);
+    return pause();
+  }
   try { await refreshOpenCode(settings); await save(settings); } catch (error) { console.log(chalk.red(error.message)); } return pause();
 }
 async function main() { const settings = await load(); while (true) { header(settings); const action = await pick('Main menu', [{ name: 'Development', value: 'development' }, { name: 'Profiles', value: 'profiles' }, { name: 'Projects', value: 'projects' }, { name: 'Reports', value: 'reports' }, { name: 'System', value: 'system' }, { name: 'Save configuration and exit', value: 'exit' }]); if (!action || action === 'exit') { await save(settings); return; } if (action === 'development') await developmentMenu(settings); if (action === 'profiles') await profilesMenu(settings); if (action === 'projects') await projectsMenu(settings); if (action === 'reports') await reportsMenu(settings); if (action === 'system') await systemMenu(settings); } }
