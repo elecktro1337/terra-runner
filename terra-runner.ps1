@@ -32,6 +32,8 @@ param(
     [string]$SetBalanceUsd = '',
     [switch]$ReconcileBalance,
     [switch]$ShowProgress,
+    [switch]$UiEvents,
+    [switch]$UnlimitedIterations,
     [ValidateRange(0, 1000)][int]$MaxIterations = 0
 )
 Set-StrictMode -Version Latest
@@ -69,6 +71,12 @@ function Read-Member($Value, [string]$Name) {
     $p = $Value.PSObject.Properties[$Name]
     if ($null -ne $p) { return $p.Value }
     return $null
+}
+function Write-UiEvent([string]$Type, [hashtable]$Data = @{}) {
+    if (-not $UiEvents) { return }
+    $payload = [ordered]@{ type=$Type; at=(Get-Date).ToUniversalTime().ToString('o') }
+    foreach ($key in $Data.Keys) { $payload[$key] = $Data[$key] }
+    [Console]::Out.WriteLine('__TERRA_UI__' + ($payload | ConvertTo-Json -Compress -Depth 8))
 }
 function Read-Cost($Stats) {
     $direct = Read-Member $Stats 'totalCost'
@@ -303,6 +311,17 @@ function Count-Pending([string]$RoadmapFile, [string]$TaskIdPattern = '') {
     }
     return $count
 }
+function Get-NextPendingRoadmapTask([string]$RoadmapFile, [string]$TaskIdPattern = '') {
+    $idPattern = if ([string]::IsNullOrWhiteSpace($TaskIdPattern)) { '[A-Za-z][A-Za-z0-9_]{1,31}-\d{2,}' } else { $TaskIdPattern }
+    foreach ($line in [System.IO.File]::ReadLines($RoadmapFile)) {
+        if (-not (Test-RoadmapTask $line $false $TaskIdPattern)) { continue }
+        $id = ''; try { $match = [regex]::Match($line,$idPattern); if ($match.Success) { $id = $match.Value } } catch { }
+        $title = ($line -replace '^\s*-\s*\[ \]\s*','' -replace '\s+',' ').Trim()
+        if ($title.Length -gt 140) { $title = $title.Substring(0,140) + '...' }
+        return [pscustomobject]@{ Id=$id; Title=$title }
+    }
+    return [pscustomobject]@{ Id=''; Title='' }
+}
 function Rotate-ProjectLogs([string]$LogsDirectory, $Settings) {
     if (-not (Test-Path -LiteralPath $LogsDirectory)) { return }
     $files = @(Get-ChildItem -LiteralPath $LogsDirectory -Recurse -File | Where-Object {
@@ -383,7 +402,7 @@ function Get-OpenCodeUsageKind($Config) {
 function New-ZeroUsage([string]$Scope) {
     return [pscustomobject]@{ Scope=$Scope; Day=(Get-Date).ToString('yyyy-MM-dd'); CostUSD=0.0; Tokens=0.0; CheckedAt=(Get-Date).ToString('o') }
 }
-function Get-QuotaSnapshot($Account) {
+function Get-QuotaSnapshot($Account, [string]$Executable = '', [string]$Directory = '', $Budget = $null) {
     $quota = Read-Member $Account 'quota'
     if ($null -eq $quota -or -not [bool](Read-Member $quota 'configured')) {
         throw 'Provider snapshot is not configured. Set a current balance or quota snapshot in Profiles before development.'
@@ -395,7 +414,15 @@ function Get-QuotaSnapshot($Account) {
     $maxAge = Require-PositiveNumber (Read-Member $quota 'maxAgeMinutes') 'quota.maxAgeMinutes'
     $age = ([DateTimeOffset]::UtcNow - $observed.ToUniversalTime()).TotalMinutes
     if ($age -lt -2 -or $age -gt $maxAge) { throw "Provider snapshot is stale ($([Math]::Round($age,1)) minutes). Refresh it in Profiles before development." }
-    return [pscustomobject]@{ Kind='quota'; Mode='quota'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$remaining; QuotaReserve=$reserve; QuotaUnit=[string](Read-Member $quota 'unit'); QuotaObservedAt=$observedAt }
+    $allTime = New-ZeroUsage 'all'; $reportedRemaining = $remaining; $estimatedSpend = $null
+    if ([bool](Read-Member $quota 'trackOpenCodeCosts')) {
+        $baseline = Require-NonNegativeNumber (Read-Member $quota 'costBaselineAllTimeUsd') 'quota.costBaselineAllTimeUsd'
+        if ([string]::IsNullOrWhiteSpace($Executable) -or [string]::IsNullOrWhiteSpace($Directory) -or $null -eq $Budget) { throw 'OpenCode cost tracking requires runner context.' }
+        $allTime = Get-Usage $Executable $Directory $Budget 'all'
+        $estimatedSpend = [Math]::Max(0.0, [double]$allTime.CostUSD - $baseline)
+        $remaining = [Math]::Max(0.0, $remaining - $estimatedSpend)
+    }
+    return [pscustomobject]@{ Kind='quota'; Mode='quota'; Daily=(New-ZeroUsage 'day'); AllTime=$allTime; BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$remaining; QuotaReportedRemaining=$reportedRemaining; QuotaEstimatedSpendUSD=$estimatedSpend; QuotaReserve=$reserve; QuotaUnit=[string](Read-Member $quota 'unit'); QuotaObservedAt=$observedAt }
 }
 function New-LocalSnapshot {
     return [pscustomobject]@{ Kind='local'; Mode='local'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
@@ -458,7 +485,7 @@ function Set-BalanceSnapshot([string]$File, [double]$Amount, $Usage, [bool]$Over
 function Get-BudgetSnapshot([string]$Executable, [string]$Directory, $Budget, [string]$Root) {
     $account = Get-ActiveOpenCodeAccount $cfg
     $kind = Get-OpenCodeUsageKind $cfg
-    if ($kind -eq 'quota') { return (Get-QuotaSnapshot $account) }
+    if ($kind -eq 'quota') { return (Get-QuotaSnapshot $account $Executable $Directory $Budget) }
     if ($kind -eq 'oauth') { return (New-OAuthSnapshot) }
     if ($kind -eq 'unlimited') { return (New-UnlimitedSnapshot) }
     if ($kind -eq 'local') { return (New-LocalSnapshot) }
@@ -531,7 +558,11 @@ function Show-Usage($Snapshot, $Budget) {
     if ($Snapshot.Kind -eq 'oauth') { Write-Host 'OpenCode OAuth: usage and reset windows are managed by the provider; no local quota is estimated.'; return }
     if ($Snapshot.Kind -eq 'unlimited') { Write-Host 'WARNING: provider limits are disabled for this profile.' -ForegroundColor Yellow; return }
     if ($Snapshot.Kind -eq 'quota') {
-        Write-Host ('Provider snapshot: {0:N2} {1} remaining; launch threshold {2:N2} {1}' -f [double]$Snapshot.QuotaRemaining,$Snapshot.QuotaUnit,[double]$Snapshot.QuotaReserve)
+        if ($null -ne $Snapshot.QuotaEstimatedSpendUSD) {
+            Write-Host ('Provider snapshot: {0:N2} {1}; local OpenCode spend since snapshot ${2:N4}; estimated remaining {3:N2} {1}; launch threshold {4:N2} {1}' -f [double]$Snapshot.QuotaReportedRemaining,$Snapshot.QuotaUnit,[double]$Snapshot.QuotaEstimatedSpendUSD,[double]$Snapshot.QuotaRemaining,[double]$Snapshot.QuotaReserve)
+        } else {
+            Write-Host ('Provider snapshot: {0:N2} {1} remaining; launch threshold {2:N2} {1}' -f [double]$Snapshot.QuotaRemaining,$Snapshot.QuotaUnit,[double]$Snapshot.QuotaReserve)
+        }
         Show-ProgressMeters $Snapshot $Budget
         return
     }
@@ -641,11 +672,14 @@ function Get-ChangedFiles([string]$Directory, [string]$From, [string]$To) {
     return [pscustomobject]@{ Code=$code; Docs=$docs; Tests=$tests; Other=$other; Paths=$paths }
 }
 function Get-CompletionIds([string]$Directory, [string]$RoadmapFile, [string]$BeforeHead, [string]$TaskIdPattern = '') {
-    if ([string]::IsNullOrWhiteSpace($TaskIdPattern)) { return @() }
     $relative = [IO.Path]::GetRelativePath($Directory, $RoadmapFile).Replace('\','/')
     $old = Invoke-Cli 'git' @('-C',$Directory,'show',("${BeforeHead}:$relative")) $Directory
     $new = Get-Content -LiteralPath $RoadmapFile -Raw -Encoding UTF8
-    try { $regex = [regex]::new('(?m)^\s*-\s*\[[xX]\].*?(' + $TaskIdPattern + ')') }
+    # A schema v3 project may intentionally omit taskIdPattern. Keep its task IDs
+    # visible by recognising the conventional PREFIX-123 form instead of silently
+    # reporting a completed roadmap item without an ID.
+    $effectivePattern = if ([string]::IsNullOrWhiteSpace($TaskIdPattern)) { '[A-Za-z][A-Za-z0-9_]{1,31}-\d{2,}' } else { $TaskIdPattern }
+    try { $regex = [regex]::new('(?m)^\s*-\s*\[[xX]\].*?(' + $effectivePattern + ')') }
     catch { throw "Invalid project taskIdPattern: $TaskIdPattern" }
     $already = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($match in $regex.Matches($old)) { [void]$already.Add($match.Groups[1].Value) }
@@ -809,7 +843,7 @@ if ($maxTransientRetries -lt 1) { throw 'maxTransientRetries must be >= 1.' }
 if ($transientRetryDelaySeconds -lt 1) { throw 'transientRetryDelaySeconds must be >= 1.' }
 if ($maxPushRetries -lt 1) { throw 'maxPushRetries must be >= 1.' }
 if ($pushRetryDelaySeconds -lt 1) { throw 'pushRetryDelaySeconds must be >= 1.' }
-$maxCycles = if ($MaxIterations -gt 0) { $MaxIterations } else { [int]$cfg.execution.maxIterationsPerRun }
+$maxCycles = if ($UnlimitedIterations) { [int]::MaxValue } elseif ($MaxIterations -gt 0) { $MaxIterations } else { [int]$cfg.execution.maxIterationsPerRun }
 if ($Once) { $maxCycles = 1 }
 if ($maxCycles -lt 1) { throw 'No iterations configured.' }
 
@@ -882,7 +916,7 @@ try {
     foreach ($flag in @('--agent','--format','--auto')) {
         if ($help -notmatch [regex]::Escape($flag)) { throw "Installed OpenCode does not support $flag; update OpenCode first." }
     }
-    if ($usageKind -eq 'balance') {
+    if ($usageKind -eq 'balance' -or ($usageKind -eq 'quota' -and [bool](Read-Member (Read-Member $activeOpenCodeAccount 'quota') 'trackOpenCodeCosts'))) {
         $statsHelp = Invoke-Cli $openCode @('stats','--help') $repo
         if ($statsHelp -notmatch '\-\-json') { throw 'Installed OpenCode lacks stats --json; update to compatible OpenCode v2.' }
     }
@@ -920,6 +954,7 @@ try {
         if ($budgetBlock) { Write-Host "Cannot start next iteration: $budgetBlock"; break }
         $pending = Count-Pending $roadmap $taskIdPattern
         if ($pending -eq 0) { Write-Host 'No pending roadmap checkbox tasks found. Stopping.'; break }
+        $plannedTask = Get-NextPendingRoadmapTask $roadmap $taskIdPattern
         $headBefore = Get-Head $repo
         $doneBefore = Count-Completed $roadmap $taskIdPattern
         $runId = (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-' + [guid]::NewGuid().ToString('N').Substring(0,6)
@@ -932,6 +967,7 @@ try {
         [System.IO.File]::WriteAllText($eventsPath,'')
         [System.IO.File]::WriteAllText($stderrPath,'')
         Write-Host "Iteration $i/$maxCycles [$runId], pending tasks: $pending"
+        Write-UiEvent 'iteration-started' @{ iteration=$i; total=$(if ($UnlimitedIterations) { $null } else { $maxCycles }); runId=$runId; pending=$pending; taskId=$plannedTask.Id; taskTitle=$plannedTask.Title; eventsFile=$eventsPath }
         $begin = Get-Date
         Show-IterationProgress $i $maxCycles ([timespan]::Zero) ([double]$cfg.execution.maxIterationMinutes) $pending
         $termination = ''
@@ -958,6 +994,7 @@ try {
                 Show-IterationProgress $i $maxCycles $elapsed ([double]$cfg.execution.maxIterationMinutes) $pending
                 if ($elapsed.TotalMinutes -gt [double]$cfg.execution.maxIterationMinutes) { $termination = 'iteration-timeout'; break }
                 $size = (Get-Item -LiteralPath $eventsPath).Length
+                Write-UiEvent 'iteration-heartbeat' @{ iteration=$i; elapsedSeconds=[Math]::Round($elapsed.TotalSeconds,0); eventBytes=$size }
                 if ($size -gt ([double]$cfg.execution.maxRawLogMiB * 1MB)) { $termination = 'raw-log-size-limit'; break }
                 try {
                     $liveUsage = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot
@@ -1069,6 +1106,7 @@ try {
             project = $Project; id = $runId; started = $begin.ToString('o'); ended = $ended.ToString('o')
             elapsedSeconds = [Math]::Round(($ended-$begin).TotalSeconds,1)
             branch = $branch; exitCode = $exitCode; stoppedReason = $termination
+            plannedTaskId = $plannedTask.Id; plannedTaskTitle = $plannedTask.Title
             headBefore = $headBefore; headAfter = $headAfter
             pushVerified = $pushVerified; eventErrors = $eventErrors
             toolErrors = $toolErrors; toolErrorExamples = $toolErrorExamples
@@ -1096,6 +1134,8 @@ try {
             openCodeAccountId = [string](Read-Member $activeOpenCodeAccount 'id')
             openCodeAccountLabel = [string](Read-Member $activeOpenCodeAccount 'label')
             quotaRemaining = $(if ($null -ne $usageAfter) { $usageAfter.QuotaRemaining } else { $usageBefore.QuotaRemaining })
+            quotaReportedRemaining = $(if ($null -ne $usageAfter) { $usageAfter.QuotaReportedRemaining } else { $usageBefore.QuotaReportedRemaining })
+            quotaEstimatedSpendUSD = $(if ($null -ne $usageAfter) { $usageAfter.QuotaEstimatedSpendUSD } else { $usageBefore.QuotaEstimatedSpendUSD })
             quotaReserve = $(if ($null -ne $usageAfter) { $usageAfter.QuotaReserve } else { $usageBefore.QuotaReserve })
             quotaUnit = $(if ($null -ne $usageAfter) { $usageAfter.QuotaUnit } else { $usageBefore.QuotaUnit })
             balanceBeforeUSD = $usageBefore.BalanceUSD
@@ -1116,6 +1156,7 @@ try {
             errorFile = [IO.Path]::GetFileName($stderrPath)
         }
         Save-Json $summaryPath $summary
+        Write-UiEvent 'iteration-finished' @{ iteration=$i; runId=$runId; summaryFile=$summaryPath; completedTaskIds=@($completedIds); completedCount=($doneAfter-$doneBefore); pending=$summary.pendingAfter; toolErrors=$toolErrors; exitCode=$exitCode; stoppedReason=$termination }
         $reportPath = Write-EnglishDailyReport $projectData $begin.ToString('yyyy-MM-dd')
         Write-Host "Iteration finished: exit=$exitCode new completed tasks=$($doneAfter-$doneBefore) changedHEAD=$($headAfter -ne $headBefore) code=$($changedFiles.Code) tests=$($changedFiles.Tests) docs=$($changedFiles.Docs) toolErrors=$toolErrors"
         if ($null -ne $usageAfter) { Show-Usage $usageAfter $cfg.budget }

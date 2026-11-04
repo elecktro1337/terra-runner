@@ -47,6 +47,14 @@ test('applies a configured percentage snapshot to the active account', () => {
   assert.equal(settings.openCode.accounts[0].quota.remaining, 42);
   assert.equal(settings.openCode.accounts[0].quota.configured, true);
 });
+test('preserves the optional local OpenCode cost-estimate baseline', () => {
+  const settings = { openCode: { accounts: [{ id: 'openai:c', provider: 'openai', credentialId: 'c' }], profiles: [] } };
+  const profile = profileFrom('openai/gpt', { provider: 'openai', credentialId: 'c', authMethod: 'key' });
+  profile.usageSource = { kind: 'snapshot', unit: 'usd', remaining: 28.41, reserve: .5, maxAgeMinutes: 60, observedAt: '2026-11-05T12:00:00Z', costTracking: { enabled: true, baselineAllTimeCostUsd: 12.3456, baselineObservedAt: '2026-11-05T12:00:00Z' } };
+  settings.openCode.profiles.push(profile); applyProfile(settings, profile);
+  assert.equal(settings.openCode.accounts[0].quota.trackOpenCodeCosts, true);
+  assert.equal(settings.openCode.accounts[0].quota.costBaselineAllTimeUsd, 12.3456);
+});
 test('keeps an open profile reference valid across dashboard normalization', () => {
   const profile = profileFrom('openai/gpt', { authMethod: 'key' });
   const settings = { openCode: { activeProfileId: profile.id, profiles: [profile], accounts: [] } };

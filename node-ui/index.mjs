@@ -10,7 +10,7 @@ import figlet from 'figlet';
 import ora from 'ora';
 import { activeProfile, applyProfile, isLocalModel, migrateProfiles, profileFrom } from './lib/profiles.mjs';
 import { activeProject, normalizeProjects, validateProjectId } from './lib/projects.mjs';
-import { dailyReports, latestIterationSummary, projectDataRoot } from './lib/reports.mjs';
+import { dailyReports, latestIterationSummary, iterationSummariesSince, projectDataRoot } from './lib/reports.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -77,18 +77,82 @@ function showRunSummary(summary, settings, project) {
   console.log(`  ${chalk.gray('Logs')}        ${path.join(projectDataRoot(settings, project, configPath), 'logs')}`);
   console.log(rule);
 }
+function showRunOverview(runs, settings, project) {
+  const summary = runs.at(-1) || {};
+  const completed = [...new Set(runs.flatMap(run => Array.isArray(run?.completedTaskIds) ? run.completedTaskIds : []))];
+  const planned = [...new Map(runs.filter(run => run?.plannedTaskId).map(run => [run.plannedTaskId, run.plannedTaskTitle || ''])).entries()];
+  const taskCount = runs.reduce((total, run) => total + Math.max(0, Number(run?.doneAfter || 0) - Number(run?.doneBefore || 0)), 0);
+  const elapsed = runs.reduce((total, run) => total + Number(run?.elapsedSeconds || 0), 0);
+  const code = runs.reduce((total, run) => total + Number(run?.codeFilesChanged || 0), 0);
+  const tests = runs.reduce((total, run) => total + Number(run?.testFilesChanged || 0), 0);
+  const docs = runs.reduce((total, run) => total + Number(run?.documentationFilesChanged || 0), 0);
+  const checks = runs.reduce((total, run) => total + Number(run?.verificationCommandsObserved || 0), 0);
+  const checkErrors = runs.reduce((total, run) => total + Number(run?.verificationCommandErrors || 0), 0);
+  const toolErrors = runs.reduce((total, run) => total + Number(run?.toolErrors || 0), 0);
+  const success = runs.every(run => Number(run?.exitCode ?? -1) === 0 && !run?.stoppedReason);
+  console.log(`\n${success ? chalk.green.bold('DEVELOPMENT RUN COMPLETE') : chalk.yellow.bold('DEVELOPMENT RUN FINISHED WITH WARNINGS')}`);
+  console.log(rule);
+  console.log(`  ${chalk.gray('Iterations')} ${runs.length} completed`);
+  console.log(`  ${chalk.gray('Duration')}    ${durationText(elapsed * 1000)}`);
+  console.log(`  ${chalk.gray('Roadmap')}     ${taskCount ? chalk.green(`+${taskCount} completed`) : 'no tasks completed'} | ${summary.pendingAfter ?? '?'} pending`);
+  console.log(`  ${chalk.gray('Tasks')}       ${completed.length ? chalk.cyan(completed.join(', ')) : 'no task ID recorded'}`);
+  if (planned.length) console.log(`  ${chalk.gray('Work plan')}   ${planned.map(([id, title]) => title ? `${id} - ${title}` : id).join(' | ')}`);
+  console.log(`  ${chalk.gray('Changes')}     ${code} code | ${tests} test files | ${docs} docs`);
+  console.log(`  ${chalk.gray('Verification')} ${checks} command(s) observed${checkErrors ? chalk.yellow(` | ${checkErrors} reported error(s)`) : ''}`);
+  if (summary.quotaEstimatedSpendUSD != null) console.log(`  ${chalk.gray('Estimate')}    provider snapshot ${summary.quotaReportedRemaining} ${summary.quotaUnit} | local OpenCode spend $${Number(summary.quotaEstimatedSpendUSD).toFixed(4)} | estimated ${summary.quotaRemaining} ${summary.quotaUnit}`);
+  if (toolErrors) console.log(`  ${chalk.yellow('Attention')}   ${toolErrors} tool error(s); inspect the iteration log before relying on the result.`);
+  if (summary.stoppedReason) console.log(`  ${chalk.yellow('Stop reason')} ${summary.stoppedReason}`);
+  console.log(`  ${chalk.gray('Logs')}        ${path.join(projectDataRoot(settings, project, configPath), 'logs')}`);
+  console.log(rule);
+}
+function activityFromEvent(event) {
+  if (event?.type !== 'tool_use') return '';
+  const part = event.part || {}; const state = part.state || {}; const input = state.input || {};
+  const tool = String(part.tool || state.tool || 'tool').toLowerCase(); const command = String(input.command || '');
+  if (/(phpunit|phpstan|phpcs|npm\s+(test|run)|pytest|composer\s+validate|php\s+-l|git\s+diff\s+--check)/i.test(command)) return 'Running verification';
+  if (/^git\s/i.test(command)) return 'Checking Git state';
+  if (/(write|edit|patch|apply)/.test(tool)) return 'Updating project files';
+  if (/(read|list|glob|search|grep)/.test(tool)) return 'Inspecting project files';
+  return 'Using OpenCode tools';
+}
 async function runWithTui(runnerArgs, settings, project, mode) {
   const executable = await resolveCommand('pwsh.exe');
   const previousSummaryId = (await latestIterationSummary(settings, project, configPath))?.id || '';
   const started = Date.now(); let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration';
+  let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = '';
   const spinner = ora({ text: `${stage} · 0m 00s`, color: 'cyan' }).start();
   const update = setInterval(() => { spinner.text = `${stage} · ${durationText(Date.now() - started)}`; }, 1000);
+  const liveUpdate = setInterval(async () => {
+    if (!eventFile) return;
+    try {
+      const lines = (await fs.readFile(eventFile, 'utf8')).split(/\r?\n/).filter(Boolean);
+      for (const line of lines.slice(eventLines)) {
+        try { const next = activityFromEvent(JSON.parse(line)); if (next) { toolCount++; if (next === 'Running verification') checkCount++; activity = next; } } catch { }
+      }
+      eventLines = lines.length;
+      const counters = toolCount ? ` | tools ${toolCount}${checkCount ? ` | checks ${checkCount}` : ''}` : '';
+      if (activity) stage = `${iterationLabel ? `${iterationLabel} | ` : ''}${activity}${counters}`;
+    } catch { }
+  }, 900);
   try {
     const result = await new Promise((resolve, reject) => {
       const child = spawn(executable, runnerArgs, { cwd: root, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
       let buffer = '';
       const handleLine = line => {
+        if (line.startsWith('__TERRA_UI__')) {
+          try {
+            const event = JSON.parse(line.slice('__TERRA_UI__'.length));
+            if (event.type === 'iteration-started') {
+              eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = '';
+              iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`;
+              stage = `${iterationLabel} | ${event.taskId || 'next roadmap task'} | ${event.pending} tasks pending`;
+            }
+            if (event.type === 'iteration-finished') stage = 'Writing verified iteration summary';
+          } catch { }
+          return;
+        }
         const match = line.match(/^Iteration (\d+)\/(\d+).*pending tasks:\s*(\d+)/i);
+        if (match && runnerArgs.includes('-UnlimitedIterations')) return;
         if (match) stage = `Iteration ${match[1]} of ${match[2]} · ${match[3]} tasks pending`;
         if (/^Iteration finished:/i.test(line)) stage = 'Verifying iteration result';
         if (/^Daily project report:/i.test(line)) stage = 'Writing project report';
@@ -97,15 +161,15 @@ async function runWithTui(runnerArgs, settings, project, mode) {
       child.stderr.on('data', chunk => { stderr += chunk.toString(); });
       child.once('error', reject); child.once('close', code => resolve({ code, stdout, stderr }));
     });
-    clearInterval(update);
+    clearInterval(update); clearInterval(liveUpdate);
     if (result.code === 0) spinner.succeed(`Development run finished · ${durationText(Date.now() - started)}`);
     else spinner.fail(`Development runner exited with code ${result.code}`);
-    const summary = await latestIterationSummary(settings, project, configPath);
-    if (summary && summary.id !== previousSummaryId) showRunSummary(summary, settings, project);
+    const summaries = (await iterationSummariesSince(settings, project, configPath, started)).filter(summary => summary.id !== previousSummaryId);
+    if (summaries.length) showRunOverview(summaries, settings, project);
     else if (result.code !== 0) console.log(chalk.red((result.stderr || result.stdout || 'No iteration summary was written.').trim()));
     return result.code === 0;
   } catch (error) {
-    clearInterval(update); spinner.fail('Development runner could not start.'); console.log(chalk.red(error.message)); return false;
+    clearInterval(update); clearInterval(liveUpdate); spinner.fail('Development runner could not start.'); console.log(chalk.red(error.message)); return false;
   }
 }
 async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [], activeAccountId: '', reasoning: {} }; settings.openCode.accounts ||= []; migrateProfiles(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the legacy setup wizard once or pass --config <file>. ${error.message}`); } }
@@ -186,11 +250,38 @@ async function configureSnapshot(settings, profile) {
   if (unit === 'percent' && remaining > 100) { console.log(chalk.yellow('Percent cannot exceed 100.')); return pause(); }
   const maxAgeMinutes = numberValue(await input({ message: 'Snapshot refresh interval (minutes)', default: String(current.maxAgeMinutes ?? 120) }), Number(current.maxAgeMinutes ?? 120));
   if (maxAgeMinutes < 1) { console.log(chalk.yellow('Refresh interval must be at least one minute.')); return pause(); }
-  profile.usageSource = { kind: 'snapshot', unit, remaining, reserve: current.reserve ?? 0, maxAgeMinutes, observedAt: new Date().toISOString() };
+  profile.usageSource = { kind: 'snapshot', unit, remaining, reserve: current.reserve ?? 0, maxAgeMinutes, observedAt: new Date().toISOString(), costTracking: { enabled: false, baselineAllTimeCostUsd: null, baselineObservedAt: '' } };
   if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings);
   const persisted = JSON.parse(await fs.readFile(configPath, 'utf8')); const saved = persisted.openCode?.profiles?.find(item => item.id === profile.id)?.usageSource;
   if (!saved || Number(saved.remaining) !== remaining || saved.unit !== unit) throw new Error('Snapshot save verification failed. Reopen the profile before starting development.');
-  console.log(chalk.green('Provider snapshot saved.')); return pause();
+  console.log(chalk.green('Provider snapshot saved.')); if (current.costTracking?.enabled) console.log(chalk.gray('The local OpenCode cost estimate was reset; enable it again to establish a new baseline.')); return pause();
+}
+function openCodeCostFromStats(value) {
+  if (!value || typeof value !== 'object') return null;
+  for (const key of ['totalCost', 'total_cost', 'totalUSD', 'cost']) {
+    const candidate = Number(value[key]); if (Number.isFinite(candidate) && candidate >= 0) return candidate;
+  }
+  for (const key of ['totals', 'usage', 'stats']) { const nested = openCodeCostFromStats(value[key]); if (nested != null) return nested; }
+  return null;
+}
+async function configureOpenCodeCostEstimate(settings, profile) {
+  if (profile.policy === 'local') { console.log(chalk.green('Local models have no provider balance estimate.')); return pause(); }
+  if (profile.usageSource?.unit !== 'usd') { console.log(chalk.yellow('This option needs a USD provider snapshot. Set the snapshot unit to USD first.')); return pause(); }
+  console.log(chalk.bold('LOCAL OPENCODE COST ESTIMATE'));
+  console.log(chalk.gray('This subtracts locally recorded OpenCode spend from your last provider-reported USD snapshot.'));
+  console.log(chalk.gray('It is an estimate, not a provider balance, and it covers all OpenCode usage recorded by this installation.'));
+  if (!(await yesNo('Enable this estimate for the active snapshot?'))) return;
+  const project = selectedProject(settings);
+  const spinner = ora('Reading local OpenCode lifetime usage...').start();
+  try {
+    const raw = await execute(settings.openCodeCommand || 'opencode', ['stats', '--all', '--json'], project?.path || root);
+    const cost = openCodeCostFromStats(JSON.parse(raw));
+    if (cost == null) throw new Error('OpenCode did not return a usable lifetime cost.');
+    profile.usageSource.costTracking = { enabled: true, baselineAllTimeCostUsd: cost, baselineObservedAt: new Date().toISOString() };
+    if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile);
+    await save(settings); spinner.succeed(`Cost estimate enabled from local OpenCode baseline $${cost.toFixed(4)}.`);
+  } catch (error) { spinner.fail('Cost estimate was not enabled.'); console.log(chalk.red(error.message)); }
+  return pause();
 }
 async function refreshSnapshotBeforeRun(settings, profile, reason) {
   header(settings);
@@ -211,7 +302,7 @@ async function refreshSnapshotBeforeRun(settings, profile, reason) {
     await pause();
     return false;
   }
-  profile.usageSource = { kind: 'snapshot', unit, remaining, reserve: current.reserve ?? 0, maxAgeMinutes: Number(current.maxAgeMinutes ?? 120), observedAt: new Date().toISOString() };
+  profile.usageSource = { kind: 'snapshot', unit, remaining, reserve: current.reserve ?? 0, maxAgeMinutes: Number(current.maxAgeMinutes ?? 120), observedAt: new Date().toISOString(), costTracking: { enabled: false, baselineAllTimeCostUsd: null, baselineObservedAt: '' } };
   try {
     if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile);
     await save(settings);
@@ -288,10 +379,11 @@ async function profileScreen(settings, profile) {
     const canDelete = settings.openCode.profiles.length > 1;
     const actions = [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }];
     if (profile.policy !== 'local') actions.push({ name: 'Configure provider snapshot', value: 'snapshot' }, { name: 'Configure limits', value: 'policy' });
+    if (profile.policy === 'api' && profile.usageSource?.unit === 'usd') actions.push({ name: 'Configure local OpenCode cost estimate', value: 'cost-estimate' });
     actions.push({ name: 'Configure local run guard', value: 'guard' });
     if (canDelete) actions.push({ name: chalk.red('Remove this profile'), value: 'remove' });
     const action = await pick('Profile actions', actions);
-    if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'snapshot') await configureSnapshot(settings, profile); if (action === 'policy') await configureLimitPolicy(settings, profile); if (action === 'guard') await configureRunGuard(settings, profile);
+    if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'snapshot') await configureSnapshot(settings, profile); if (action === 'policy') await configureLimitPolicy(settings, profile); if (action === 'cost-estimate') await configureOpenCodeCostEstimate(settings, profile); if (action === 'guard') await configureRunGuard(settings, profile);
     if (action === 'remove' && await yesNo(`Remove profile '${profile.model}'? This does not disconnect or delete the OpenCode account.`)) {
       settings.openCode.profiles = settings.openCode.profiles.filter(item => item.id !== profile.id);
       if (settings.openCode.activeProfileId === profile.id) applyProfile(settings, settings.openCode.profiles[0]);
@@ -331,8 +423,11 @@ async function runRunner(settings, mode) {
   const project = selectedProject(settings);
   if (!project) { console.log(chalk.red('No project is configured.')); return pause(); }
   if (!(await yesNo(mode === 'continuous' ? 'Start continuous development?' : 'Run one development iteration?'))) return;
-  const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-ShowProgress', mode === 'continuous' ? '-Continuous' : '-Once'];
-  if (mode === 'continuous' && Number(profile.runControls?.maxIterations || 0) > 0) runnerArgs.push('-MaxIterations', String(profile.runControls.maxIterations));
+  const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-UiEvents', mode === 'continuous' ? '-Continuous' : '-Once'];
+  if (mode === 'continuous') {
+    const limit = Number(profile.runControls?.maxIterations || 0);
+    if (limit > 0) runnerArgs.push('-MaxIterations', String(limit)); else runnerArgs.push('-UnlimitedIterations');
+  }
   await runWithTui(runnerArgs, settings, project, mode);
   return pause();
 }

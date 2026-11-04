@@ -31,7 +31,7 @@ export function profileFrom(model, account = null, reasoningVariant = '', showTh
     credentialId: policy === 'local' ? '' : String(account?.credentialId || ''),
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(account?.label || ''),
     policy, reasoningVariant: variant, limits: null, limitPolicy: { mode: 'critical', amount: null, reserve: null }, runControls: { maxIterations: 0 },
-    usageSource: policy === 'local' ? { kind: 'none' } : { kind: 'snapshot', unit: 'percent', remaining: null, reserve: 5, maxAgeMinutes: 120, observedAt: '' },
+    usageSource: policy === 'local' ? { kind: 'none' } : { kind: 'snapshot', unit: 'percent', remaining: null, reserve: 5, maxAgeMinutes: 120, observedAt: '', costTracking: { enabled: false, baselineAllTimeCostUsd: null, baselineObservedAt: '' } },
     showThinking: Boolean(showThinking)
   };
 }
@@ -51,7 +51,8 @@ export function normalizeProfile(profile) {
     runControls: { maxIterations: Number(profile?.runControls?.maxIterations || 0) || 0 },
     usageSource: policy === 'local' ? { kind: 'none' } : {
       kind: 'snapshot', unit: String(profile?.usageSource?.unit || 'percent'), remaining: profile?.usageSource?.remaining ?? null,
-      reserve: Number(profile?.usageSource?.reserve ?? 5), maxAgeMinutes: Number(profile?.usageSource?.maxAgeMinutes ?? 120), observedAt: String(profile?.usageSource?.observedAt || '')
+      reserve: Number(profile?.usageSource?.reserve ?? 5), maxAgeMinutes: Number(profile?.usageSource?.maxAgeMinutes ?? 120), observedAt: String(profile?.usageSource?.observedAt || ''),
+      costTracking: { enabled: Boolean(profile?.usageSource?.costTracking?.enabled), baselineAllTimeCostUsd: profile?.usageSource?.costTracking?.baselineAllTimeCostUsd ?? null, baselineObservedAt: String(profile?.usageSource?.costTracking?.baselineObservedAt || '') }
     },
     showThinking: Boolean(profile?.showThinking)
   };
@@ -128,7 +129,7 @@ export function applyProfile(settings, profile) {
     const snapshot = profile.usageSource || {};
     const refresh = policy.mode === 'refresh-hourly' ? 60 : policy.mode === 'refresh-daily' ? 1440 : snapshot.maxAgeMinutes ?? 120;
     const reserve = policy.mode === 'critical' ? Number(policy.amount ?? 0) + Number(policy.reserve ?? snapshot.reserve ?? 0) : 0;
-    account.quota = { configured: snapshot.kind === 'snapshot' && snapshot.remaining !== null, unit: snapshot.unit || 'percent', remaining: snapshot.remaining, reserve, maxAgeMinutes: refresh, observedAt: snapshot.observedAt || '' };
+    account.quota = { configured: snapshot.kind === 'snapshot' && snapshot.remaining !== null, unit: snapshot.unit || 'percent', remaining: snapshot.remaining, reserve, maxAgeMinutes: refresh, observedAt: snapshot.observedAt || '', trackOpenCodeCosts: Boolean(snapshot.costTracking?.enabled), costBaselineAllTimeUsd: snapshot.costTracking?.baselineAllTimeCostUsd ?? null, costBaselineObservedAt: snapshot.costTracking?.baselineObservedAt || '' };
     openCode.activeAccountId = account.id;
   }
 }

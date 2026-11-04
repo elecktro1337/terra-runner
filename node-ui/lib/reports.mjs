@@ -21,6 +21,23 @@ export async function latestIterationSummary(settings, project, configPath) {
   try { return JSON.parse(await fs.readFile(candidates[0].file, 'utf8')); } catch { return null; }
 }
 
+export async function iterationSummariesSince(settings, project, configPath, sinceMs) {
+  const logs = path.join(projectDataRoot(settings, project, configPath), 'logs');
+  let entries;
+  try { entries = await fs.readdir(logs, { recursive: true, withFileTypes: true }); } catch { return []; }
+  const summaries = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.summary.json')) continue;
+    const file = path.join(entry.parentPath || entry.path, entry.name);
+    try {
+      const stat = await fs.stat(file);
+      if (stat.mtimeMs + 1000 < sinceMs) continue;
+      summaries.push(JSON.parse(await fs.readFile(file, 'utf8')));
+    } catch { }
+  }
+  return summaries.sort((a, b) => String(a.started || '').localeCompare(String(b.started || '')));
+}
+
 export async function dailyReports(settings, project, configPath) {
   const reports = path.join(projectDataRoot(settings, project, configPath), 'reports');
   try { return (await fs.readdir(reports)).filter(name => /^\d{4}-\d{2}-\d{2}\.md$/.test(name)).sort().reverse(); } catch { return []; }
