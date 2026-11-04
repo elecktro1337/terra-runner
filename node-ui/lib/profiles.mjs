@@ -30,7 +30,7 @@ export function profileFrom(model, account = null, reasoningVariant = '', showTh
     provider: modelProvider(parsed.model),
     credentialId: policy === 'local' ? '' : String(account?.credentialId || ''),
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(account?.label || ''),
-    policy, reasoningVariant: variant,
+    policy, reasoningVariant: variant, limits: null,
     showThinking: Boolean(showThinking)
   };
 }
@@ -44,7 +44,9 @@ export function normalizeProfile(profile) {
     id: String(profile?.id || crypto.randomUUID()), model, provider: modelProvider(model),
     credentialId: policy === 'local' ? '' : String(profile?.credentialId || ''),
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(profile?.credentialLabel || ''),
-    policy, reasoningVariant: String(profile?.reasoningVariant || parsed.reasoningVariant || ''), showThinking: Boolean(profile?.showThinking)
+    policy, reasoningVariant: String(profile?.reasoningVariant || parsed.reasoningVariant || ''),
+    limits: profile?.limits && typeof profile.limits === 'object' ? structuredClone(profile.limits) : null,
+    showThinking: Boolean(profile?.showThinking)
   };
 }
 
@@ -60,6 +62,7 @@ export function migrateProfiles(settings) {
   const reasoning = openCode.reasoning || {};
   const model = String(settings.model || '');
   const profile = profileFrom(model, active, reasoning.variant, reasoning.showThinking);
+  if (profile.policy === 'api') profile.limits = structuredClone(settings.budget || {});
   openCode.profiles = model ? [profile] : [];
   openCode.activeProfileId = profile.id;
   return openCode.profiles;
@@ -82,6 +85,7 @@ export function applyProfile(settings, profile) {
   openCode.activeProfileId = profile.id;
   settings.model = `${profile.model}${profile.reasoningVariant ? `#${profile.reasoningVariant}` : ''}`;
   openCode.reasoning = { variant: profile.reasoningVariant || '', showThinking: Boolean(profile.showThinking) };
+  if (profile.policy === 'api' && profile.limits) settings.budget = structuredClone(profile.limits);
   if (profile.policy === 'local') {
     const localId = `local:${profile.provider}`;
     const index = openCode.accounts.findIndex(a => a.id === localId);

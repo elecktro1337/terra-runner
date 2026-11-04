@@ -4,183 +4,115 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
-import readline from 'node:readline/promises';
-import { stdin as input, stdout as output } from 'node:process';
-import { activeProfile, applyProfile, isLocalModel, migrateProfiles, profileFrom, profileTitle } from './lib/profiles.mjs';
+import { confirm, input, select, Separator } from 'inquirer';
+import chalk from 'chalk';
+import figlet from 'figlet';
+import ora from 'ora';
+import { activeProfile, applyProfile, isLocalModel, migrateProfiles, profileFrom } from './lib/profiles.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
-const argValue = name => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : ''; };
-const portable = args.includes('--portable');
-const configPath = argValue('--config') || (portable ? path.join(root, 'terra-config.json') : path.join(process.env.LOCALAPPDATA || process.env.APPDATA || root, 'TerraRunner', 'terra-config.json'));
-const rl = readline.createInterface({ input, output });
-const cyan = s => `\x1b[36m${s}\x1b[0m`, green = s => `\x1b[32m${s}\x1b[0m`, yellow = s => `\x1b[33m${s}\x1b[0m`, dim = s => `\x1b[2m${s}\x1b[0m`, bold = s => `\x1b[1m${s}\x1b[0m`;
-
-function clear() { if (output.isTTY) process.stdout.write('\x1Bc'); }
-function line() { console.log(dim('──────────────────────────────────────────────────────────────────────────────')); }
-async function ask(prompt) { return (await rl.question(prompt)).trim(); }
-async function confirm(prompt) { return ['y', 'yes'].includes((await ask(`${prompt} [y/n]: `)).toLowerCase()); }
-async function choose(title, choices) {
-  console.log(`\n${bold(title)}`); choices.forEach((c, i) => console.log(`  ${i + 1}  ${c.label}`)); console.log('  0  Back');
-  while (true) { const v = await ask('Choose an option: '); if (v === '0' || !v) return null; const choice = choices[Number(v) - 1]; if (choice) return choice.value; console.log(yellow('Choose one of the listed options.')); }
+const valueOf = name => { const i = args.indexOf(name); return i < 0 ? '' : args[i + 1]; };
+const configPath = valueOf('--config') || (args.includes('--portable') ? path.join(root, 'terra-config.json') : path.join(process.env.LOCALAPPDATA || process.env.APPDATA || root, 'TerraRunner', 'terra-config.json'));
+const rule = chalk.gray('─'.repeat(78));
+function clear() { if (process.stdout.isTTY) process.stdout.write('\x1Bc'); }
+function pause() { return input({ message: 'Press Enter to continue' }); }
+async function pick(message, choices) {
+  try { return await select({ message, choices: [...choices, new Separator(), { name: '← Back', value: null }], loop: false, pageSize: 14 }); }
+  catch (error) { if (error?.name === 'ExitPromptError') return null; throw error; }
 }
-async function resolveCommand(commandName) {
-  if (path.isAbsolute(commandName) || /[\\/]/.test(commandName)) return commandName;
-  if (process.platform !== 'win32') return commandName;
-  // npm installs CLI shims in %APPDATA%\\npm but that directory is not always
-  // inherited by processes started from IDE terminals or a double-clicked CMD.
-  const npmShim = path.join(process.env.APPDATA || '', 'npm', `${commandName}.cmd`);
+async function yesNo(message) { try { return await confirm({ message, default: false }); } catch { return false; } }
+async function resolveCommand(name) {
+  if (path.isAbsolute(name) || /[\\/]/.test(name)) return name;
+  if (process.platform !== 'win32') return name;
+  const npmShim = path.join(process.env.APPDATA || '', 'npm', `${name}.cmd`);
   try { await fs.access(npmShim); return npmShim; } catch { }
   const locations = await new Promise((resolve, reject) => {
-    const child = spawn('where.exe', [commandName], { cwd: root, shell: false, stdio: ['ignore', 'pipe', 'pipe'] }); let text = '';
-    child.stdout.on('data', d => text += d); child.once('error', reject); child.once('close', code => code === 0 ? resolve(text) : reject(new Error(`Command '${commandName}' was not found on PATH.`)));
+    const child = spawn('where.exe', [name], { cwd: root, shell: false, stdio: ['ignore', 'pipe', 'pipe'] }); let stdout = '';
+    child.stdout.on('data', chunk => stdout += chunk); child.once('error', reject);
+    child.once('close', code => code === 0 ? resolve(stdout) : reject(new Error(`Command '${name}' was not found on PATH.`)));
   });
-  return locations.split(/\r?\n/).map(s => s.trim()).find(Boolean);
+  return locations.split(/\r?\n/).map(line => line.trim()).find(Boolean);
 }
-async function command(commandName, commandArgs, cwd = root, inherited = false) {
-  const command = await resolveCommand(commandName);
+async function execute(name, commandArgs, cwd = root, inherited = false) {
+  const executable = await resolveCommand(name);
   return new Promise((resolve, reject) => {
-    // Node cannot execute a .cmd shim directly with shell:false (EINVAL). Run
-    // only that shim through cmd.exe; native executables retain direct spawning.
-    const isBatch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
-    const escapeCmd = value => `"${String(value).replace(/[\^&|<>()!\"]/g, '^$&')}"`;
-    const child = isBatch
-      ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `${escapeCmd(command)} ${commandArgs.map(escapeCmd).join(' ')}`], { cwd, shell: false, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'] })
-      : spawn(command, commandArgs, { cwd, shell: false, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'] });
+    const batch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable);
+    const quote = value => `"${String(value).replace(/"/g, '""')}"`;
+    const batchLine = `"${quote(executable)} ${commandArgs.map(quote).join(' ')}"`;
+    const child = batch ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', batchLine], { cwd, shell: false, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'] }) : spawn(executable, commandArgs, { cwd, shell: false, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
-    if (!inherited) { child.stdout.on('data', d => stdout += d); child.stderr.on('data', d => stderr += d); }
-    child.once('error', reject); child.once('close', code => code === 0 ? resolve(stdout) : reject(new Error(`${command} exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`)));
+    if (!inherited) { child.stdout.on('data', data => stdout += data); child.stderr.on('data', data => stderr += data); }
+    child.once('error', reject); child.once('close', code => code === 0 ? resolve(stdout) : reject(new Error(`${executable} exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`)));
   });
 }
-async function save(settings) {
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  const temporary = `${configPath}.${process.pid}.tmp`;
-  await fs.writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temporary, configPath);
+async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [], activeAccountId: '', reasoning: {} }; settings.openCode.accounts ||= []; migrateProfiles(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the legacy setup wizard once or pass --config <file>. ${error.message}`); } }
+async function save(settings) { await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
+function parseModels(text) { return [...new Set(text.split(/\r?\n/).map(v => v.trim()).filter(v => /^[a-z0-9_.-]+\/.+/i.test(v)))]; }
+async function refreshOpenCode(settings) {
+  const spinner = ora('Reading OpenCode accounts and models…').start();
+  try {
+    const executable = settings.openCodeCommand || 'opencode'; const raw = await execute(executable, ['auth', 'list', '--format', 'json']); const providers = JSON.parse(raw); const accounts = [];
+    for (const provider of providers) for (const credential of provider.connections || []) accounts.push({ id: `${provider.id}:${credential.id}`, provider: provider.id, credentialId: credential.id, label: credential.label || provider.name || provider.id, authMethod: credential.method || '', usageKind: credential.method === 'oauth' ? 'oauth' : 'balance' });
+    const models = parseModels(await execute(executable, ['models'])); settings.openCode.accounts = [...accounts, ...settings.openCode.accounts.filter(account => account.authMethod === 'local')];
+    spinner.succeed(`OpenCode refreshed: ${accounts.length} account(s), ${models.length} model(s).`); return { accounts, models };
+  } catch (error) { spinner.fail('OpenCode refresh failed.'); throw error; }
 }
-async function load() {
-  try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [], activeAccountId: '', reasoning: {} }; settings.openCode.accounts ||= []; migrateProfiles(settings); return settings; }
-  catch (error) { throw new Error(`Cannot load ${configPath}. Start the legacy setup wizard once or pass --config <file>. ${error.message}`); }
-}
-function parseModels(text) { return [...new Set(text.split(/\r?\n/).map(s => s.trim()).filter(s => /^[a-z0-9_.-]+\/.+/i.test(s)))]; }
-async function refreshAccounts(settings) {
-  const executable = settings.openCodeCommand || 'opencode';
-  const raw = await command(executable, ['auth', 'list', '--format', 'json']); const providers = JSON.parse(raw);
-  const accounts = [];
-  for (const provider of providers) for (const connection of provider.connections || []) accounts.push({
-    id: `${provider.id}:${connection.id}`, provider: provider.id, credentialId: connection.id, label: connection.label || provider.name || provider.id,
-    authMethod: connection.method || '', usageKind: connection.method === 'oauth' ? 'oauth' : 'balance'
-  });
-  const oldLocal = settings.openCode.accounts.filter(a => a.authMethod === 'local');
-  settings.openCode.accounts = [...accounts, ...oldLocal];
-  const models = parseModels(await command(executable, ['models']));
-  return { accounts, models };
-}
-function currentProject(settings) { return (settings.projects || [])[0]; }
-function budgetText(settings, profile) {
-  if (!profile) return 'No profile selected';
-  if (profile.policy === 'local') return 'Local model — no provider limits';
-  if (profile.policy === 'oauth-managed') return 'OAuth — usage and reset are managed by the provider';
-  const b = settings.budget || {}; return `API spending limits — ${b.mode || 'daily'}${b.mode === 'balance' || b.mode === 'hybrid' ? `, floor $${Number(b.balance?.minimumUsd || 0).toFixed(2)}` : b.mode === 'daily' ? `, limit $${Number(b.dailyUsd || 0).toFixed(2)}` : ''}`;
+function selectedProject(settings) { return settings.projects?.[0] || null; }
+function limitSummary(profile) {
+  if (!profile) return 'No profile selected'; if (profile.policy === 'local') return 'No provider limits'; if (profile.policy === 'oauth-managed') return 'Provider-managed OAuth usage';
+  const limits = profile.limits || {}; const floor = Number(limits.balance?.minimumUsd || 0).toFixed(2);
+  return limits.mode === 'daily' ? `Daily $${Number(limits.dailyUsd || 0).toFixed(2)}` : limits.mode === 'hybrid' ? `Daily $${Number(limits.dailyUsd || 0).toFixed(2)} + floor $${floor}` : limits.mode === 'unlimited' ? 'Unlimited' : `Balance floor $${floor}`;
 }
 function header(settings) {
-  clear(); const project = currentProject(settings); const profile = activeProfile(settings);
-  console.log(cyan(bold('TERRA RUNNER')) + dim('  v1.6 development UI'));
-  console.log(dim('Local OpenCode development orchestrator')); line();
-  console.log(`${bold('Project:')} ${project?.id || 'not selected'}${project?.branch ? `  ${dim('|')}  ${bold('Branch:')} ${project.branch}` : ''}`);
-  console.log(`${bold('Path:')}    ${project?.path || 'not configured'}`);
-  console.log(`${bold('Profile:')} ${profileTitle(profile)}`);
-  console.log(`${bold('Limits:')}  ${budgetText(settings, profile)}`); line();
+  clear(); const project = selectedProject(settings); const profile = activeProfile(settings);
+  console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' }))); console.log(chalk.gray('RUNNER  v1.6  ·  Local OpenCode development orchestrator')); console.log(rule);
+  console.log(`${chalk.bold('Project')}  ${chalk.white(project?.id || 'not selected')}  ${chalk.gray('│')}  ${chalk.bold('Branch')}  ${project?.branch || 'not configured'}`); console.log(`${chalk.bold('Path')}     ${chalk.gray(project?.path || 'not configured')}`);
+  console.log(`${chalk.bold('Profile')}  ${chalk.cyan(profile?.model || 'not selected')}${profile?.reasoningVariant ? chalk.gray(` #${profile.reasoningVariant}`) : ''}`); console.log(`${chalk.bold('Policy')}   ${chalk.yellow(profile?.policy || 'not configured')}  ${chalk.gray('│')}  ${limitSummary(profile)}`); console.log(rule);
 }
-async function selectProfile(settings) {
-  let inventory;
-  try { inventory = await refreshAccounts(settings); await save(settings); console.log(green(`OpenCode refreshed: ${inventory.accounts.length} credential(s), ${inventory.models.length} model(s).`)); }
-  catch (error) { console.log(yellow(`Could not refresh OpenCode: ${error.message}`)); inventory = { accounts: settings.openCode.accounts, models: [] }; }
-  const profiles = migrateProfiles(settings);
-  const choices = profiles.map(p => ({ label: `${p.id === settings.openCode.activeProfileId ? '* ' : '  '}${profileTitle(p)}`, value: p.id }));
-  choices.push({ label: 'Create a profile from an OpenCode model', value: '__create' });
-  const selected = await choose('Profiles', choices); if (!selected) return;
-  if (selected !== '__create') { const p = profiles.find(p => p.id === selected); applyProfile(settings, p); await save(settings); console.log(green('Profile selected.')); await ask('Press Enter to continue'); return; }
-  const models = inventory.models;
-  if (!models.length) { console.log(yellow('No models were returned. Check OpenCode, then refresh again.')); await ask('Press Enter to continue'); return; }
-  const filter = (await ask('Filter models (blank shows first 40): ')).toLowerCase(); const filtered = models.filter(m => !filter || m.toLowerCase().includes(filter)).slice(0, 80);
-  const model = await choose('Select a model', filtered.map(m => ({ label: `${m}${isLocalModel(m) ? '  [local]' : ''}`, value: m }))); if (!model) return;
-  let account = null;
-  if (!isLocalModel(model)) {
-    const provider = model.split('/')[0].toLowerCase(); const accounts = inventory.accounts.filter(a => a.provider.toLowerCase() === provider);
-    if (!accounts.length) { console.log(yellow(`No saved ${provider} credential was found. Sign in with OpenCode first, then refresh.`)); await ask('Press Enter to continue'); return; }
-    const accountId = await choose('Select the credential for this cloud model', accounts.map(a => ({ label: `${a.label} [${a.authMethod || 'unknown'}]`, value: a.id })));
-    if (!accountId) return; account = accounts.find(a => a.id === accountId);
-  }
-  const reasoning = await choose('Reasoning level', [{ label: 'Provider default', value: '' }, ...['minimal', 'low', 'medium', 'high', 'xhigh'].map(v => ({ label: v, value: v }))]); if (reasoning === null) return;
-  const showThinking = await confirm('Show reasoning blocks during the run?'); const p = profileFrom(model, account, reasoning, showThinking);
-  settings.openCode.profiles.push(p); applyProfile(settings, p); await save(settings);
-  console.log(green(`Profile created: ${profileTitle(p)}`)); await ask('Press Enter to continue');
+function numberValue(raw, fallback) { const parsed = Number(String(raw).trim().replace(',', '.')); return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback; }
+async function configureLimits(settings, profile) {
+  if (profile.policy === 'local') { console.log(chalk.green('\nLocal profile: no balance or quota limits are shown or enforced.')); return pause(); }
+  if (profile.policy === 'oauth-managed') { console.log(chalk.yellow('\nOAuth profile: usage, allowance and reset windows are managed by the provider.')); console.log(chalk.gray('No manual quota snapshot is stored or enforced by Terra Runner.')); return pause(); }
+  const limits = structuredClone(profile.limits || settings.budget || {}); limits.balance ||= {};
+  const mode = await pick('API spending policy', [{ name: 'Daily spending limit', value: 'daily' }, { name: 'Minimum balance floor', value: 'balance' }, { name: 'Daily limit and balance floor', value: 'hybrid' }, { name: 'Unlimited (requires confirmation)', value: 'unlimited' }]); if (!mode) return;
+  if (mode === 'unlimited' && !(await yesNo('Disable local API spending limits for this profile?'))) return;
+  limits.mode = mode; limits.allowUnlimited = mode === 'unlimited';
+  if (mode === 'daily' || mode === 'hybrid') { limits.dailyUsd = numberValue(await input({ message: 'Daily limit (USD)', default: String(limits.dailyUsd ?? 5) }), Number(limits.dailyUsd ?? 5)); limits.reserveUsd = numberValue(await input({ message: 'Daily safety reserve (USD)', default: String(limits.reserveUsd ?? .5) }), Number(limits.reserveUsd ?? .5)); }
+  if (mode === 'balance' || mode === 'hybrid') { limits.balance.minimumUsd = numberValue(await input({ message: 'Minimum balance (USD)', default: String(limits.balance.minimumUsd ?? 5) }), Number(limits.balance.minimumUsd ?? 5)); limits.balance.iterationReserveUsd = numberValue(await input({ message: 'Next-run reserve (USD)', default: String(limits.balance.iterationReserveUsd ?? .5) }), Number(limits.balance.iterationReserveUsd ?? .5)); }
+  profile.limits = limits; if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green('Profile limits saved.')); return pause();
 }
-function readAmount(value, fallback) {
-  const normalized = String(value).trim().replace(',', '.'); const number = Number(normalized);
-  return Number.isFinite(number) && number >= 0 ? number : fallback;
+async function configureReasoning(settings, profile) { const variant = await pick('Reasoning level', [{ name: 'Provider default', value: '' }, ...['minimal', 'low', 'medium', 'high', 'xhigh'].map(value => ({ name: value, value }))]); if (variant === null) return; profile.reasoningVariant = variant; profile.showThinking = await yesNo('Show OpenCode thinking blocks during development?'); if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); }
+async function configureType(settings, profile) {
+  const policy = await pick('Profile type', [{ name: 'API key — local spending limits', value: 'api' }, { name: 'OAuth — provider-managed usage', value: 'oauth-managed' }, { name: 'Local model — no limits', value: 'local' }]); if (!policy) return;
+  if (policy === 'local') { profile.policy = 'local'; profile.credentialId = ''; profile.credentialLabel = 'No credential (local inference)'; }
+  else {
+    let inventory; try { inventory = await refreshOpenCode(settings); } catch (error) { console.log(chalk.red(error.message)); return pause(); }
+    const accounts = inventory.accounts.filter(account => account.provider.toLowerCase() === profile.provider); if (!accounts.length) { console.log(chalk.yellow(`No ${profile.provider} OpenCode credential is available.`)); return pause(); }
+    const id = await pick('Credential', accounts.map(account => ({ name: `${account.label}  ${chalk.gray(`[${account.authMethod || 'unknown'}]`)}`, value: account.id }))); if (!id) return; const account = accounts.find(item => item.id === id); profile.policy = policy; profile.credentialId = account.credentialId; profile.credentialLabel = account.label;
+  }
+  if (profile.policy === 'api' && !profile.limits) profile.limits = structuredClone(settings.budget || {}); if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings);
 }
-async function configureActivePolicy(settings) {
-  const profile = activeProfile(settings); if (!profile) return;
-  if (profile.policy === 'local') {
-    console.log(green('This is a local model profile. Terra Runner does not display or enforce provider balance or quota limits.'));
-    await ask('Press Enter to continue'); return;
+async function profileScreen(settings, profile) {
+  while (true) {
+    header(settings); console.log(chalk.bold('PROFILE DETAILS')); console.log(`  Model      ${chalk.cyan(profile.model)}`); console.log(`  Account    ${profile.credentialLabel || 'Not selected'}`); console.log(`  Type       ${profile.policy}`); console.log(`  Reasoning  ${profile.reasoningVariant || 'provider default'}`); console.log(`  Limits     ${limitSummary(profile)}\n`);
+    const action = await pick('Profile actions', [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }, { name: 'Configure limits', value: 'limits' }]);
+    if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'limits') await configureLimits(settings, profile);
   }
-  if (profile.policy === 'oauth-managed') {
-    console.log(yellow('This profile uses OAuth. Usage allowance, reset windows and any limits are managed by the provider.'));
-    console.log(dim('Terra Runner will not ask for a made-up quota snapshot or subtract usage locally.')); await ask('Press Enter to continue'); return;
-  }
-  const budget = settings.budget ||= {}; budget.balance ||= {};
-  const mode = await choose('API spending policy', [
-    { label: 'Daily spending limit', value: 'daily' }, { label: 'Minimum balance floor', value: 'balance' },
-    { label: 'Daily limit and balance floor', value: 'hybrid' }, { label: 'Unlimited (requires confirmation)', value: 'unlimited' }
-  ]); if (!mode) return;
-  if (mode === 'unlimited' && !(await confirm('Disable local API spending limits for this profile?'))) return;
-  budget.mode = mode; budget.allowUnlimited = mode === 'unlimited';
-  if (mode === 'daily' || mode === 'hybrid') {
-    budget.dailyUsd = readAmount(await ask(`Daily limit [${Number(budget.dailyUsd ?? 5).toFixed(2)}]: `), Number(budget.dailyUsd ?? 5));
-    budget.reserveUsd = readAmount(await ask(`Daily safety reserve [${Number(budget.reserveUsd ?? .5).toFixed(2)}]: `), Number(budget.reserveUsd ?? .5));
-  }
-  if (mode === 'balance' || mode === 'hybrid') {
-    budget.balance.minimumUsd = readAmount(await ask(`Minimum balance [${Number(budget.balance.minimumUsd ?? 5).toFixed(2)}]: `), Number(budget.balance.minimumUsd ?? 5));
-    budget.balance.iterationReserveUsd = readAmount(await ask(`Next-run reserve [${Number(budget.balance.iterationReserveUsd ?? .5).toFixed(2)}]: `), Number(budget.balance.iterationReserveUsd ?? .5));
-  }
-  await save(settings); console.log(green('API spending policy saved for the active API profile.')); await ask('Press Enter to continue');
 }
-async function developmentMenu(settings) {
-  const action = await choose('Development', [
-    { label: 'Run one iteration', value: 'once' }, { label: 'Run continuously', value: 'continuous' }, { label: 'Validate project (dry run)', value: 'dry' }
-  ]);
-  if (action) await runRunner(settings, action);
+async function createProfile(settings) {
+  let inventory; try { inventory = await refreshOpenCode(settings); } catch (error) { console.log(chalk.red(error.message)); return pause(); }
+  const filter = (await input({ message: 'Filter models (leave blank to browse)', default: '' })).toLowerCase(); const models = inventory.models.filter(model => !filter || model.toLowerCase().includes(filter)); const model = await pick('Choose model', models.slice(0, 120).map(value => ({ name: `${value}${isLocalModel(value) ? chalk.green('  local') : ''}`, value }))); if (!model) return;
+  let account = null; if (!isLocalModel(model)) { const provider = model.split('/')[0].toLowerCase(); const accounts = inventory.accounts.filter(item => item.provider.toLowerCase() === provider); if (!accounts.length) { console.log(chalk.yellow(`No saved ${provider} credential is available.`)); return pause(); } const id = await pick('Choose account', accounts.map(item => ({ name: `${item.label}  ${chalk.gray(`[${item.authMethod || 'unknown'}]`)}`, value: item.id }))); if (!id) return; account = accounts.find(item => item.id === id); }
+  const profile = profileFrom(model, account); if (profile.policy === 'api') profile.limits = structuredClone(settings.budget || {}); settings.openCode.profiles.push(profile); await save(settings); await profileScreen(settings, profile);
 }
 async function profilesMenu(settings) {
-  const action = await choose('Profiles', [
-    { label: 'Select or create a model profile', value: 'select' }, { label: 'Configure active profile policy and limits', value: 'limits' }
-  ]);
-  if (action === 'select') await selectProfile(settings);
-  if (action === 'limits') await configureActivePolicy(settings);
+  while (true) {
+    header(settings); console.log(chalk.bold('PROFILES')); const profiles = migrateProfiles(settings); const choice = await pick('Open a profile or create a new one', [...profiles.map(profile => ({ name: `${profile.id === settings.openCode.activeProfileId ? chalk.green('●') : ' '} ${profile.model}${profile.reasoningVariant ? chalk.gray(`#${profile.reasoningVariant}`) : ''}  ${chalk.gray(`— ${limitSummary(profile)}`)}`, value: profile.id })), new Separator(), { name: chalk.cyan('+ Create new profile'), value: '__create' }]);
+    if (!choice) return; if (choice === '__create') await createProfile(settings); else await profileScreen(settings, profiles.find(profile => profile.id === choice));
+  }
 }
-async function runRunner(settings, mode) {
-  const profile = activeProfile(settings); if (!profile) { console.log(yellow('Create and select a model profile first.')); await ask('Press Enter to continue'); return; }
-  applyProfile(settings, profile); await save(settings); const project = currentProject(settings);
-  if (!project) { console.log(yellow('No project is configured.')); return; }
-  if (mode !== 'dry' && !(await confirm(mode === 'continuous' ? 'Start continuous development?' : 'Run one development iteration?'))) return;
-  const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-ShowProgress'];
-  runnerArgs.push(mode === 'continuous' ? '-Continuous' : mode === 'dry' ? '-DryRun' : '-Once');
-  try { await command('pwsh.exe', runnerArgs, root, true); } catch (error) { console.log(yellow(`Runner ended: ${error.message}`)); }
-  await ask('Press Enter to continue');
-}
-async function main() {
-  try {
-    const settings = await load();
-    while (true) {
-      header(settings);
-      const action = await choose('Main menu', [
-        { label: 'Development', value: 'development' }, { label: 'Profiles', value: 'profiles' }, { label: 'Save configuration and exit', value: 'exit' }
-      ]);
-      if (!action || action === 'exit') { await save(settings); break; }
-      if (action === 'development') await developmentMenu(settings); else if (action === 'profiles') await profilesMenu(settings);
-    }
-  } finally { rl.close(); }
-}
-main().catch(error => { console.error(`\n${yellow('Terra Runner could not start:')} ${error.message}`); process.exitCode = 1; });
+async function runRunner(settings, mode) { const profile = activeProfile(settings); if (!profile) { console.log(chalk.yellow('Create and select a profile first.')); return pause(); } applyProfile(settings, profile); await save(settings); const project = selectedProject(settings); if (!project) { console.log(chalk.red('No project is configured.')); return pause(); } if (mode !== 'dry' && !(await yesNo(mode === 'continuous' ? 'Start continuous development?' : 'Run one development iteration?'))) return; const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-ShowProgress', mode === 'continuous' ? '-Continuous' : mode === 'dry' ? '-DryRun' : '-Once']; try { await execute('pwsh.exe', runnerArgs, root, true); } catch (error) { console.log(chalk.yellow(`Runner ended: ${error.message}`)); } return pause(); }
+async function developmentMenu(settings) { const action = await pick('Development', [{ name: 'Run one iteration', value: 'once' }, { name: 'Run continuously', value: 'continuous' }, { name: 'Validate project (dry run)', value: 'dry' }]); if (action) await runRunner(settings, action); }
+async function main() { const settings = await load(); while (true) { header(settings); const action = await pick('Main menu', [{ name: 'Development', value: 'development' }, { name: 'Profiles', value: 'profiles' }, { name: 'Save configuration and exit', value: 'exit' }]); if (!action || action === 'exit') { await save(settings); return; } if (action === 'development') await developmentMenu(settings); if (action === 'profiles') await profilesMenu(settings); } }
+main().catch(error => { console.error(chalk.red(`\nTerra Runner could not start: ${error.message}`)); process.exitCode = 1; });
