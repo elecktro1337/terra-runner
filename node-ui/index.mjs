@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -27,7 +27,7 @@ async function pick(message, choices) {
   try { return await select({ message, choices: [...choices, { name: '← Back', value: null }], loop: false, pageSize: 14 }); }
   catch (error) { if (error?.name === 'ExitPromptError') return null; throw error; }
 }
-async function yesNo(message) { try { return await confirm({ message, default: false }); } catch { return false; } }
+async function yesNo(message, defaultValue = false) { try { return await confirm({ message, default: defaultValue }); } catch { return false; } }
 async function resolveCommand(name) {
   if (path.isAbsolute(name) || /[\\/]/.test(name)) return name;
   if (process.platform !== 'win32') return name;
@@ -146,11 +146,12 @@ function showRunnerFailure(output) {
 async function runWithTui(runnerArgs, settings, project, mode) {
   const executable = await resolveCommand('pwsh.exe');
   const previousSummaryId = (await latestIterationSummary(settings, project, configPath))?.id || '';
-  const started = Date.now(); let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration';
-  let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = '';
+  const started = Date.now(); let iterationStarted = started; let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration';
+  let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let control = '';
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-  const spinner = ora({ text: `${stage} · 0m 00s`, color: 'cyan' }).start();
-  const controlFooter = chalk.gray('  Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop');
+  console.log(rule); console.log(chalk.bold('DEVELOPMENT RUN'));
+  const spinner = ora({ text: `${stage} · 0m 00s`, color: 'cyan', discardStdin: false }).start();
+  let controlFooter = chalk.gray('  Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop');
   const renderControlFooter = () => {
     if (!interactive || !process.stdout.rows) return;
     process.stdout.write(`\x1b[s\x1b[${process.stdout.rows};1H\x1b[2K${controlFooter}\x1b[u`);
@@ -160,7 +161,7 @@ async function runWithTui(runnerArgs, settings, project, mode) {
     process.stdout.write(`\x1b[s\x1b[${process.stdout.rows};1H\x1b[2K\x1b[u`);
   };
   renderControlFooter();
-  const update = setInterval(() => { spinner.text = `${stage} · ${durationText(Date.now() - started)}`; renderControlFooter(); }, 1000);
+  const update = setInterval(() => { spinner.text = `${stage} · ${durationText(Date.now() - iterationStarted)}`; renderControlFooter(); }, 1000);
   const liveUpdate = setInterval(async () => {
     if (control) return;
     if (!eventFile) return;
@@ -174,7 +175,6 @@ async function runWithTui(runnerArgs, settings, project, mode) {
       if (activity) stage = `${iterationLabel ? `${iterationLabel} | ` : ''}${activity}${counters}`;
     } catch { }
   }, 900);
-  let control = '';
   const requestControl = async kind => {
     if (control) return;
     control = kind;
@@ -182,7 +182,7 @@ async function runWithTui(runnerArgs, settings, project, mode) {
     try {
       await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, `${kind} requested by user at ${new Date().toISOString()}\n`, 'utf8');
       const message = kind === 'abort' ? 'Emergency stop requested. The current iteration will be terminated.' : 'Stop requested. The current iteration will finish, then development will stop.';
-      spinner.stopAndPersist({ symbol: chalk.yellow('!'), text: message }); spinner.start(); stage = message;
+      controlFooter = chalk.yellow(`  ${message}`); renderControlFooter(); spinner.stopAndPersist({ symbol: chalk.yellow('!'), text: message }); spinner.start(); stage = message;
     } catch (error) { control = ''; spinner.stopAndPersist({ symbol: chalk.red('x'), text: `Could not request stop: ${error.message}` }); spinner.start(); }
   };
   const onInput = data => { const key = String(data).toLowerCase(); if (key === 's' || key === '\u0003') void requestControl('stop'); if (key === 'x') void requestControl('abort'); };
@@ -199,11 +199,11 @@ async function runWithTui(runnerArgs, settings, project, mode) {
           try {
             const event = JSON.parse(line.slice('__TERRA_UI__'.length));
             if (event.type === 'iteration-started') {
-              eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = '';
+              eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; iterationStarted = Date.now();
               iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`;
               stage = `${iterationLabel} | ${event.taskId || 'next roadmap task'} | ${event.pending} tasks pending`;
             }
-            if (event.type === 'iteration-finished') { spinner.stopAndPersist({ symbol: event.stoppedReason ? chalk.yellow('!') : chalk.green('✓'), text: iterationCheckpointText(event) }); spinner.start(); stage = 'Preparing next iteration'; }
+            if (event.type === 'iteration-finished') { spinner.stopAndPersist({ symbol: event.stoppedReason ? chalk.yellow('!') : chalk.green('✓'), text: iterationCheckpointText(event) }); console.log(rule); spinner.start(); stage = 'Preparing next iteration'; }
           } catch { }
           return;
         }
@@ -241,6 +241,20 @@ async function refreshOpenCode(settings) {
   } catch (error) { spinner.fail('OpenCode refresh failed.'); throw error; }
 }
 function selectedProject(settings) { return activeProject(settings); }
+function latestLocalCostEstimate(settings, project, minimumObservedAt = '') {
+  if (!project) return null;
+  const minimum = Date.parse(minimumObservedAt) || 0; const logs = path.join(projectDataRoot(settings, project, configPath), 'logs'); let latest = null;
+  const visit = directory => {
+    let entries; try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) { visit(file); continue; }
+      if (!entry.name.endsWith('.summary.json')) continue;
+      try { const stat = statSync(file); const value = JSON.parse(readFileSync(file, 'utf8')); if (Date.parse(value.ended || '') < minimum) continue; if (!latest || stat.mtimeMs > latest.mtimeMs) latest = { mtimeMs: stat.mtimeMs, value }; } catch { }
+    }
+  };
+  visit(logs); return latest?.value?.quotaEstimatedSpendUSD != null ? latest.value : null;
+}
 function roadmapProgress(project) {
   if (!project?.path || !project?.roadmap) return null;
   try {
@@ -289,7 +303,9 @@ function header(settings) {
   console.log(`${chalk.bold('Project')}   ${chalk.white(project?.id || 'not selected')}  ${chalk.gray('│')}  ${chalk.bold('Branch')}  ${project?.branch || 'not configured'}`); console.log(`${chalk.bold('Path')}      ${chalk.gray(project?.path || 'not configured')}`);
   console.log(`${chalk.bold('Account')}   ${account?.label || profile?.credentialLabel || 'not selected'}  ${chalk.gray('│')}  ${profileKindLabel(profile || {})}`); console.log(`${chalk.bold('Model')}     ${chalk.cyan(profile?.model || 'not selected')}  ${chalk.gray('│')}  Reasoning ${profile?.reasoningVariant || 'provider default'}`);
   const roadmap = roadmapProgress(project);
+  const estimate = snapshot.costTracking?.enabled ? latestLocalCostEstimate(settings, project, snapshot.observedAt) : null;
   console.log(`${chalk.bold('Snapshot')}  ${balance}  ${chalk.gray(`│ ${age}`)}`); console.log(`${chalk.bold('Limits')}    ${chalk.yellow(limitSummary(profile))}`);
+  if (estimate) console.log(`${chalk.bold('Estimate')}  ${estimate.quotaRemaining} ${estimate.quotaUnit} after $${Number(estimate.quotaEstimatedSpendUSD).toFixed(4)} locally recorded OpenCode spend`);
   if (roadmap) console.log(`${chalk.bold('Roadmap')}   ${roadmap.total} total  │  ${chalk.green(`${roadmap.complete} complete`)}  │  ${roadmap.pending} remaining  │  ${roadmap.percent.toFixed(1)}%`);
   console.log(rule);
 }
@@ -483,19 +499,26 @@ async function chooseRunIterationLimit() {
 async function runRunner(settings, mode) {
   const profile = activeProfile(settings);
   if (!profile) { console.log(chalk.yellow('Create and select a profile first.')); return pause(); }
-  let freshness = snapshotFreshness(profile);
-  if (!freshness.ok) {
-    if (!(await refreshSnapshotBeforeRun(settings, profile, freshness))) return;
-    freshness = snapshotFreshness(profile);
-    if (!freshness.ok) { console.log(chalk.red(`Snapshot is still not ready: ${freshness.detail}`)); return pause(); }
+  const limit = mode === 'continuous' ? await chooseRunIterationLimit() : 1;
+  const snapshotRelevant = profile.policy !== 'local' && profile.limitPolicy?.mode !== 'unlimited';
+  const skipSnapshotGuard = mode === 'continuous' && snapshotRelevant && !(await yesNo('Use the provider snapshot guard for this run?', true));
+  if (!skipSnapshotGuard) {
+    let freshness = snapshotFreshness(profile);
+    if (!freshness.ok) {
+      if (!(await refreshSnapshotBeforeRun(settings, profile, freshness))) return;
+      freshness = snapshotFreshness(profile);
+      if (!freshness.ok) { console.log(chalk.red(`Snapshot is still not ready: ${freshness.detail}`)); return pause(); }
+    }
   }
   applyProfile(settings, profile); await save(settings);
   const project = selectedProject(settings);
   if (!project) { console.log(chalk.red('No project is configured.')); return pause(); }
-  const limit = mode === 'continuous' ? await chooseRunIterationLimit() : 1;
-  if (!(await yesNo(mode === 'continuous' ? (limit ? `Start continuous development for up to ${limit} iteration(s)?` : 'Start continuous development until a safety stop?') : 'Run one development iteration?'))) return;
+  const runLabel = mode === 'continuous' ? (limit ? `Start continuous development for up to ${limit} iteration(s)` : 'Start continuous development until a safety stop') : 'Run one development iteration';
+  const guardNote = skipSnapshotGuard ? ' without the provider snapshot guard' : '';
+  if (!(await yesNo(`${runLabel}${guardNote}?`))) return;
   const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-UiEvents', mode === 'continuous' ? '-Continuous' : '-Once'];
   if (mode === 'continuous') { if (limit > 0) runnerArgs.push('-MaxIterations', String(limit)); else runnerArgs.push('-UnlimitedIterations'); }
+  if (skipSnapshotGuard) runnerArgs.push('-SkipProviderSnapshotGuard');
   await runWithTui(runnerArgs, settings, project, mode);
   return pause();
 }

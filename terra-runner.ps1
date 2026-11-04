@@ -34,6 +34,7 @@ param(
     [switch]$ShowProgress,
     [switch]$UiEvents,
     [switch]$UnlimitedIterations,
+    [switch]$SkipProviderSnapshotGuard,
     [ValidateRange(0, 1000)][int]$MaxIterations = 0
 )
 Set-StrictMode -Version Latest
@@ -425,15 +426,15 @@ function Get-QuotaSnapshot($Account, [string]$Executable = '', [string]$Director
     return [pscustomobject]@{ Kind='quota'; Mode='quota'; Daily=(New-ZeroUsage 'day'); AllTime=$allTime; BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$remaining; QuotaReportedRemaining=$reportedRemaining; QuotaEstimatedSpendUSD=$estimatedSpend; QuotaReserve=$reserve; QuotaUnit=[string](Read-Member $quota 'unit'); QuotaObservedAt=$observedAt }
 }
 function New-LocalSnapshot {
-    return [pscustomobject]@{ Kind='local'; Mode='local'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
+    return [pscustomobject]@{ Kind='local'; Mode='local'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReportedRemaining=$null; QuotaEstimatedSpendUSD=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
 }
 function New-OAuthSnapshot {
     # OAuth plan usage and reset windows belong to the provider. Never invent a
     # local number or block a paid-free OAuth account on a manually typed quota.
-    return [pscustomobject]@{ Kind='oauth'; Mode='oauth'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource='provider-managed'; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
+    return [pscustomobject]@{ Kind='oauth'; Mode='oauth'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource='provider-managed'; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReportedRemaining=$null; QuotaEstimatedSpendUSD=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
 }
 function New-UnlimitedSnapshot {
-    return [pscustomobject]@{ Kind='unlimited'; Mode='unlimited'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
+    return [pscustomobject]@{ Kind='unlimited'; Mode='unlimited'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReportedRemaining=$null; QuotaEstimatedSpendUSD=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
 }
 function Switch-OpenCodeAccount([string]$Executable, $Account, [string]$Directory) {
     if ([string](Read-Member $Account 'usageKind') -eq 'local') { return }
@@ -485,6 +486,7 @@ function Set-BalanceSnapshot([string]$File, [double]$Amount, $Usage, [bool]$Over
 function Get-BudgetSnapshot([string]$Executable, [string]$Directory, $Budget, [string]$Root) {
     $account = Get-ActiveOpenCodeAccount $cfg
     $kind = Get-OpenCodeUsageKind $cfg
+    if ($kind -eq 'quota' -and $SkipProviderSnapshotGuard) { return (New-UnlimitedSnapshot) }
     if ($kind -eq 'quota') { return (Get-QuotaSnapshot $account $Executable $Directory $Budget) }
     if ($kind -eq 'oauth') { return (New-OAuthSnapshot) }
     if ($kind -eq 'unlimited') { return (New-UnlimitedSnapshot) }
@@ -518,7 +520,7 @@ function Get-BudgetSnapshot([string]$Executable, [string]$Directory, $Budget, [s
     }
     return [pscustomobject]@{
         Kind='balance'; Mode=$mode; Daily=$day; Hourly=$hour; AllTime=$all; BalanceUSD=$balance
-        BalanceSource=$source; BalanceObservedAt=$observedAt; QuotaRemaining=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt=''
+        BalanceSource=$source; BalanceObservedAt=$observedAt; QuotaRemaining=$null; QuotaReportedRemaining=$null; QuotaEstimatedSpendUSD=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt=''
     }
 }
 function Get-BudgetStopReason($Snapshot, $Budget, [bool]$Emergency) {
