@@ -462,10 +462,13 @@ function Show-OpenCodeAccountsMenu {
             $account = Get-ActiveOpenCodeAccount
             if ($null -eq $account -or [string]$account.usageKind -ne 'quota') { Write-Line 'Select an OAuth quota account first.' 'Yellow'; Pause-Menu; continue }
             $quota = Read-SettingMember $account 'quota'; if ($null -eq $quota) { $quota = [ordered]@{}; $account['quota'] = $quota }
-            $unit = switch (Read-Choice 'Quota unit: 1 percent, 2 requests, 3 sessions') { '2' { 'requests' } '3' { 'sessions' } default { 'percent' } }
+            Write-Line 'Quota is a provider-reported allowance, not money. Terra Runner does not estimate or deduct it.' 'Gray'
+            Write-Line 'Recommended for OAuth: choose percent, then enter the remaining percentage shown by your provider.' 'Gray'
+            Write-Line 'Use requests or sessions only when your provider explicitly reports quota in that unit.' 'Gray'
+            $unit = switch (Read-Choice 'Quota unit: 1 percent (recommended), 2 requests, 3 sessions') { '2' { 'requests' } '3' { 'sessions' } default { 'percent' } }
             $current = if ($null -ne (Read-SettingMember $quota 'remaining')) { [decimal](Read-SettingMember $quota 'remaining') } else { if ($unit -eq 'percent') { 100 } else { 0 } }
-            $quota['unit'] = $unit; $quota['remaining'] = Read-QuotaValue 'Provider-reported quota remaining' $current 0; $quota['reserve'] = Read-QuotaValue 'Safety reserve' ([decimal]5) 0
-            $quota['maxAgeMinutes'] = Read-Integer 'Quota snapshot validity in minutes' 120 1 10080; $quota['observedAt'] = (Get-Date).ToString('o'); $quota['configured'] = $true
+            $quota['unit'] = $unit; $quota['remaining'] = Read-QuotaValue "Provider-reported quota remaining ($unit)" $current 0; $quota['reserve'] = Read-QuotaValue "Stop before this reserve ($unit)" ([decimal]5) 0
+            $quota['maxAgeMinutes'] = Read-Integer 'How many minutes this snapshot remains valid' 120 1 10080; $quota['observedAt'] = (Get-Date).ToString('o'); $quota['configured'] = $true
             Save-Settings; Write-Line 'Quota snapshot saved. Terra Runner never claims it is a provider billing balance.' 'Green'; Pause-Menu; continue
         }
         if ($choice -eq 'l') {
