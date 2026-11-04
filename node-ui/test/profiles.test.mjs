@@ -47,6 +47,20 @@ test('applies a configured percentage snapshot to the active account', () => {
   assert.equal(settings.openCode.accounts[0].quota.remaining, 42);
   assert.equal(settings.openCode.accounts[0].quota.configured, true);
 });
+test('keeps an open profile reference valid across dashboard normalization', () => {
+  const profile = profileFrom('openai/gpt', { authMethod: 'key' });
+  const settings = { openCode: { activeProfileId: profile.id, profiles: [profile], accounts: [] } };
+  migrateProfiles(settings);
+  profile.usageSource.remaining = 28.41;
+  assert.equal(settings.openCode.profiles[0].usageSource.remaining, 28.41);
+});
+test('repairs an early profile snapshot from the saved active account', () => {
+  const profile = { id: 'p', model: 'openai/gpt', provider: 'openai', credentialId: 'c', policy: 'api', usageSource: { kind: 'snapshot', unit: 'percent', remaining: null } };
+  const settings = { openCode: { activeProfileId: 'p', profiles: [profile], accounts: [{ provider: 'openai', credentialId: 'c', quota: { configured: true, unit: 'usd', remaining: 28.41, reserve: .5, maxAgeMinutes: 60, observedAt: '2026-11-04T00:00:00Z' } }] } };
+  migrateProfiles(settings);
+  assert.equal(profile.usageSource.remaining, 28.41);
+  assert.equal(profile.usageSource.unit, 'usd');
+});
 test('migrates legacy API profiles with their existing budget limits', () => {
   const settings = { budget: { mode: 'balance', balance: { minimumUsd: 5 } }, openCode: { activeProfileId: 'api', profiles: [{ id: 'api', model: 'openai/gpt', policy: 'api' }], accounts: [] } };
   const [profile] = migrateProfiles(settings);

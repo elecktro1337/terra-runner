@@ -60,11 +60,20 @@ export function migrateProfiles(settings) {
   const openCode = settings.openCode ||= {};
   const accounts = Array.isArray(openCode.accounts) ? openCode.accounts : [];
   if (Array.isArray(openCode.profiles) && openCode.profiles.length) {
-    openCode.profiles = openCode.profiles.map(normalizeProfile);
+    // Keep object identity: profile detail screens hold a reference while the
+    // dashboard redraws and normalizes settings between prompt interactions.
+    // Replacing the array here used to make a freshly entered snapshot vanish.
+    openCode.profiles.forEach((profile, index) => Object.assign(profile, normalizeProfile(openCode.profiles[index])));
     // v1.6.0 profiles predate profile-scoped API limits. Preserve the legacy
     // budget for each existing API profile instead of showing a zero floor.
     for (const profile of openCode.profiles) {
       if (profile.policy === 'api' && !profile.limits) profile.limits = structuredClone(settings.budget || {});
+      const account = accounts.find(item => item.provider === profile.provider && item.credentialId === profile.credentialId);
+      // Repair snapshots written by early v1.6 screens: their account update
+      // succeeded, but a redraw replaced the profile object before save.
+      if (profile.policy !== 'local' && profile.usageSource?.remaining == null && account?.quota?.configured) {
+        profile.usageSource = { kind: 'snapshot', unit: account.quota.unit, remaining: account.quota.remaining, reserve: account.quota.reserve, maxAgeMinutes: account.quota.maxAgeMinutes, observedAt: account.quota.observedAt };
+      }
     }
     if (!openCode.profiles.some(p => p.id === openCode.activeProfileId)) openCode.activeProfileId = openCode.profiles[0].id;
     return openCode.profiles;
