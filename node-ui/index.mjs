@@ -122,13 +122,45 @@ function iterationCheckpointText(event) {
   const stopped = event.stoppedReason ? ` | ${event.stoppedReason}` : '';
   return `Iteration ${event.iteration} complete | ${tasks} | ${durationText(Number(event.elapsedSeconds || 0) * 1000)} | ${commit}${stopped}`;
 }
+function showRunnerFailure(output) {
+  const text = String(output || ''); let title = 'DEVELOPMENT DID NOT START'; let reason = 'Terra Runner could not start the development run.'; let action = 'Open the project logs or run Project preflight, then try again.';
+  if (/working tree has uncommitted\/untracked changes/i.test(text)) {
+    reason = 'The project has uncommitted or untracked files.';
+    action = 'Review the changes, then commit, stash, or remove them before starting automated development.';
+  } else if (/local and remote branch heads differ/i.test(text)) {
+    reason = 'The local Git branch does not match the configured remote branch.';
+    action = 'Review the branch and resolve the pending push or pull before starting again.';
+  } else if (/snapshot is stale|snapshot is not configured/i.test(text)) {
+    reason = 'The provider balance or quota snapshot is missing or no longer current.';
+    action = 'Start the run again and enter an updated provider snapshot when prompted.';
+  } else if (/OpenCode command .* not found/i.test(text)) {
+    reason = 'OpenCode could not be found.';
+    action = 'Check the OpenCode installation and command path in the configuration.';
+  } else if (/wrong Git branch/i.test(text)) {
+    reason = 'The checked-out Git branch does not match this project profile.';
+    action = 'Switch to the configured branch, then start again.';
+  }
+  console.log(`\n${chalk.red.bold(title)}`); console.log(rule);
+  console.log(`  ${chalk.bold('Reason')}  ${reason}`); console.log(`  ${chalk.bold('Next step')} ${action}`); console.log(rule);
+}
 async function runWithTui(runnerArgs, settings, project, mode) {
   const executable = await resolveCommand('pwsh.exe');
   const previousSummaryId = (await latestIterationSummary(settings, project, configPath))?.id || '';
   const started = Date.now(); let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration';
   let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = '';
+  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
   const spinner = ora({ text: `${stage} · 0m 00s`, color: 'cyan' }).start();
-  const update = setInterval(() => { spinner.text = `${stage} · ${durationText(Date.now() - started)}`; }, 1000);
+  const controlFooter = chalk.gray('  Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop');
+  const renderControlFooter = () => {
+    if (!interactive || !process.stdout.rows) return;
+    process.stdout.write(`\x1b[s\x1b[${process.stdout.rows};1H\x1b[2K${controlFooter}\x1b[u`);
+  };
+  const clearControlFooter = () => {
+    if (!interactive || !process.stdout.rows) return;
+    process.stdout.write(`\x1b[s\x1b[${process.stdout.rows};1H\x1b[2K\x1b[u`);
+  };
+  renderControlFooter();
+  const update = setInterval(() => { spinner.text = `${stage} · ${durationText(Date.now() - started)}`; renderControlFooter(); }, 1000);
   const liveUpdate = setInterval(async () => {
     if (control) return;
     if (!eventFile) return;
@@ -155,10 +187,9 @@ async function runWithTui(runnerArgs, settings, project, mode) {
   };
   const onInput = data => { const key = String(data).toLowerCase(); if (key === 's' || key === '\u0003') void requestControl('stop'); if (key === 'x') void requestControl('abort'); };
   const onSigint = () => { void requestControl('stop'); };
-  const interactive = Boolean(process.stdin.isTTY);
-  if (interactive) { process.stdin.setRawMode?.(true); process.stdin.resume(); process.stdin.on('data', onInput); process.on('SIGINT', onSigint); console.log(chalk.gray('  Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop'));
+  if (interactive) { process.stdin.setRawMode?.(true); process.stdin.resume(); process.stdin.on('data', onInput); process.on('SIGINT', onSigint);
   }
-  const cleanupControls = () => { if (!interactive) return; process.stdin.off('data', onInput); process.off('SIGINT', onSigint); process.stdin.setRawMode?.(false); };
+  const cleanupControls = () => { clearControlFooter(); if (!interactive) return; process.stdin.off('data', onInput); process.off('SIGINT', onSigint); process.stdin.setRawMode?.(false); };
   try {
     const result = await new Promise((resolve, reject) => {
       const child = spawn(executable, runnerArgs, { cwd: root, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -188,10 +219,10 @@ async function runWithTui(runnerArgs, settings, project, mode) {
     });
     clearInterval(update); clearInterval(liveUpdate); cleanupControls();
     if (result.code === 0) spinner.succeed(`Development run finished · ${durationText(Date.now() - started)}`);
-    else spinner.fail(`Development runner exited with code ${result.code}`);
+    else spinner.fail('Development run could not start.');
     const summaries = (await iterationSummariesSince(settings, project, configPath, started)).filter(summary => summary.id !== previousSummaryId);
     if (summaries.length) showRunOverview(summaries, settings, project);
-    else if (result.code !== 0) console.log(chalk.red((result.stderr || result.stdout || 'No iteration summary was written.').trim()));
+    else if (result.code !== 0) showRunnerFailure(result.stderr || result.stdout);
     return result.code === 0;
   } catch (error) {
     clearInterval(update); clearInterval(liveUpdate); cleanupControls(); spinner.fail('Development runner could not start.'); console.log(chalk.red(error.message)); return false;
