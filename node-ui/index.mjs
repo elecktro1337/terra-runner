@@ -10,7 +10,7 @@ import figlet from 'figlet';
 import ora from 'ora';
 import { activeProfile, applyProfile, isLocalModel, migrateProfiles, profileFrom } from './lib/profiles.mjs';
 import { activeProject, normalizeProjects, validateProjectId } from './lib/projects.mjs';
-import { dailyReports, latestIterationSummary } from './lib/reports.mjs';
+import { dailyReports, latestIterationSummary, projectDataRoot } from './lib/reports.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -54,6 +54,59 @@ async function execute(name, commandArgs, cwd = root, inherited = false) {
     if (!inherited) { child.stdout.on('data', data => stdout += data); child.stderr.on('data', data => stderr += data); }
     child.once('error', reject); child.once('close', code => code === 0 ? resolve(stdout) : reject(new Error(`${executable} exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`)));
   });
+}
+function durationText(milliseconds) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`;
+}
+function showRunSummary(summary, settings, project) {
+  const completed = Array.isArray(summary?.completedTaskIds) ? summary.completedTaskIds : [];
+  const changed = Number(summary?.doneAfter || 0) - Number(summary?.doneBefore || 0);
+  const exit = Number(summary?.exitCode ?? -1);
+  const success = exit === 0 && !summary?.stoppedReason;
+  console.log(`\n${success ? chalk.green.bold('ITERATION COMPLETE') : chalk.yellow.bold('ITERATION FINISHED WITH WARNINGS')}`);
+  console.log(rule);
+  console.log(`  ${chalk.gray('Duration')}    ${durationText(Number(summary?.elapsedSeconds || 0) * 1000)}`);
+  console.log(`  ${chalk.gray('Roadmap')}     ${changed > 0 ? chalk.green(`+${changed} completed`) : 'no tasks completed'}  │  ${summary?.pendingAfter ?? '?'} pending`);
+  console.log(`  ${chalk.gray('Tasks')}       ${completed.length ? chalk.cyan(completed.join(', ')) : 'none recorded'}`);
+  console.log(`  ${chalk.gray('Changes')}     ${summary?.codeFilesChanged ?? 0} code  │  ${summary?.testFilesChanged ?? 0} test files  │  ${summary?.documentationFilesChanged ?? 0} docs`);
+  console.log(`  ${chalk.gray('Verification')} ${summary?.verificationCommandsObserved ?? 0} command(s) observed${Number(summary?.verificationCommandErrors || 0) ? chalk.yellow(` │ ${summary.verificationCommandErrors} reported error(s)`) : ''}`);
+  if (Number(summary?.toolErrors || 0)) console.log(`  ${chalk.yellow('Attention')}   ${summary.toolErrors} tool error(s); inspect the iteration log before relying on the result.`);
+  if (summary?.stoppedReason) console.log(`  ${chalk.yellow('Stop reason')} ${summary.stoppedReason}`);
+  if (summary?.pushVerified === false) console.log(`  ${chalk.yellow('Git')}         push was not verified`);
+  console.log(`  ${chalk.gray('Logs')}        ${path.join(projectDataRoot(settings, project, configPath), 'logs')}`);
+  console.log(rule);
+}
+async function runWithTui(runnerArgs, settings, project, mode) {
+  const executable = await resolveCommand('pwsh.exe');
+  const previousSummaryId = (await latestIterationSummary(settings, project, configPath))?.id || '';
+  const started = Date.now(); let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration';
+  const spinner = ora({ text: `${stage} · 0m 00s`, color: 'cyan' }).start();
+  const update = setInterval(() => { spinner.text = `${stage} · ${durationText(Date.now() - started)}`; }, 1000);
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(executable, runnerArgs, { cwd: root, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+      let buffer = '';
+      const handleLine = line => {
+        const match = line.match(/^Iteration (\d+)\/(\d+).*pending tasks:\s*(\d+)/i);
+        if (match) stage = `Iteration ${match[1]} of ${match[2]} · ${match[3]} tasks pending`;
+        if (/^Iteration finished:/i.test(line)) stage = 'Verifying iteration result';
+        if (/^Daily project report:/i.test(line)) stage = 'Writing project report';
+      };
+      child.stdout.on('data', chunk => { const text = chunk.toString(); stdout += text; buffer += text; const lines = buffer.split(/\r?\n/); buffer = lines.pop(); lines.forEach(handleLine); });
+      child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+      child.once('error', reject); child.once('close', code => resolve({ code, stdout, stderr }));
+    });
+    clearInterval(update);
+    if (result.code === 0) spinner.succeed(`Development run finished · ${durationText(Date.now() - started)}`);
+    else spinner.fail(`Development runner exited with code ${result.code}`);
+    const summary = await latestIterationSummary(settings, project, configPath);
+    if (summary && summary.id !== previousSummaryId) showRunSummary(summary, settings, project);
+    else if (result.code !== 0) console.log(chalk.red((result.stderr || result.stdout || 'No iteration summary was written.').trim()));
+    return result.code === 0;
+  } catch (error) {
+    clearInterval(update); spinner.fail('Development runner could not start.'); console.log(chalk.red(error.message)); return false;
+  }
 }
 async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [], activeAccountId: '', reasoning: {} }; settings.openCode.accounts ||= []; migrateProfiles(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the legacy setup wizard once or pass --config <file>. ${error.message}`); } }
 async function save(settings) { await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
@@ -280,7 +333,7 @@ async function runRunner(settings, mode) {
   if (!(await yesNo(mode === 'continuous' ? 'Start continuous development?' : 'Run one development iteration?'))) return;
   const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-ShowProgress', mode === 'continuous' ? '-Continuous' : '-Once'];
   if (mode === 'continuous' && Number(profile.runControls?.maxIterations || 0) > 0) runnerArgs.push('-MaxIterations', String(profile.runControls.maxIterations));
-  try { await execute('pwsh.exe', runnerArgs, root, true); } catch (error) { console.log(chalk.yellow(`Runner ended: ${error.message}`)); }
+  await runWithTui(runnerArgs, settings, project, mode);
   return pause();
 }
 async function developmentMenu(settings) { const action = await pick('Development', [{ name: 'Run one iteration', value: 'once' }, { name: 'Run continuously', value: 'continuous' }, { name: 'Project preflight (no agent)', value: 'preflight' }]); if (action === 'preflight') await runPreflight(settings); else if (action) await runRunner(settings, action); }
