@@ -143,8 +143,16 @@ async function profileScreen(settings, profile) {
   while (true) {
     header(settings); console.log(chalk.bold('PROFILE DETAILS')); console.log(`  Model      ${chalk.cyan(profile.model)}`); console.log(`  Account    ${profile.credentialLabel || 'Not selected'}`); console.log(`  Type       ${profile.policy}`); console.log(`  Reasoning  ${profile.reasoningVariant || 'provider default'}`); console.log(`  Limits     ${limitSummary(profile)}`); console.log(`  Data       ${usageSourceSummary(profile)}\n`);
     const limitAction = profile.policy === 'oauth-managed' ? { name: 'Provider usage information', value: 'limits' } : { name: 'Configure limits', value: 'limits' };
-    const action = await pick('Profile actions', [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }, limitAction, { name: 'Configure usage data source', value: 'source' }, { name: 'Configure local run guard', value: 'guard' }]);
+    const canDelete = settings.openCode.profiles.length > 1;
+    const actions = [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }, limitAction, { name: 'Configure usage data source', value: 'source' }, { name: 'Configure local run guard', value: 'guard' }];
+    if (canDelete) actions.push({ name: chalk.red('Remove this profile'), value: 'remove' });
+    const action = await pick('Profile actions', actions);
     if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'limits') await configureLimits(settings, profile); if (action === 'source') await configureUsageSource(settings, profile); if (action === 'guard') await configureRunGuard(settings, profile);
+    if (action === 'remove' && await yesNo(`Remove profile '${profile.model}'? This does not disconnect or delete the OpenCode account.`)) {
+      settings.openCode.profiles = settings.openCode.profiles.filter(item => item.id !== profile.id);
+      if (settings.openCode.activeProfileId === profile.id) applyProfile(settings, settings.openCode.profiles[0]);
+      await save(settings); console.log(chalk.green('Profile removed.')); await pause(); return;
+    }
   }
 }
 async function createProfile(settings) {
