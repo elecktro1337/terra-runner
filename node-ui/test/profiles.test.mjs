@@ -43,3 +43,8 @@ test('migrates legacy API profiles with their existing budget limits', () => {
   assert.equal(profile.limits.mode, 'balance');
   assert.equal(profile.limits.balance.minimumUsd, 5);
 });
+test('keeps a local run guard independently from provider usage', () => {
+  const settings = { openCode: { activeProfileId: 'oauth', profiles: [{ id: 'oauth', model: 'openai/gpt', policy: 'oauth-managed', runControls: { maxIterations: 7 } }], accounts: [] } };
+  const [profile] = migrateProfiles(settings);
+  assert.equal(profile.runControls.maxIterations, 7);
+});

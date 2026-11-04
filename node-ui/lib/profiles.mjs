@@ -30,7 +30,7 @@ export function profileFrom(model, account = null, reasoningVariant = '', showTh
     provider: modelProvider(parsed.model),
     credentialId: policy === 'local' ? '' : String(account?.credentialId || ''),
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(account?.label || ''),
-    policy, reasoningVariant: variant, limits: null,
+    policy, reasoningVariant: variant, limits: null, runControls: { maxIterations: 0 },
     showThinking: Boolean(showThinking)
   };
 }
@@ -46,6 +46,7 @@ export function normalizeProfile(profile) {
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(profile?.credentialLabel || ''),
     policy, reasoningVariant: String(profile?.reasoningVariant || parsed.reasoningVariant || ''),
     limits: profile?.limits && typeof profile.limits === 'object' ? structuredClone(profile.limits) : null,
+    runControls: { maxIterations: Number(profile?.runControls?.maxIterations || 0) || 0 },
     showThinking: Boolean(profile?.showThinking)
   };
 }
