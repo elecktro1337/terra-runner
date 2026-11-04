@@ -233,14 +233,6 @@ async function configureLimits(settings, profile) {
   if (mode === 'balance' || mode === 'hybrid') { limits.balance.minimumUsd = numberValue(await input({ message: 'Minimum balance (USD)', default: String(limits.balance.minimumUsd ?? 5) }), Number(limits.balance.minimumUsd ?? 5)); limits.balance.iterationReserveUsd = numberValue(await input({ message: 'Next-run reserve (USD)', default: String(limits.balance.iterationReserveUsd ?? .5) }), Number(limits.balance.iterationReserveUsd ?? .5)); }
   profile.limits = limits; if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green('Profile limits saved.')); return pause();
 }
-async function configureRunGuard(settings, profile) {
-  const current = Number(profile.runControls?.maxIterations || 0);
-  console.log(chalk.yellow('\nThis is a local safety guard, not a provider quota.'));
-  console.log(chalk.gray('It stops continuous development after the selected number of iterations. Enter 0 to leave it unlimited.'));
-  const value = numberValue(await input({ message: 'Maximum iterations in one continuous run', default: String(current) }), current);
-  profile.runControls = { ...(profile.runControls || {}), maxIterations: Math.floor(value) };
-  await save(settings); console.log(chalk.green('Local run guard saved.')); return pause();
-}
 async function configureSnapshot(settings, profile) {
   if (profile.policy === 'local') { console.log(chalk.green('\nLocal profile: snapshots and provider limits are not applicable.')); return pause(); }
   const current = profile.usageSource?.kind === 'snapshot' ? profile.usageSource : { unit: 'percent', remaining: null, reserve: 5, maxAgeMinutes: 120 };
@@ -380,10 +372,9 @@ async function profileScreen(settings, profile) {
     const actions = [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }];
     if (profile.policy !== 'local') actions.push({ name: 'Configure provider snapshot', value: 'snapshot' }, { name: 'Configure limits', value: 'policy' });
     if (profile.policy === 'api' && profile.usageSource?.unit === 'usd') actions.push({ name: 'Configure local OpenCode cost estimate', value: 'cost-estimate' });
-    actions.push({ name: 'Configure local run guard', value: 'guard' });
     if (canDelete) actions.push({ name: chalk.red('Remove this profile'), value: 'remove' });
     const action = await pick('Profile actions', actions);
-    if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'snapshot') await configureSnapshot(settings, profile); if (action === 'policy') await configureLimitPolicy(settings, profile); if (action === 'cost-estimate') await configureOpenCodeCostEstimate(settings, profile); if (action === 'guard') await configureRunGuard(settings, profile);
+    if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'snapshot') await configureSnapshot(settings, profile); if (action === 'policy') await configureLimitPolicy(settings, profile); if (action === 'cost-estimate') await configureOpenCodeCostEstimate(settings, profile);
     if (action === 'remove' && await yesNo(`Remove profile '${profile.model}'? This does not disconnect or delete the OpenCode account.`)) {
       settings.openCode.profiles = settings.openCode.profiles.filter(item => item.id !== profile.id);
       if (settings.openCode.activeProfileId === profile.id) applyProfile(settings, settings.openCode.profiles[0]);
@@ -410,6 +401,13 @@ async function runPreflight(settings) { header(settings); console.log(chalk.bold
   try { checks.push(['OpenCode command', true, await resolveCommand(settings.openCodeCommand || 'opencode')]); } catch (error) { checks.push(['OpenCode command', false, error.message]); }
   const fresh = snapshotFreshness(profile); checks.push(['Provider snapshot', fresh.ok, fresh.detail]);
   for (const [name, ok, detail] of checks) console.log(`  ${ok ? chalk.green('✓') : chalk.red('×')} ${chalk.bold(name)}  ${detail}`); return pause(); }
+async function chooseRunIterationLimit() {
+  while (true) {
+    const raw = String(await input({ message: 'Iterations for this run (0 = until a safety stop)', default: '0' })).trim();
+    if (/^\d+$/.test(raw) && Number(raw) <= 1000) return Number(raw);
+    console.log(chalk.yellow('Enter a whole number from 0 to 1000.'));
+  }
+}
 async function runRunner(settings, mode) {
   const profile = activeProfile(settings);
   if (!profile) { console.log(chalk.yellow('Create and select a profile first.')); return pause(); }
@@ -422,12 +420,10 @@ async function runRunner(settings, mode) {
   applyProfile(settings, profile); await save(settings);
   const project = selectedProject(settings);
   if (!project) { console.log(chalk.red('No project is configured.')); return pause(); }
-  if (!(await yesNo(mode === 'continuous' ? 'Start continuous development?' : 'Run one development iteration?'))) return;
+  const limit = mode === 'continuous' ? await chooseRunIterationLimit() : 1;
+  if (!(await yesNo(mode === 'continuous' ? (limit ? `Start continuous development for up to ${limit} iteration(s)?` : 'Start continuous development until a safety stop?') : 'Run one development iteration?'))) return;
   const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-UiEvents', mode === 'continuous' ? '-Continuous' : '-Once'];
-  if (mode === 'continuous') {
-    const limit = Number(profile.runControls?.maxIterations || 0);
-    if (limit > 0) runnerArgs.push('-MaxIterations', String(limit)); else runnerArgs.push('-UnlimitedIterations');
-  }
+  if (mode === 'continuous') { if (limit > 0) runnerArgs.push('-MaxIterations', String(limit)); else runnerArgs.push('-UnlimitedIterations'); }
   await runWithTui(runnerArgs, settings, project, mode);
   return pause();
 }
