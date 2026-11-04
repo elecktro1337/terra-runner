@@ -112,16 +112,19 @@ async function configureRunGuard(settings, profile) {
 async function configureSnapshot(settings, profile) {
   if (profile.policy === 'local') { console.log(chalk.green('\nLocal profile: snapshots and provider limits are not applicable.')); return pause(); }
   const current = profile.usageSource?.kind === 'snapshot' ? profile.usageSource : { unit: 'percent', remaining: null, reserve: 5, maxAgeMinutes: 120 };
-  const unit = await pick('Snapshot unit', [{ name: 'Percent remaining (0–100)', value: 'percent' }, { name: 'Money remaining (USD)', value: 'usd' }]); if (!unit) return;
+  const unit = await pick('Balance/quota snapshot unit', [{ name: 'Percent remaining (0–100)', value: 'percent' }, { name: 'Money remaining (USD)', value: 'usd' }]); if (!unit) return;
   const defaultRemaining = current.remaining == null ? (unit === 'percent' ? 100 : 0) : current.remaining;
   const remaining = numberValue(await input({ message: unit === 'percent' ? 'Provider-reported remaining percent' : 'Provider-reported remaining USD', default: String(defaultRemaining) }), Number(defaultRemaining));
   if (unit === 'percent' && remaining > 100) { console.log(chalk.yellow('Percent cannot exceed 100.')); return pause(); }
   const reserveDefault = unit === 'percent' ? (current.unit === 'percent' ? current.reserve ?? 5 : 5) : (current.unit === 'usd' ? current.reserve ?? 0.5 : 0.5);
-  const reserve = numberValue(await input({ message: unit === 'percent' ? 'Stop at or below this percent' : 'Stop at or below this USD reserve', default: String(reserveDefault) }), Number(reserveDefault));
-  const maxAgeMinutes = numberValue(await input({ message: 'Require a refreshed snapshot after this many minutes', default: String(current.maxAgeMinutes ?? 120) }), Number(current.maxAgeMinutes ?? 120));
+  const reserve = numberValue(await input({ message: unit === 'percent' ? 'Hard stop at or below this percent' : 'Hard stop at or below this USD reserve', default: String(reserveDefault) }), Number(reserveDefault));
+  const maxAgeMinutes = numberValue(await input({ message: 'Snapshot refresh interval (minutes)', default: String(current.maxAgeMinutes ?? 120) }), Number(current.maxAgeMinutes ?? 120));
   if (maxAgeMinutes < 1) { console.log(chalk.yellow('Refresh interval must be at least one minute.')); return pause(); }
   profile.usageSource = { kind: 'snapshot', unit, remaining, reserve, maxAgeMinutes, observedAt: new Date().toISOString() };
-  if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green('Provider snapshot saved.')); return pause();
+  if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings);
+  const persisted = JSON.parse(await fs.readFile(configPath, 'utf8')); const saved = persisted.openCode?.profiles?.find(item => item.id === profile.id)?.usageSource;
+  if (!saved || Number(saved.remaining) !== remaining || saved.unit !== unit) throw new Error('Snapshot save verification failed. Reopen the profile before starting development.');
+  console.log(chalk.green('Provider snapshot and stop limit saved.')); return pause();
 }
 async function configureUsageSource(settings, profile) {
   if (profile.policy === 'local') { console.log(chalk.green('\nLocal profile: no provider usage or balance source is needed.')); return pause(); }
@@ -163,7 +166,7 @@ async function profileScreen(settings, profile) {
     header(settings); console.log(chalk.bold('PROFILE DETAILS')); console.log(`  Model      ${chalk.cyan(profile.model)}`); console.log(`  Account    ${profile.credentialLabel || 'Not selected'}`); console.log(`  Type       ${profile.policy}`); console.log(`  Reasoning  ${profile.reasoningVariant || 'provider default'}`); console.log(`  Limits     ${limitSummary(profile)}`); console.log(`  Data       ${usageSourceSummary(profile)}\n`);
     const canDelete = settings.openCode.profiles.length > 1;
     const actions = [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }];
-    if (profile.policy !== 'local') actions.push({ name: 'Configure provider snapshot and limit', value: 'snapshot' });
+    if (profile.policy !== 'local') actions.push({ name: 'Configure provider snapshot and stop limits', value: 'snapshot' });
     actions.push({ name: 'Configure local run guard', value: 'guard' });
     if (canDelete) actions.push({ name: chalk.red('Remove this profile'), value: 'remove' });
     const action = await pick('Profile actions', actions);
