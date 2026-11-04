@@ -7,6 +7,14 @@ $cmd = $Rest[0]
 if ($env:TERRA_MOCK_CALL_LOG) {
     [System.IO.File]::AppendAllText($env:TERRA_MOCK_CALL_LOG,($Rest -join ' ') + "`n",[System.Text.UTF8Encoding]::new($false))
 }
+if ($cmd -eq 'auth') {
+    if ($Rest.Count -ge 3 -and $Rest[1] -eq 'list' -and $Rest -contains '--format') {
+        '[{"id":"openai","name":"OpenAI","connections":[{"type":"credential","id":"mock-oauth","label":"Mock OAuth","method":"oauth"},{"type":"credential","id":"mock-key","label":"Mock API","method":"key"}]}]'
+        exit 0
+    }
+    if ($Rest.Count -ge 2 -and $Rest[1] -eq 'switch') { exit 0 }
+    exit 2
+}
 if ($cmd -eq 'stats') {
     if ($Rest -contains '--help') { 'Stats options: --days --json'; exit 0 }
     if ($env:TERRA_MOCK_BROKEN_STATS -eq '1') { 'unavailable'; exit 0 }

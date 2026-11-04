@@ -89,10 +89,29 @@ function Ensure-OpenCodeSettings($Settings) {
 function Invoke-OpenCodeText([string[]]$Arguments) {
     $command = [string]$script:Settings.openCodeCommand
     if ([string]::IsNullOrWhiteSpace($command)) { throw 'OpenCode command is not configured.' }
+    $resolved = @(); $prefixArguments = @()
+    if ([IO.Path]::IsPathRooted($command) -or $command -match '[\\/]') {
+        if (-not (Test-Path -LiteralPath $command -PathType Leaf)) { throw "OpenCode command '$command' was not found." }
+        $commandPath = (Resolve-Path -LiteralPath $command).ProviderPath
+        if ([IO.Path]::GetExtension($commandPath) -eq '.ps1') {
+            $resolved = @((Join-Path $PSHOME 'pwsh.exe'))
+            $prefixArguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$commandPath)
+        } else { $resolved = @($commandPath) }
+    } else {
+        $matches = @(Get-Command -Name $command -All -ErrorAction SilentlyContinue)
+        $application = @($matches | Where-Object { $_.CommandType -eq 'Application' } | Select-Object -First 1)
+        if ($application.Count) { $resolved = @([string]$application[0].Path) }
+        else {
+            $scriptCommand = @($matches | Where-Object { $_.CommandType -eq 'ExternalScript' } | Select-Object -First 1)
+            if (-not $scriptCommand.Count) { throw "OpenCode command '$command' has no directly executable application path." }
+            $resolved = @((Join-Path $PSHOME 'pwsh.exe'))
+            $prefixArguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',[string]$scriptCommand[0].Path)
+        }
+    }
     $psi = [Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $command; $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    $psi.FileName = $resolved[0]; $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
     $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.WorkingDirectory = $script:Root
-    foreach ($argument in $Arguments) { [void]$psi.ArgumentList.Add($argument) }
+    foreach ($argument in @($prefixArguments + $Arguments)) { [void]$psi.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::Start($psi)
     $stdout = $process.StandardOutput.ReadToEnd(); $stderr = $process.StandardError.ReadToEnd(); $process.WaitForExit()
     if ($process.ExitCode -ne 0) { throw "OpenCode $($Arguments -join ' ') failed: $stderr" }

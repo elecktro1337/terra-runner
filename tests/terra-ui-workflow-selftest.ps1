@@ -64,6 +64,13 @@ try {
     $projectState = Join-Path $tempRoot 'state/ui-project'
     if (-not (Test-Path -LiteralPath (Join-Path $projectState 'STOP')) -or -not (Test-Path -LiteralPath (Join-Path $projectState 'ABORT'))) { throw 'Stop/abort workflow did not create both control files.' }
     if (-not (Test-Path -LiteralPath (Join-Path $projectState 'reports/2026-11-03.md'))) { throw 'Report workflow did not create the requested report.' }
+    # Account picker must work with the PowerShell mock shim as well as the npm .cmd shim used in production.
+    $answers.Clear()
+    foreach ($answer in @('4','5','r','','1','','q','1','80','5','120','','0','0','0')) { $answers.Enqueue($answer) }
+    & (Join-Path $root 'terra-ui.ps1') -Config $config
+    if ($answers.Count -ne 0) { throw 'The account picker did not consume the expected workflow inputs.' }
+    $saved = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json -AsHashtable
+    if ($saved.openCode.activeAccountId -ne 'openai/mock-oauth' -or $saved.openCode.accounts.Count -ne 2 -or -not $saved.openCode.accounts[0].quota.configured) { throw 'OpenCode account or quota selection was not persisted.' }
     Write-Host 'PASS: actual UI workflow covers development, projects, budgets, settings, reports, and controls.' -ForegroundColor Green
 }
 finally {
