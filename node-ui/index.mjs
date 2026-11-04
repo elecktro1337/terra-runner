@@ -9,6 +9,7 @@ import chalk from 'chalk';
 import figlet from 'figlet';
 import ora from 'ora';
 import { activeProfile, applyProfile, isLocalModel, migrateProfiles, profileFrom } from './lib/profiles.mjs';
+import { activeProject, normalizeProjects, validateProjectId } from './lib/projects.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -65,7 +66,7 @@ async function refreshOpenCode(settings) {
     spinner.succeed(`OpenCode refreshed: ${accounts.length} account(s), ${models.length} model(s).`); return { accounts, models };
   } catch (error) { spinner.fail('OpenCode refresh failed.'); throw error; }
 }
-function selectedProject(settings) { return settings.projects?.[0] || null; }
+function selectedProject(settings) { return activeProject(settings); }
 function limitSummary(profile) {
   if (!profile) return 'No profile selected'; if (profile.policy === 'local') return 'No provider limits'; if (profile.policy === 'oauth-managed') return profile.runControls?.maxIterations > 0 ? `Provider-managed OAuth · local guard ${profile.runControls.maxIterations} iteration(s)` : 'Provider-managed OAuth usage';
   const limits = profile.limits || {}; const floor = Number(limits.balance?.minimumUsd || 0).toFixed(2);
@@ -159,8 +160,47 @@ async function profilesMenu(settings) {
 }
 async function runRunner(settings, mode) { const profile = activeProfile(settings); if (!profile) { console.log(chalk.yellow('Create and select a profile first.')); return pause(); } applyProfile(settings, profile); await save(settings); const project = selectedProject(settings); if (!project) { console.log(chalk.red('No project is configured.')); return pause(); } if (mode !== 'dry' && !(await yesNo(mode === 'continuous' ? 'Start continuous development?' : 'Run one development iteration?'))) return; const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-ShowProgress', mode === 'continuous' ? '-Continuous' : mode === 'dry' ? '-DryRun' : '-Once']; if (mode === 'continuous' && Number(profile.runControls?.maxIterations || 0) > 0) runnerArgs.push('-MaxIterations', String(profile.runControls.maxIterations)); try { await execute('pwsh.exe', runnerArgs, root, true); } catch (error) { console.log(chalk.yellow(`Runner ended: ${error.message}`)); } return pause(); }
 async function developmentMenu(settings) { const action = await pick('Development', [{ name: 'Run one iteration', value: 'once' }, { name: 'Run continuously', value: 'continuous' }, { name: 'Validate project (dry run)', value: 'dry' }]); if (action) await runRunner(settings, action); }
+async function readProjectId(message, projects, currentId = '') {
+  while (true) { const id = (await input({ message, default: currentId })).trim(); const error = validateProjectId(id, projects, currentId); if (!error) return id; console.log(chalk.yellow(error)); }
+}
+async function detectBranch(projectPath, fallback = '') {
+  try { return (await execute('git', ['-C', projectPath, 'branch', '--show-current'])).trim() || fallback; } catch { return fallback; }
+}
+async function editProject(settings, project, isNew = false) {
+  const projects = normalizeProjects(settings); console.log(chalk.bold(isNew ? '\nNEW PROJECT' : '\nEDIT PROJECT'));
+  const id = await readProjectId('Project ID', projects, isNew ? '' : project.id);
+  const projectPath = (await input({ message: 'Absolute project path', default: project.path || '' })).trim();
+  try { if (!path.isAbsolute(projectPath)) throw new Error(); const state = await fs.stat(projectPath); if (!state.isDirectory()) throw new Error(); } catch { console.log(chalk.red('The project path must be an existing absolute directory.')); return pause(); }
+  const detected = await detectBranch(projectPath, project.branch || '');
+  const branch = (await input({ message: 'Git branch', default: detected })).trim();
+  const roadmap = (await input({ message: 'Roadmap filename', default: project.roadmap || 'ROADMAP.md' })).trim();
+  const progress = (await input({ message: 'Progress filename', default: project.progress || 'PROGRESS.md' })).trim();
+  const updated = { id, path: projectPath, branch, roadmap, progress };
+  if (isNew) projects.push(updated); else Object.assign(project, updated);
+  settings.activeProjectId = id; await save(settings); console.log(chalk.green(`Project '${id}' saved and selected.`)); return pause();
+}
 async function projectsMenu(settings) {
-  header(settings); const project = selectedProject(settings); console.log(chalk.bold('PROJECT')); console.log(`  ID        ${project?.id || 'not configured'}`); console.log(`  Path      ${project?.path || 'not configured'}`); console.log(`  Branch    ${project?.branch || 'not configured'}`); console.log(`  Roadmap   ${project?.roadmap || 'not configured'}`); console.log(`  Progress  ${project?.progress || 'not configured'}`); console.log(chalk.gray('\nMultiple-project editing will be added here without changing the selected project implicitly.')); return pause();
+  while (true) {
+    header(settings); console.log(chalk.bold('PROJECTS')); const projects = normalizeProjects(settings);
+    const action = await pick('Select a project or manage its configuration', [
+      ...projects.map(project => ({ name: `${project.id === settings.activeProjectId ? chalk.green('●') : ' '} ${project.id}  ${chalk.gray(`— ${project.path}`)}`, value: `project:${project.id}` })),
+      { name: chalk.cyan('+ Add project'), value: 'add' }
+    ]);
+    if (!action) return;
+    if (action === 'add') { await editProject(settings, { path: '', branch: '', roadmap: '', progress: '' }, true); continue; }
+    const project = projects.find(item => item.id === action.slice('project:'.length)); if (!project) continue;
+    const detail = await pick(`Project: ${project.id}`, [
+      { name: project.id === settings.activeProjectId ? '● Selected project' : 'Use this project', value: 'use' }, { name: 'Edit project configuration', value: 'edit' }, { name: chalk.red('Remove project configuration'), value: 'remove' }
+    ]);
+    if (detail === 'use') { settings.activeProjectId = project.id; await save(settings); console.log(chalk.green(`Selected '${project.id}'.`)); await pause(); }
+    if (detail === 'edit') await editProject(settings, project);
+    if (detail === 'remove') {
+      if (projects.length === 1) { console.log(chalk.yellow('Keep at least one project configured.')); await pause(); continue; }
+      if (await yesNo(`Remove only the '${project.id}' project configuration? Its files, Git repository, logs, and reports will remain untouched.`)) {
+        settings.projects = projects.filter(item => item.id !== project.id); normalizeProjects(settings); await save(settings); console.log(chalk.green('Project configuration removed.')); await pause();
+      }
+    }
+  }
 }
 async function reportsMenu(settings) {
   const project = selectedProject(settings); if (!project) return pause();
