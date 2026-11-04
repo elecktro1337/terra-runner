@@ -69,14 +69,14 @@ async function refreshOpenCode(settings) {
 }
 function selectedProject(settings) { return activeProject(settings); }
 function limitSummary(profile) {
-  if (!profile) return 'No profile selected'; if (profile.policy === 'local') return 'No provider limits'; if (profile.policy === 'oauth-managed') return profile.runControls?.maxIterations > 0 ? `Provider-managed OAuth · local guard ${profile.runControls.maxIterations} iteration(s)` : 'Provider-managed OAuth usage';
-  const limits = profile.limits || {}; const floor = Number(limits.balance?.minimumUsd || 0).toFixed(2);
-  return limits.mode === 'daily' ? `Daily $${Number(limits.dailyUsd || 0).toFixed(2)}` : limits.mode === 'hybrid' ? `Daily $${Number(limits.dailyUsd || 0).toFixed(2)} + floor $${floor}` : limits.mode === 'unlimited' ? 'Unlimited' : `Balance floor $${floor}`;
+  if (!profile) return 'No profile selected'; if (profile.policy === 'local') return 'No provider limits';
+  const snapshot = profile.usageSource || {}; if (snapshot.remaining == null) return 'Snapshot required before development';
+  const unit = snapshot.unit === 'usd' ? 'USD' : '%'; return `Snapshot ${snapshot.remaining} ${unit}; stop at ${snapshot.reserve ?? 0} ${unit}`;
 }
 function usageSourceSummary(profile) {
-  const source = profile?.usageSource || {}; if (source.kind === 'provider-managed') return 'Provider-managed (no local quota API)';
-  if (source.kind === 'external-command') return `External read-only command: ${source.command || 'not configured'}`;
-  if (source.kind === 'local-estimate') return 'Local OpenCode cost estimate'; return 'Not applicable';
+  const source = profile?.usageSource || {}; if (source.kind !== 'snapshot') return 'Not applicable';
+  const unit = source.unit === 'usd' ? 'USD' : 'percent'; const value = source.remaining == null ? 'not set' : `${source.remaining} ${unit}`;
+  return `Snapshot: ${value}; reserve ${source.reserve ?? 0} ${unit}; refresh within ${source.maxAgeMinutes ?? 120} min`;
 }
 function profileKindLabel(profile) {
   if (profile.policy === 'local') return chalk.green('[LOCAL]');
@@ -108,6 +108,20 @@ async function configureRunGuard(settings, profile) {
   const value = numberValue(await input({ message: 'Maximum iterations in one continuous run', default: String(current) }), current);
   profile.runControls = { ...(profile.runControls || {}), maxIterations: Math.floor(value) };
   await save(settings); console.log(chalk.green('Local run guard saved.')); return pause();
+}
+async function configureSnapshot(settings, profile) {
+  if (profile.policy === 'local') { console.log(chalk.green('\nLocal profile: snapshots and provider limits are not applicable.')); return pause(); }
+  const current = profile.usageSource?.kind === 'snapshot' ? profile.usageSource : { unit: 'percent', remaining: null, reserve: 5, maxAgeMinutes: 120 };
+  const unit = await pick('Snapshot unit', [{ name: 'Percent remaining (0–100)', value: 'percent' }, { name: 'Money remaining (USD)', value: 'usd' }]); if (!unit) return;
+  const defaultRemaining = current.remaining == null ? (unit === 'percent' ? 100 : 0) : current.remaining;
+  const remaining = numberValue(await input({ message: unit === 'percent' ? 'Provider-reported remaining percent' : 'Provider-reported remaining USD', default: String(defaultRemaining) }), Number(defaultRemaining));
+  if (unit === 'percent' && remaining > 100) { console.log(chalk.yellow('Percent cannot exceed 100.')); return pause(); }
+  const reserveDefault = unit === 'percent' ? (current.unit === 'percent' ? current.reserve ?? 5 : 5) : (current.unit === 'usd' ? current.reserve ?? 0.5 : 0.5);
+  const reserve = numberValue(await input({ message: unit === 'percent' ? 'Stop at or below this percent' : 'Stop at or below this USD reserve', default: String(reserveDefault) }), Number(reserveDefault));
+  const maxAgeMinutes = numberValue(await input({ message: 'Require a refreshed snapshot after this many minutes', default: String(current.maxAgeMinutes ?? 120) }), Number(current.maxAgeMinutes ?? 120));
+  if (maxAgeMinutes < 1) { console.log(chalk.yellow('Refresh interval must be at least one minute.')); return pause(); }
+  profile.usageSource = { kind: 'snapshot', unit, remaining, reserve, maxAgeMinutes, observedAt: new Date().toISOString() };
+  if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green('Provider snapshot saved.')); return pause();
 }
 async function configureUsageSource(settings, profile) {
   if (profile.policy === 'local') { console.log(chalk.green('\nLocal profile: no provider usage or balance source is needed.')); return pause(); }
@@ -147,14 +161,13 @@ async function configureType(settings, profile) {
 async function profileScreen(settings, profile) {
   while (true) {
     header(settings); console.log(chalk.bold('PROFILE DETAILS')); console.log(`  Model      ${chalk.cyan(profile.model)}`); console.log(`  Account    ${profile.credentialLabel || 'Not selected'}`); console.log(`  Type       ${profile.policy}`); console.log(`  Reasoning  ${profile.reasoningVariant || 'provider default'}`); console.log(`  Limits     ${limitSummary(profile)}`); console.log(`  Data       ${usageSourceSummary(profile)}\n`);
-    const limitAction = profile.policy === 'oauth-managed' ? { name: 'Provider usage information', value: 'limits' } : { name: 'Configure limits', value: 'limits' };
     const canDelete = settings.openCode.profiles.length > 1;
-    const actions = [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }, limitAction];
-    if (profile.policy === 'api') actions.push({ name: 'Advanced: external balance adapter', value: 'source' });
+    const actions = [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }];
+    if (profile.policy !== 'local') actions.push({ name: 'Configure provider snapshot and limit', value: 'snapshot' });
     actions.push({ name: 'Configure local run guard', value: 'guard' });
     if (canDelete) actions.push({ name: chalk.red('Remove this profile'), value: 'remove' });
     const action = await pick('Profile actions', actions);
-    if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'limits') await configureLimits(settings, profile); if (action === 'source') await configureUsageSource(settings, profile); if (action === 'guard') await configureRunGuard(settings, profile);
+    if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'snapshot') await configureSnapshot(settings, profile); if (action === 'guard') await configureRunGuard(settings, profile);
     if (action === 'remove' && await yesNo(`Remove profile '${profile.model}'? This does not disconnect or delete the OpenCode account.`)) {
       settings.openCode.profiles = settings.openCode.profiles.filter(item => item.id !== profile.id);
       if (settings.openCode.activeProfileId === profile.id) applyProfile(settings, settings.openCode.profiles[0]);

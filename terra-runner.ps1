@@ -366,10 +366,7 @@ function Get-ActiveOpenCodeAccount($Config) {
 }
 function Get-OpenCodeUsageKind($Config) {
     $kind = [string](Read-Member (Get-ActiveOpenCodeAccount $Config) 'usageKind')
-    # `quota` was a v1.5 manual snapshot. OpenCode does not expose a dependable
-    # personal OAuth quota API, so it deliberately becomes provider-managed OAuth.
-    if ($kind -eq 'quota') { return 'oauth' }
-    if ($kind -notin @('balance','oauth','local')) { throw "Unsupported or unclassified OpenCode account usage kind '$kind'. Select a profile again." }
+    if ($kind -notin @('balance','quota','oauth','local')) { throw "Unsupported or unclassified OpenCode account usage kind '$kind'. Select a profile again." }
     return $kind
 }
 function New-ZeroUsage([string]$Scope) {
@@ -447,6 +444,7 @@ function Set-BalanceSnapshot([string]$File, [double]$Amount, $Usage, [bool]$Over
 function Get-BudgetSnapshot([string]$Executable, [string]$Directory, $Budget, [string]$Root) {
     $account = Get-ActiveOpenCodeAccount $cfg
     $kind = Get-OpenCodeUsageKind $cfg
+    if ($kind -eq 'quota') { return (Get-QuotaSnapshot $account) }
     if ($kind -eq 'oauth') { return (New-OAuthSnapshot) }
     if ($kind -eq 'local') { return (New-LocalSnapshot) }
     $mode = Get-BudgetMode $Budget

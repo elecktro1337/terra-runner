@@ -31,13 +31,21 @@ test('applying a local profile creates a local no-limit account', () => {
   applyProfile(settings, profile);
   assert.equal(settings.openCode.accounts[0].usageKind, 'local');
 });
-test('applying an OAuth profile replaces a legacy manual quota policy', () => {
+test('applying a cloud profile uses the unified snapshot policy', () => {
   const settings = { openCode: { accounts: [{ id: 'openai:c', provider: 'openai', credentialId: 'c', quota: { configured: true } }], profiles: [] } };
   const profile = profileFrom('openai/gpt-5.6-terra', { provider: 'openai', credentialId: 'c', label: 'Codex', authMethod: 'oauth' });
   settings.openCode.profiles.push(profile);
   applyProfile(settings, profile);
-  assert.equal(settings.openCode.accounts[0].usageKind, 'oauth');
-  assert.equal('quota' in settings.openCode.accounts[0], false);
+  assert.equal(settings.openCode.accounts[0].usageKind, 'quota');
+  assert.equal(settings.openCode.accounts[0].quota.configured, false);
+});
+test('applies a configured percentage snapshot to the active account', () => {
+  const settings = { openCode: { accounts: [{ id: 'openai:c', provider: 'openai', credentialId: 'c' }], profiles: [] } };
+  const profile = profileFrom('openai/gpt', { provider: 'openai', credentialId: 'c', authMethod: 'key' });
+  profile.usageSource = { kind: 'snapshot', unit: 'percent', remaining: 42, reserve: 5, maxAgeMinutes: 60, observedAt: '2026-11-04T12:00:00Z' };
+  settings.openCode.profiles.push(profile); applyProfile(settings, profile);
+  assert.equal(settings.openCode.accounts[0].quota.remaining, 42);
+  assert.equal(settings.openCode.accounts[0].quota.configured, true);
 });
 test('migrates legacy API profiles with their existing budget limits', () => {
   const settings = { budget: { mode: 'balance', balance: { minimumUsd: 5 } }, openCode: { activeProfileId: 'api', profiles: [{ id: 'api', model: 'openai/gpt', policy: 'api' }], accounts: [] } };
@@ -50,12 +58,12 @@ test('keeps a local run guard independently from provider usage', () => {
   const [profile] = migrateProfiles(settings);
   assert.equal(profile.runControls.maxIterations, 7);
 });
-test('classifies default usage sources without storing credentials', () => {
+test('creates snapshots for cloud profiles without storing credentials', () => {
   const oauth = profileFrom('openai/gpt', { authMethod: 'oauth' });
   const api = profileFrom('openai/gpt', { authMethod: 'key' });
   const local = profileFrom('ollama/qwen3');
-  assert.equal(oauth.usageSource.kind, 'provider-managed');
-  assert.equal(api.usageSource.kind, 'local-estimate');
+  assert.equal(oauth.usageSource.kind, 'snapshot');
+  assert.equal(api.usageSource.kind, 'snapshot');
   assert.equal(local.usageSource.kind, 'none');
 });
 test('keeps an explicit active project and validates project IDs', () => {

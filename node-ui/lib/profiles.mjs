@@ -31,7 +31,7 @@ export function profileFrom(model, account = null, reasoningVariant = '', showTh
     credentialId: policy === 'local' ? '' : String(account?.credentialId || ''),
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(account?.label || ''),
     policy, reasoningVariant: variant, limits: null, runControls: { maxIterations: 0 },
-    usageSource: { kind: policy === 'oauth-managed' ? 'provider-managed' : policy === 'local' ? 'none' : 'local-estimate' },
+    usageSource: policy === 'local' ? { kind: 'none' } : { kind: 'snapshot', unit: 'percent', remaining: null, reserve: 5, maxAgeMinutes: 120, observedAt: '' },
     showThinking: Boolean(showThinking)
   };
 }
@@ -48,7 +48,10 @@ export function normalizeProfile(profile) {
     policy, reasoningVariant: String(profile?.reasoningVariant || parsed.reasoningVariant || ''),
     limits: profile?.limits && typeof profile.limits === 'object' ? structuredClone(profile.limits) : null,
     runControls: { maxIterations: Number(profile?.runControls?.maxIterations || 0) || 0 },
-    usageSource: { kind: String(profile?.usageSource?.kind || (policy === 'oauth-managed' ? 'provider-managed' : policy === 'local' ? 'none' : 'local-estimate')), command: String(profile?.usageSource?.command || ''), arguments: Array.isArray(profile?.usageSource?.arguments) ? [...profile.usageSource.arguments] : [] },
+    usageSource: policy === 'local' ? { kind: 'none' } : {
+      kind: 'snapshot', unit: String(profile?.usageSource?.unit || 'percent'), remaining: profile?.usageSource?.remaining ?? null,
+      reserve: Number(profile?.usageSource?.reserve ?? 5), maxAgeMinutes: Number(profile?.usageSource?.maxAgeMinutes ?? 120), observedAt: String(profile?.usageSource?.observedAt || '')
+    },
     showThinking: Boolean(profile?.showThinking)
   };
 }
@@ -103,8 +106,9 @@ export function applyProfile(settings, profile) {
   } else {
     const account = openCode.accounts.find(a => a.credentialId === profile.credentialId && a.provider === profile.provider);
     if (!account) throw new Error('The selected OpenCode credential is no longer available. Refresh profiles and select it again.');
-    account.usageKind = profile.policy === 'api' ? 'balance' : 'oauth';
-    delete account.quota;
+    account.usageKind = 'quota';
+    const snapshot = profile.usageSource || {};
+    account.quota = { configured: snapshot.kind === 'snapshot' && snapshot.remaining !== null, unit: snapshot.unit || 'percent', remaining: snapshot.remaining, reserve: snapshot.reserve ?? 5, maxAgeMinutes: snapshot.maxAgeMinutes ?? 120, observedAt: snapshot.observedAt || '' };
     openCode.activeAccountId = account.id;
   }
 }
