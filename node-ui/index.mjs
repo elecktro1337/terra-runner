@@ -123,7 +123,7 @@ function iterationCheckpointText(event) {
   return `Iteration ${event.iteration} complete | ${tasks} | ${durationText(Number(event.elapsedSeconds || 0) * 1000)} | ${commit}${stopped}`;
 }
 function showRunnerFailure(output) {
-  const text = String(output || ''); let title = 'DEVELOPMENT DID NOT START'; let reason = 'Terra Runner could not start the development run.'; let action = 'Open the project logs or run Project preflight, then try again.';
+  const text = String(output || ''); let title = 'DEVELOPMENT DID NOT START'; let reason = 'Terra Runner could not start the development run.'; let action = 'Open the project logs or run Project preflight, then try again.'; let detail = '';
   if (/working tree has uncommitted\/untracked changes/i.test(text)) {
     reason = 'The project has uncommitted or untracked files.';
     action = 'Review the changes, then commit, stash, or remove them before starting automated development.';
@@ -139,9 +139,12 @@ function showRunnerFailure(output) {
   } else if (/wrong Git branch/i.test(text)) {
     reason = 'The checked-out Git branch does not match this project profile.';
     action = 'Switch to the configured branch, then start again.';
+  } else {
+    const lines = text.split(/\r?\n/).map(line => line.trim().replace(/^\|\s?/, '')).filter(line => line && !/^Line \|$|^~+$|^Exception:$/.test(line));
+    detail = lines.reverse().find(line => !/^(at |CategoryInfo|FullyQualifiedErrorId|\+ CategoryInfo)/i.test(line)) || '';
   }
   console.log(`\n${chalk.red.bold(title)}`); console.log(rule);
-  console.log(`  ${chalk.bold('Reason')}  ${reason}`); console.log(`  ${chalk.bold('Next step')} ${action}`); console.log(rule);
+  console.log(`  ${chalk.bold('Reason')}  ${reason}`); if (detail) console.log(`  ${chalk.bold('Detail')}  ${detail.slice(0, 360)}`); console.log(`  ${chalk.bold('Next step')} ${action}`); console.log(rule);
 }
 async function runWithTui(runnerArgs, settings, project, mode) {
   const executable = await resolveCommand('pwsh.exe');
@@ -485,6 +488,7 @@ async function profilesMenu(settings) {
 async function runPreflight(settings) { header(settings); console.log(chalk.bold('PROJECT PREFLIGHT')); const project = selectedProject(settings); const profile = activeProfile(settings); const checks = [];
   try { await fs.stat(project.path); checks.push(['Project directory', true, project.path]); } catch { checks.push(['Project directory', false, 'not found']); }
   try { const branch = (await execute('git', ['-C', project.path, 'branch', '--show-current'])).trim(); checks.push(['Git branch', branch === project.branch, branch || 'detached HEAD']); } catch { checks.push(['Git branch', false, 'Git unavailable']); }
+  try { const status = (await execute('git', ['-C', project.path, 'status', '--porcelain'])).trim(); checks.push(['Git working tree', !status, status ? 'uncommitted or untracked files found' : 'clean']); } catch { checks.push(['Git working tree', false, 'could not read status']); }
   for (const [name, file] of [['Roadmap', project.roadmap], ['Progress file', project.progress]]) { try { await fs.access(path.join(project.path, file)); checks.push([name, true, file]); } catch { checks.push([name, false, `${file} missing`]); } }
   try { checks.push(['OpenCode command', true, await resolveCommand(settings.openCodeCommand || 'opencode')]); } catch (error) { checks.push(['OpenCode command', false, error.message]); }
   const fresh = snapshotFreshness(profile); checks.push(['Provider snapshot', fresh.ok, fresh.detail]);
