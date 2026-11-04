@@ -1127,7 +1127,7 @@ try {
             pendingAfter = (Count-Pending $roadmap $taskIdPattern)
             costBeforeUSD = $usageBefore.Daily.CostUSD
             costAfterUSD = $(if ($null -ne $usageAfter) { $usageAfter.Daily.CostUSD } else { $null })
-            costDeltaUSD = $(if ($null -ne $usageAfter) {
+            costDeltaUSD = $(if ($null -ne $usageAfter -and ($usageKind -eq 'balance' -or ($usageKind -eq 'quota' -and $null -ne $usageAfter.QuotaEstimatedSpendUSD))) {
                 [Math]::Round([Math]::Max(0.0,[double]$usageAfter.AllTime.CostUSD-[double]$usageBefore.AllTime.CostUSD),6)
             } else { $null })
             dayBefore = $usageBefore.Daily.Day
@@ -1161,7 +1161,7 @@ try {
             errorFile = [IO.Path]::GetFileName($stderrPath)
         }
         Save-Json $summaryPath $summary
-        Write-UiEvent 'iteration-finished' @{ iteration=$i; runId=$runId; summaryFile=$summaryPath; completedTaskIds=@($completedIds); completedCount=($doneAfter-$doneBefore); pending=$summary.pendingAfter; elapsedSeconds=$summary.elapsedSeconds; commits=@($iterationCommits); toolErrors=$toolErrors; exitCode=$exitCode; stoppedReason=$termination }
+        Write-UiEvent 'iteration-finished' @{ iteration=$i; runId=$runId; summaryFile=$summaryPath; completedTaskIds=@($completedIds); completedCount=($doneAfter-$doneBefore); pending=$summary.pendingAfter; elapsedSeconds=$summary.elapsedSeconds; costDeltaUSD=$summary.costDeltaUSD; commits=@($iterationCommits); toolErrors=$toolErrors; exitCode=$exitCode; stoppedReason=$termination }
         $reportPath = Write-EnglishDailyReport $projectData $begin.ToString('yyyy-MM-dd')
         Write-Host "Iteration finished: exit=$exitCode new completed tasks=$($doneAfter-$doneBefore) changedHEAD=$($headAfter -ne $headBefore) code=$($changedFiles.Code) tests=$($changedFiles.Tests) docs=$($changedFiles.Docs) toolErrors=$toolErrors"
         if ($null -ne $usageAfter) { Show-Usage $usageAfter $cfg.budget }

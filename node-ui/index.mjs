@@ -120,7 +120,8 @@ function iterationCheckpointText(event) {
   const tasks = Array.isArray(event.completedTaskIds) && event.completedTaskIds.length ? event.completedTaskIds.join(', ') : event.completedCount ? `+${event.completedCount} roadmap task(s)` : 'no roadmap task completed';
   const commit = Array.isArray(event.commits) && event.commits.length ? event.commits.map(item => item.hash ? `${item.hash} ${item.subject || ''}`.trim() : String(item)).join(', ') : 'no commit recorded';
   const stopped = event.stoppedReason ? ` | ${event.stoppedReason}` : '';
-  return `Iteration ${event.iteration} complete | ${tasks} | ${durationText(Number(event.elapsedSeconds || 0) * 1000)} | ${commit}${stopped}`;
+  const cost = event.costDeltaUSD == null ? '' : ` | $${Number(event.costDeltaUSD).toFixed(4)}`;
+  return `Iteration ${event.iteration} complete | ${tasks} | ${durationText(Number(event.elapsedSeconds || 0) * 1000)}${cost} | ${commit}${stopped}`;
 }
 function showRunnerFailure(output) {
   const text = String(output || ''); let title = 'DEVELOPMENT DID NOT START'; let reason = 'Terra Runner could not start the development run.'; let action = 'Open the project logs or run Project preflight, then try again.'; let detail = '';
@@ -155,7 +156,7 @@ async function runWithTui(runnerArgs, settings, project, mode) {
   const started = Date.now(); let iterationStarted = started; let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration';
   let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let control = '';
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-  console.log(rule); console.log(chalk.bold('DEVELOPMENT RUN'));
+  console.log(rule);
   const spinner = ora({ text: `${stage} · 0m 00s`, color: 'cyan', discardStdin: false }).start();
   let controlFooter = chalk.gray('  Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop');
   const renderControlFooter = () => {
@@ -188,7 +189,7 @@ async function runWithTui(runnerArgs, settings, project, mode) {
     try {
       await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, `${kind} requested by user at ${new Date().toISOString()}\n`, 'utf8');
       const message = kind === 'abort' ? 'Emergency stop requested. The current iteration will be terminated.' : 'Stop requested. The current iteration will finish, then development will stop.';
-      controlFooter = chalk.yellow(`  ${message}`); renderControlFooter(); spinner.stopAndPersist({ symbol: chalk.yellow('!'), text: message }); spinner.start(); stage = message;
+      spinner.stopAndPersist({ symbol: chalk.yellow('!'), text: message }); spinner.start(); stage = kind === 'abort' ? 'Stopping current iteration' : 'Finishing current iteration';
     } catch (error) { control = ''; spinner.stopAndPersist({ symbol: chalk.red('x'), text: `Could not request stop: ${error.message}` }); spinner.start(); }
   };
   const onInput = data => { const key = String(data).toLowerCase(); if (key === 's' || key === '\u0003') void requestControl('stop'); if (key === 'x') void requestControl('abort'); };
@@ -307,11 +308,12 @@ function header(settings) {
   const balance = profile?.policy === 'local' ? 'not applicable' : snapshot.remaining == null ? 'snapshot required' : `${snapshot.remaining} ${unit}`;
   const age = snapshot.observedAt ? `${Math.max(0, (Date.now() - Date.parse(snapshot.observedAt)) / 60000).toFixed(0)} min ago` : 'not recorded';
   console.log(`${chalk.bold('Project')}   ${chalk.white(project?.id || 'not selected')}  ${chalk.gray('│')}  ${chalk.bold('Branch')}  ${project?.branch || 'not configured'}`); console.log(`${chalk.bold('Path')}      ${chalk.gray(project?.path || 'not configured')}`);
-  console.log(`${chalk.bold('Account')}   ${account?.label || profile?.credentialLabel || 'not selected'}  ${chalk.gray('│')}  ${profileKindLabel(profile || {})}`); console.log(`${chalk.bold('Model')}     ${chalk.cyan(profile?.model || 'not selected')}  ${chalk.gray('│')}  Reasoning ${profile?.reasoningVariant || 'provider default'}`);
+  console.log(`${chalk.bold('Account')}   ${account?.label || profile?.credentialLabel || 'not selected'}  ${chalk.gray('│')}  ${profileKindLabel(profile || {})}  ${chalk.gray('│')}  ${chalk.cyan(profile?.model || 'not selected')}  ${chalk.gray('│')}  Reasoning ${profile?.reasoningVariant || 'provider default'}`);
   const roadmap = roadmapProgress(project);
   const estimate = snapshot.costTracking?.enabled ? latestLocalCostEstimate(settings, project, snapshot.observedAt) : null;
   console.log(`${chalk.bold('Snapshot')}  ${balance}  ${chalk.gray(`│ ${age}`)}`); console.log(`${chalk.bold('Limits')}    ${chalk.yellow(limitSummary(profile))}`);
-  if (estimate) console.log(`${chalk.bold('Estimate')}  ${estimate.quotaRemaining} ${estimate.quotaUnit} after $${Number(estimate.quotaEstimatedSpendUSD).toFixed(4)} locally recorded OpenCode spend`);
+  if (snapshot.costTracking?.enabled) console.log(`${chalk.bold('OpenCode')}  ${estimate ? `$${Number(estimate.quotaEstimatedSpendUSD).toFixed(4)} recorded since snapshot  │  estimated ${estimate.quotaRemaining} ${estimate.quotaUnit}` : `cost estimate enabled  │  baseline $${Number(snapshot.costTracking.baselineAllTimeCostUsd || 0).toFixed(4)}  │  awaiting first measured iteration`}`);
+  else if (profile?.policy === 'api' && snapshot.unit === 'usd') console.log(`${chalk.bold('OpenCode')}  local cost estimate is off`);
   if (roadmap) console.log(`${chalk.bold('Roadmap')}   ${roadmap.total} total  │  ${chalk.green(`${roadmap.complete} complete`)}  │  ${roadmap.pending} remaining  │  ${roadmap.percent.toFixed(1)}%`);
   console.log(rule);
 }
@@ -523,7 +525,6 @@ async function runRunner(settings, mode) {
   const runLabel = mode === 'continuous' ? (limit ? `Start continuous development for up to ${limit} iteration(s)` : 'Start continuous development until a safety stop') : 'Run one development iteration';
   const guardNote = skipSnapshotGuard ? ' without the provider snapshot guard' : '';
   if (!(await yesNo(`${runLabel}${guardNote}?`))) return;
-  console.log(chalk.gray('Clearing any stop request from a previous run.'));
   const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-UiEvents', '-ClearControlFlags', mode === 'continuous' ? '-Continuous' : '-Once'];
   if (mode === 'continuous') { if (limit > 0) runnerArgs.push('-MaxIterations', String(limit)); else runnerArgs.push('-UnlimitedIterations'); }
   if (skipSnapshotGuard) runnerArgs.push('-SkipProviderSnapshotGuard');
