@@ -105,6 +105,31 @@ function Get-LatestSummary {
     if ($null -eq $file) { return $null }
     try { return (Get-Content -LiteralPath $file.FullName -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable -Depth 50) } catch { return $null }
 }
+function Get-LatestCompletedTask {
+    $logs = Join-Path (Get-ProjectDataRoot) 'logs'
+    if (-not (Test-Path -LiteralPath $logs -PathType Container)) { return $null }
+    foreach ($file in @(Get-ChildItem -LiteralPath $logs -Recurse -File -Filter '*.summary.json' | Sort-Object LastWriteTimeUtc -Descending)) {
+        try { $summary = Get-Content -LiteralPath $file.FullName -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable -Depth 50 }
+        catch { continue }
+        foreach ($taskId in @(Read-SettingMember $summary 'completedTaskIds')) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$taskId)) { return [string]$taskId }
+        }
+    }
+    return $null
+}
+function Get-HeaderBudgetText($Budget, $LastSummary) {
+    $balance = Read-SettingMember $LastSummary 'balanceAfterUSD'
+    if ($null -eq $balance) { $balance = Read-SettingMember $LastSummary 'balanceBeforeUSD' }
+    $balanceText = if ($null -ne $balance) { Format-TerraMoney ([decimal]$balance) } else { 'unavailable' }
+    $limit = switch ([string]$Budget.mode) {
+        'daily' { "Daily limit $(Format-TerraMoney ([decimal]$Budget.dailyUsd))" }
+        'balance' { "Balance floor $(Format-TerraMoney ([decimal]$Budget.balance.minimumUsd))" }
+        'hybrid' { "Hybrid: daily $(Format-TerraMoney ([decimal]$Budget.dailyUsd)); floor $(Format-TerraMoney ([decimal]$Budget.balance.minimumUsd))" }
+        'unlimited' { 'Unlimited' }
+        default { 'Unknown limit' }
+    }
+    return "Balance: $balanceText | $limit"
+}
 
 function Save-Settings {
     $dir = Get-ConfigRoot
@@ -234,24 +259,20 @@ function Show-Header {
     Write-Line "TERRA RUNNER  $($script:Version)" 'Cyan'
     Write-Line 'Local OpenCode development orchestrator' 'DarkCyan'
     Write-Rule
-    Write-Line "Project: $($project.id)" 'White'
+    Write-Line "Project: $($project.id) | Branch: $($project.branch)" 'White'
     Write-Line "Path:    $($project.path)" 'Gray'
-    Write-Line "Branch:  $($project.branch) | Model: $($script:Settings.model)" 'Gray'
     $openCode = [string]$script:Settings.openCodeCommand
-    Write-Line "OpenCode: $(if (Get-Command $openCode -ErrorAction SilentlyContinue) { 'available' } else { 'not found' })" $(if (Get-Command $openCode -ErrorAction SilentlyContinue) { 'Green' } else { 'Yellow' })
+    $openCodeAvailable = $null -ne (Get-Command $openCode -ErrorAction SilentlyContinue)
+    Write-Line "OpenCode: $(if ($openCodeAvailable) { 'available' } else { 'not found' }) | Model: $($script:Settings.model)" $(if ($openCodeAvailable) { 'Green' } else { 'Yellow' })
     $budget = $script:Settings.budget
-    $budgetText = switch ([string]$budget.mode) {
-        'daily' { "Daily $(Format-TerraMoney ([decimal]$budget.dailyUsd)) | reserve $(Format-TerraMoney ([decimal]$budget.reserveUsd))" }
-        'balance' { "Balance floor $(Format-TerraMoney ([decimal]$budget.balance.minimumUsd))" }
-        'hybrid' { 'Hybrid: daily and balance floor' }
-        'unlimited' { 'Unlimited spending warning' }
-        default { 'Unknown budget mode' }
-    }
-    Write-Line "Budget:  $budgetText" $(if ($budget.mode -eq 'unlimited') { 'Yellow' } else { 'Green' })
+    $last = Get-LatestSummary
+    Write-Line (Get-HeaderBudgetText $budget $last) $(if ($budget.mode -eq 'unlimited') { 'Yellow' } else { 'Green' })
     $counts = Get-RoadmapCounts $project
     if ($counts) { Write-Line "Roadmap: $($counts.Done) complete, $($counts.Pending) pending" 'DarkCyan' }
-    $last = Get-LatestSummary
-    if ($last) { Write-Line "Last run: $($last.id) | $($last.stoppedReason)" 'DarkGray' }
+    if ($last) {
+        $task = Get-LatestCompletedTask
+        Write-Line "Last run: $($last.id) | Last completed: $(if ($task) { $task } else { 'none recorded' })" 'DarkGray'
+    }
     Write-Rule
 }
 function Invoke-RunnerCommand([hashtable]$Command) {
