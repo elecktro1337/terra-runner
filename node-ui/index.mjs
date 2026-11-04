@@ -146,10 +146,11 @@ async function configureLimitPolicy(settings, profile) {
   if (mode === 'hourly' || mode === 'daily') amount = numberValue(await input({ message: `${mode === 'hourly' ? 'Hourly' : 'Daily'} USD cap`, default: String(amount || 5) }), amount || 5);
   if (mode === 'critical') {
     const unit = profile.usageSource?.unit === 'usd' ? 'USD' : 'percent';
-    amount = numberValue(await input({ message: `Hard stop threshold (${unit})`, default: String(amount ?? (unit === 'USD' ? 0.5 : 5)) }), Number(amount ?? (unit === 'USD' ? 0.5 : 5)));
+    const suggested = profile.limitPolicy?.configured ? amount : Number(profile.usageSource?.reserve ?? (unit === 'USD' ? 0.5 : 5));
+    amount = numberValue(await input({ message: `Hard stop threshold (${unit})`, default: String(suggested) }), suggested);
     if (unit === 'percent' && amount > 100) { console.log(chalk.yellow('Percent cannot exceed 100.')); return pause(); }
   }
-  profile.limitPolicy = { mode, amount }; if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green('Limit policy saved.')); return pause();
+  profile.limitPolicy = { mode, amount, configured: true }; if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green(`Limit policy saved: ${mode}${mode === 'critical' ? `, hard stop ${amount}` : ''}.`)); return pause();
 }
 async function configureUsageSource(settings, profile) {
   if (profile.policy === 'local') { console.log(chalk.green('\nLocal profile: no provider usage or balance source is needed.')); return pause(); }

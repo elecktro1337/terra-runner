@@ -47,7 +47,7 @@ export function normalizeProfile(profile) {
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(profile?.credentialLabel || ''),
     policy, reasoningVariant: String(profile?.reasoningVariant || parsed.reasoningVariant || ''),
     limits: profile?.limits && typeof profile.limits === 'object' ? structuredClone(profile.limits) : null,
-    limitPolicy: { mode: String(profile?.limitPolicy?.mode || 'critical'), amount: profile?.limitPolicy?.amount ?? profile?.usageSource?.reserve ?? null },
+    limitPolicy: { mode: String(profile?.limitPolicy?.mode || 'critical'), amount: profile?.limitPolicy?.amount ?? profile?.usageSource?.reserve ?? null, configured: Boolean(profile?.limitPolicy?.configured) },
     runControls: { maxIterations: Number(profile?.runControls?.maxIterations || 0) || 0 },
     usageSource: policy === 'local' ? { kind: 'none' } : {
       kind: 'snapshot', unit: String(profile?.usageSource?.unit || 'percent'), remaining: profile?.usageSource?.remaining ?? null,
