@@ -62,8 +62,10 @@ try {
     $env:TERRA_MOCK_BROKEN_STATS = '0'
     $env:TERRA_MOCK_ALL_COST = '0.15'
     $env:TERRA_MOCK_TLS_TEXT = '1'
+    $env:TERRA_MOCK_SKIP_PUSH = '1'
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once -ShowProgress
     Remove-Item Env:TERRA_MOCK_TLS_TEXT -ErrorAction SilentlyContinue
+    Remove-Item Env:TERRA_MOCK_SKIP_PUSH -ErrorAction SilentlyContinue
     if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw 'Runner returned non-zero exit code' }
     if (Test-Path -LiteralPath $oldBundle) { throw 'Iteration rotation did not remove expired selected-project logs.' }
     if (-not (Test-Path -LiteralPath $newBundle) -or -not (Test-Path -LiteralPath $protectedBudget)) { throw 'Iteration rotation touched retained logs or protected budget data.' }

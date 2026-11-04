@@ -44,8 +44,10 @@ if ($cmd -eq 'run') {
     Add-Content -LiteralPath (Join-Path $repo 'NTD-PROGRESS.md') -Value 'Mock iteration complete.'
     & git -C $repo add NTD-ROADMAP.md NTD-PROGRESS.md | Out-Null
     & git -C $repo commit -m 'test(mock): NTD-0001 mock completion' | Out-Null
-    & git -C $repo push origin codex/terra 2>$null | Out-Null
-    if ($LASTEXITCODE -ne 0) { exit 3 }
+    if ($env:TERRA_MOCK_SKIP_PUSH -ne '1') {
+        & git -C $repo push origin codex/terra 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { exit 3 }
+    }
     '{"type":"step_finish","part":{"id":"prt_mock","cost":0.01,"tokens":{"input":20,"output":40}}}'
     '{"type":"tool_use","part":{"id":"call_recovered","tool":"read","state":{"status":"error"}}}'
     '{"type":"text","part":{"text":"╨Т╤Б╨╡"}}'

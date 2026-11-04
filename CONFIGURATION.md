@@ -19,3 +19,5 @@ Settings are written atomically and backups are retained in `config-backups`. If
 ## Transient connection retries
 
 `execution.maxTransientRetries` defaults to `3` and `execution.transientRetryDelaySeconds` defaults to `30`. When an OpenCode event or worker error indicates a TLS, SSL, or transient network failure, Terra Runner waits, checks OpenCode usage statistics without launching an agent, and retries the interrupted iteration only after that check succeeds. It stops safely if connection checks or the retry limit are exhausted.
+
+`execution.maxPushRetries` and `execution.pushRetryDelaySeconds` also default to `3` and `30`. When an agent leaves local commits unpublished because of a transient remote failure, Terra Runner retries a normal non-force `git push` before starting another paid iteration. A non-transient rejection, diverged history, or exhausted retry limit stops development safely.

@@ -162,6 +162,31 @@ function Confirm-RemotePush([string]$Directory, [string]$Branch) {
     $remoteHead = ($first -split '\s+')[0]
     return $remoteHead -ceq $head
 }
+function Test-TransientGitPushFailure([string]$Output) {
+    return $Output -match '(?i)(internal server error|\b5\d\d\b|temporar(?:y|ily)|timed? out|connection (?:reset|refused)|network|tls|ssl|service unavailable|rate limit)'
+}
+function Invoke-GitPushWithRetry([string]$Directory, [string]$Branch, [int]$Attempts, [int]$DelaySeconds) {
+    $lastOutput = ''
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        Push-Location -LiteralPath $Directory
+        try {
+            $lines = & git push origin $Branch 2>&1
+            $exitCode = $LASTEXITCODE
+        } finally { Pop-Location }
+        $lastOutput = [string]::Join("`n",[string[]]@($lines))
+        if ($exitCode -eq 0 -and (Confirm-RemotePush $Directory $Branch)) {
+            return [pscustomobject]@{ Success=$true; Attempts=$attempt; Output=$lastOutput }
+        }
+        if (-not (Test-TransientGitPushFailure $lastOutput)) {
+            return [pscustomobject]@{ Success=$false; Attempts=$attempt; Output=$lastOutput }
+        }
+        if ($attempt -lt $Attempts) {
+            Write-Warning "Transient Git push failure. Waiting $DelaySeconds seconds before retry ($attempt/$Attempts)."
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+    return [pscustomobject]@{ Success=$false; Attempts=$Attempts; Output=$lastOutput }
+}
 function Get-EventErrors([string]$EventsFile) {
     $streamErrors = 0
     $toolErrorIds = [System.Collections.Generic.HashSet[string]]::new()
@@ -669,8 +694,12 @@ if ([int]$cfg.execution.maxConsecutiveNoProgress -lt 1) { throw 'maxConsecutiveN
 if ($null -ne (Read-Member $cfg.execution 'maxConsecutiveDocumentationOnly') -and [int]$cfg.execution.maxConsecutiveDocumentationOnly -lt 1) { throw 'maxConsecutiveDocumentationOnly must be >= 1.' }
 $maxTransientRetries = if ($null -ne (Read-Member $cfg.execution 'maxTransientRetries')) { [int]$cfg.execution.maxTransientRetries } else { 3 }
 $transientRetryDelaySeconds = if ($null -ne (Read-Member $cfg.execution 'transientRetryDelaySeconds')) { [int]$cfg.execution.transientRetryDelaySeconds } else { 30 }
+$maxPushRetries = if ($null -ne (Read-Member $cfg.execution 'maxPushRetries')) { [int]$cfg.execution.maxPushRetries } else { 3 }
+$pushRetryDelaySeconds = if ($null -ne (Read-Member $cfg.execution 'pushRetryDelaySeconds')) { [int]$cfg.execution.pushRetryDelaySeconds } else { 30 }
 if ($maxTransientRetries -lt 1) { throw 'maxTransientRetries must be >= 1.' }
 if ($transientRetryDelaySeconds -lt 1) { throw 'transientRetryDelaySeconds must be >= 1.' }
+if ($maxPushRetries -lt 1) { throw 'maxPushRetries must be >= 1.' }
+if ($pushRetryDelaySeconds -lt 1) { throw 'pushRetryDelaySeconds must be >= 1.' }
 $maxCycles = if ($MaxIterations -gt 0) { $MaxIterations } else { [int]$cfg.execution.maxIterationsPerRun }
 if ($Once) { $maxCycles = 1 }
 if ($maxCycles -lt 1) { throw 'No iterations configured.' }
@@ -713,6 +742,13 @@ try {
     $branch = (Invoke-Cli 'git' @('-C',$repo,'branch','--show-current') $repo).Trim()
     if ($branch -cne [string]$projectConfig.branch) { throw "Wrong Git branch '$branch'; expected '$($projectConfig.branch)'" }
     [void](Invoke-Cli 'git' @('-C',$repo,'remote','get-url','origin') $repo)
+    if (-not (Confirm-RemotePush $repo ([string]$projectConfig.branch))) {
+        Write-Warning 'Local branch differs from origin. Retrying the pending non-force push before starting OpenCode.'
+        $pendingPush = Invoke-GitPushWithRetry $repo ([string]$projectConfig.branch) $maxPushRetries $pushRetryDelaySeconds
+        if (-not $pendingPush.Success) {
+            throw "Local and remote branch heads differ; pending push was not accepted after $($pendingPush.Attempts) attempt(s): $($pendingPush.Output)"
+        }
+    }
     $initialGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
     if ($initialGitStatus.Trim() -ne '') {
         throw 'Git working tree has uncommitted/untracked changes. Review and resolve them before automated execution.'
@@ -883,7 +919,14 @@ try {
         catch { if (-not $termination) { $termination = "git-status-error: $($_.Exception.Message)" } }
         if ($gitStatus.Trim() -ne '' -and -not $termination) { $termination = 'uncommitted-changes-left-by-agent' }
         $pushVerified = $false
-        try { $pushVerified = Confirm-RemotePush $repo ([string]$projectConfig.branch) }
+        try {
+            $pushVerified = Confirm-RemotePush $repo ([string]$projectConfig.branch)
+            if (-not $pushVerified) {
+                Write-Warning 'Agent finished with an unpublished local branch. Retrying the non-force push.'
+                $pushRetry = Invoke-GitPushWithRetry $repo ([string]$projectConfig.branch) $maxPushRetries $pushRetryDelaySeconds
+                $pushVerified = [bool]$pushRetry.Success
+            }
+        }
         catch { if (-not $termination) { $termination = "git-remote-verification-error: $($_.Exception.Message)" } }
         if (-not $pushVerified -and -not $termination) { $termination = 'local-and-remote-branch-heads-differ' }
         $changedFiles = $null
