@@ -139,6 +139,40 @@ async function configureSnapshot(settings, profile) {
   if (!saved || Number(saved.remaining) !== remaining || saved.unit !== unit) throw new Error('Snapshot save verification failed. Reopen the profile before starting development.');
   console.log(chalk.green('Provider snapshot saved.')); return pause();
 }
+async function refreshSnapshotBeforeRun(settings, profile, reason) {
+  header(settings);
+  console.log(chalk.bold.cyan('PROVIDER SNAPSHOT REQUIRED'));
+  console.log(chalk.gray('Enter the current provider-reported balance or quota to continue safely.'));
+  console.log(`  ${chalk.yellow(reason.detail)}`);
+  const current = profile.usageSource?.kind === 'snapshot' ? profile.usageSource : { unit: 'percent', remaining: null, reserve: 0, maxAgeMinutes: 120 };
+  let unit = current.unit === 'usd' ? 'usd' : 'percent';
+  if (current.remaining == null) {
+    unit = await pick('Snapshot unit', [{ name: 'Money remaining (USD)', value: 'usd' }, { name: 'Quota remaining (percent)', value: 'percent' }]);
+    if (!unit) return false;
+  }
+  const label = unit === 'usd' ? 'Provider-reported remaining USD' : 'Provider-reported remaining percent';
+  const raw = await input({ message: label, default: current.remaining == null ? '' : String(current.remaining) });
+  const remaining = numberValue(raw, NaN);
+  if (!Number.isFinite(remaining) || (unit === 'percent' && remaining > 100)) {
+    console.log(chalk.yellow(unit === 'percent' ? 'Enter a number from 0 to 100.' : 'Enter a non-negative USD amount.'));
+    await pause();
+    return false;
+  }
+  profile.usageSource = { kind: 'snapshot', unit, remaining, reserve: current.reserve ?? 0, maxAgeMinutes: Number(current.maxAgeMinutes ?? 120), observedAt: new Date().toISOString() };
+  try {
+    if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile);
+    await save(settings);
+    const persisted = JSON.parse(await fs.readFile(configPath, 'utf8'));
+    const saved = persisted.openCode?.profiles?.find(item => item.id === profile.id)?.usageSource;
+    if (!saved || Number(saved.remaining) !== remaining || saved.unit !== unit) throw new Error('The saved snapshot could not be verified.');
+  } catch (error) {
+    console.log(chalk.red(`Snapshot was not saved: ${error.message}`));
+    await pause();
+    return false;
+  }
+  console.log(chalk.green(`Snapshot updated: ${remaining} ${unit === 'usd' ? 'USD' : '%'}.`));
+  return true;
+}
 async function configureLimitPolicy(settings, profile) {
   if (profile.policy === 'local') return pause();
   const choices = profile.policy === 'api'
@@ -231,7 +265,24 @@ async function runPreflight(settings) { header(settings); console.log(chalk.bold
   try { checks.push(['OpenCode command', true, await resolveCommand(settings.openCodeCommand || 'opencode')]); } catch (error) { checks.push(['OpenCode command', false, error.message]); }
   const fresh = snapshotFreshness(profile); checks.push(['Provider snapshot', fresh.ok, fresh.detail]);
   for (const [name, ok, detail] of checks) console.log(`  ${ok ? chalk.green('✓') : chalk.red('×')} ${chalk.bold(name)}  ${detail}`); return pause(); }
-async function runRunner(settings, mode) { const profile = activeProfile(settings); if (!profile) { console.log(chalk.yellow('Create and select a profile first.')); return pause(); } const freshness = snapshotFreshness(profile); if (!freshness.ok) { header(settings); console.log(chalk.red('DEVELOPMENT NOT STARTED')); console.log(`  ${freshness.detail}`); console.log(chalk.gray('Refresh the provider snapshot in Profiles before running development.')); return pause(); } applyProfile(settings, profile); await save(settings); const project = selectedProject(settings); if (!project) { console.log(chalk.red('No project is configured.')); return pause(); } if (!(await yesNo(mode === 'continuous' ? 'Start continuous development?' : 'Run one development iteration?'))) return; const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-ShowProgress', mode === 'continuous' ? '-Continuous' : '-Once']; if (mode === 'continuous' && Number(profile.runControls?.maxIterations || 0) > 0) runnerArgs.push('-MaxIterations', String(profile.runControls.maxIterations)); try { await execute('pwsh.exe', runnerArgs, root, true); } catch (error) { console.log(chalk.yellow(`Runner ended: ${error.message}`)); } return pause(); }
+async function runRunner(settings, mode) {
+  const profile = activeProfile(settings);
+  if (!profile) { console.log(chalk.yellow('Create and select a profile first.')); return pause(); }
+  let freshness = snapshotFreshness(profile);
+  if (!freshness.ok) {
+    if (!(await refreshSnapshotBeforeRun(settings, profile, freshness))) return;
+    freshness = snapshotFreshness(profile);
+    if (!freshness.ok) { console.log(chalk.red(`Snapshot is still not ready: ${freshness.detail}`)); return pause(); }
+  }
+  applyProfile(settings, profile); await save(settings);
+  const project = selectedProject(settings);
+  if (!project) { console.log(chalk.red('No project is configured.')); return pause(); }
+  if (!(await yesNo(mode === 'continuous' ? 'Start continuous development?' : 'Run one development iteration?'))) return;
+  const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-ShowProgress', mode === 'continuous' ? '-Continuous' : '-Once'];
+  if (mode === 'continuous' && Number(profile.runControls?.maxIterations || 0) > 0) runnerArgs.push('-MaxIterations', String(profile.runControls.maxIterations));
+  try { await execute('pwsh.exe', runnerArgs, root, true); } catch (error) { console.log(chalk.yellow(`Runner ended: ${error.message}`)); }
+  return pause();
+}
 async function developmentMenu(settings) { const action = await pick('Development', [{ name: 'Run one iteration', value: 'once' }, { name: 'Run continuously', value: 'continuous' }, { name: 'Project preflight (no agent)', value: 'preflight' }]); if (action === 'preflight') await runPreflight(settings); else if (action) await runRunner(settings, action); }
 async function readProjectId(message, projects, currentId = '') {
   while (true) { const id = (await input({ message, default: currentId })).trim(); const error = validateProjectId(id, projects, currentId); if (!error) return id; console.log(chalk.yellow(error)); }
