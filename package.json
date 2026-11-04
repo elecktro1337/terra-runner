@@ -1,0 +1,10 @@
+{
+  "name": "terra-runner",
+  "version": "1.6.0-dev",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node node-ui/index.mjs",
+    "test:node": "node --test node-ui/test/*.test.mjs"
+  }
+}

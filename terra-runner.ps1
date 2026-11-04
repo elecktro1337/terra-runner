@@ -366,7 +366,10 @@ function Get-ActiveOpenCodeAccount($Config) {
 }
 function Get-OpenCodeUsageKind($Config) {
     $kind = [string](Read-Member (Get-ActiveOpenCodeAccount $Config) 'usageKind')
-    if ($kind -notin @('balance','quota','local')) { throw "Unsupported or unclassified OpenCode account usage kind '$kind'. Select the account again and choose its usage type." }
+    # `quota` was a v1.5 manual snapshot. OpenCode does not expose a dependable
+    # personal OAuth quota API, so it deliberately becomes provider-managed OAuth.
+    if ($kind -eq 'quota') { return 'oauth' }
+    if ($kind -notin @('balance','oauth','local')) { throw "Unsupported or unclassified OpenCode account usage kind '$kind'. Select a profile again." }
     return $kind
 }
 function New-ZeroUsage([string]$Scope) {
@@ -388,6 +391,11 @@ function Get-QuotaSnapshot($Account) {
 }
 function New-LocalSnapshot {
     return [pscustomobject]@{ Kind='local'; Mode='local'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
+}
+function New-OAuthSnapshot {
+    # OAuth plan usage and reset windows belong to the provider. Never invent a
+    # local number or block a paid-free OAuth account on a manually typed quota.
+    return [pscustomobject]@{ Kind='oauth'; Mode='oauth'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource='provider-managed'; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
 }
 function Switch-OpenCodeAccount([string]$Executable, $Account, [string]$Directory) {
     if ([string](Read-Member $Account 'usageKind') -eq 'local') { return }
@@ -439,7 +447,7 @@ function Set-BalanceSnapshot([string]$File, [double]$Amount, $Usage, [bool]$Over
 function Get-BudgetSnapshot([string]$Executable, [string]$Directory, $Budget, [string]$Root) {
     $account = Get-ActiveOpenCodeAccount $cfg
     $kind = Get-OpenCodeUsageKind $cfg
-    if ($kind -eq 'quota') { return (Get-QuotaSnapshot $account) }
+    if ($kind -eq 'oauth') { return (New-OAuthSnapshot) }
     if ($kind -eq 'local') { return (New-LocalSnapshot) }
     $mode = Get-BudgetMode $Budget
     $day = Get-Usage $Executable $Directory $Budget 'day'
@@ -473,12 +481,7 @@ function Get-BudgetSnapshot([string]$Executable, [string]$Directory, $Budget, [s
     }
 }
 function Get-BudgetStopReason($Snapshot, $Budget, [bool]$Emergency) {
-    if ($Snapshot.Kind -eq 'local') { return '' }
-    if ($Snapshot.Kind -eq 'quota') {
-        $cutoff = if ($Emergency) { [double]$Snapshot.QuotaReserve } else { [double]$Snapshot.QuotaReserve }
-        if ([double]$Snapshot.QuotaRemaining -le $cutoff) { return "quota threshold reached (reported $($Snapshot.QuotaRemaining) $($Snapshot.QuotaUnit), reserve $cutoff)" }
-        return ''
-    }
+    if ($Snapshot.Kind -in @('local','oauth')) { return '' }
     $mode = $Snapshot.Mode
     if ($mode -in @('daily','hybrid')) {
         $cap = [double]$Budget.dailyUsd
@@ -500,10 +503,7 @@ function Get-BudgetStopReason($Snapshot, $Budget, [bool]$Emergency) {
 }
 function Show-Usage($Snapshot, $Budget) {
     if ($Snapshot.Kind -eq 'local') { Write-Host 'Local model: no provider balance or quota limits are configured.'; return }
-    if ($Snapshot.Kind -eq 'quota') {
-        $message = ('OpenCode OAuth quota: {0:N2} {1} remaining; reserve {2:N2} {1}; user-reported snapshot' -f $Snapshot.QuotaRemaining,$Snapshot.QuotaUnit,$Snapshot.QuotaReserve)
-        Write-Host $message; Show-ProgressMeters $Snapshot $Budget; return
-    }
+    if ($Snapshot.Kind -eq 'oauth') { Write-Host 'OpenCode OAuth: usage and reset windows are managed by the provider; no local quota is estimated.'; return }
     $usage = $Snapshot.Daily
     $message = ('Day {0}: OpenCode cost ${1:N4}; tokens {2:N0}' -f $usage.Day,$usage.CostUSD,$usage.Tokens)
     if ($Snapshot.Mode -in @('daily','hybrid')) {
@@ -520,7 +520,7 @@ function Show-Usage($Snapshot, $Budget) {
 }
 function Show-ProgressMeters($Snapshot, $Budget) {
     if (-not $ShowProgress) { return }
-    if ($Snapshot.Kind -eq 'local') { return }
+    if ($Snapshot.Kind -in @('local','oauth')) { return }
     if ($Snapshot.Kind -eq 'quota') {
         if ($Snapshot.QuotaUnit -eq 'percent') {
             $ratio = [Math]::Min(1.0,[Math]::Max(0.0,[double]$Snapshot.QuotaRemaining / 100.0))
@@ -677,7 +677,7 @@ function Write-EnglishDailyReport([string]$DataDirectory, [string]$Date) {
         $reason = [string](Read-Member $summary 'stoppedReason'); if (-not $reason) { $reason = '-' }
         $rows.Add(('| {0} | `{1}` | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} |' -f $time,[string](Read-Member $summary 'id'),$kind,$completed,[int](Read-Member $summary 'codeFilesChanged'),[int](Read-Member $summary 'testFilesChanged'),[int](Read-Member $summary 'documentationFilesChanged'),$displayCost,([bool](Read-Member $summary 'pushVerified')),$reason.Replace('|','/')))
     }
-    $rows.Add(''); $rows.Add('Balance is derived from local OpenCode statistics and is an estimate, not provider billing. OAuth quota is a user-reported snapshot, not a provider API reading. Local profiles have no provider-limit tracking. Verification commands observed in agent logs do not by themselves prove successful tests.')
+    $rows.Add(''); $rows.Add('Balance is derived from local OpenCode statistics and is an estimate, not provider billing. OAuth plan usage and reset windows are managed by the provider and are not locally estimated. Local profiles have no provider-limit tracking. Verification commands observed in agent logs do not by themselves prove successful tests.')
     $markdown = Join-Path $reportDirectory "$Date.md"
     [IO.File]::WriteAllText($markdown,(($rows -join "`n") + "`n"),[Text.UTF8Encoding]::new($false))
     Save-Json (Join-Path $reportDirectory "$Date.json") ([ordered]@{ project=(Split-Path $DataDirectory -Leaf); date=$Date; iterations=$summaries.Count; tasksCompleted=$tasks; pushesVerified=$pushes; costDeltaUsd=[Math]::Round($cost,6); codeFilesChanged=$code; testFilesChanged=$tests; documentationFilesChanged=$docs; toolErrors=$errors; completedTaskIds=@($ids | Sort-Object); commits=@($commits.ToArray()); generatedAt=(Get-Date).ToString('o') })

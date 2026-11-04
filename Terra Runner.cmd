@@ -11,9 +11,16 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-title Terra Runner 1.5
+title Terra Runner 1.6
 if "%~1"=="" (
-  pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0terra-ui.ps1"
+  where node.exe >nul 2>nul
+  if errorlevel 1 (
+    echo.
+    echo Node.js 20 or newer was not found. Starting the legacy PowerShell interface.
+    pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0terra-ui.ps1"
+  ) else (
+    node.exe "%~dp0node-ui\index.mjs"
+  )
 ) else (
   pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0terra-runner.ps1" %*
 )

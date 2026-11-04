@@ -1,0 +1,92 @@
+import crypto from 'node:crypto';
+
+const LOCAL_PROVIDERS = new Set(['ollama', 'lmstudio', 'local', 'llamacpp', 'llama.cpp', 'vllm']);
+
+export function modelProvider(model = '') {
+  return String(model).trim().split('/')[0].toLowerCase();
+}
+
+export function isLocalModel(model = '') {
+  return LOCAL_PROVIDERS.has(modelProvider(model));
+}
+
+export function policyFor(model, account) {
+  if (isLocalModel(model)) return 'local';
+  return String(account?.authMethod || '').toLowerCase() === 'oauth' ? 'oauth-managed' : 'api';
+}
+
+export function profileFrom(model, account = null, reasoningVariant = '', showThinking = false) {
+  const policy = policyFor(model, account);
+  return {
+    id: crypto.randomUUID(),
+    model: String(model).trim(),
+    provider: modelProvider(model),
+    credentialId: policy === 'local' ? '' : String(account?.credentialId || ''),
+    credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(account?.label || ''),
+    policy,
+    reasoningVariant: String(reasoningVariant || ''),
+    showThinking: Boolean(showThinking)
+  };
+}
+
+export function normalizeProfile(profile) {
+  const model = String(profile?.model || '').trim();
+  const policy = ['api', 'oauth-managed', 'local'].includes(profile?.policy)
+    ? profile.policy
+    : policyFor(model, { authMethod: profile?.authMethod });
+  return {
+    id: String(profile?.id || crypto.randomUUID()), model, provider: modelProvider(model),
+    credentialId: policy === 'local' ? '' : String(profile?.credentialId || ''),
+    credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(profile?.credentialLabel || ''),
+    policy, reasoningVariant: String(profile?.reasoningVariant || ''), showThinking: Boolean(profile?.showThinking)
+  };
+}
+
+export function migrateProfiles(settings) {
+  const openCode = settings.openCode ||= {};
+  const accounts = Array.isArray(openCode.accounts) ? openCode.accounts : [];
+  if (Array.isArray(openCode.profiles) && openCode.profiles.length) {
+    openCode.profiles = openCode.profiles.map(normalizeProfile);
+    if (!openCode.profiles.some(p => p.id === openCode.activeProfileId)) openCode.activeProfileId = openCode.profiles[0].id;
+    return openCode.profiles;
+  }
+  const active = accounts.find(a => a.id === openCode.activeAccountId) || null;
+  const reasoning = openCode.reasoning || {};
+  const model = String(settings.model || '');
+  const profile = profileFrom(model, active, reasoning.variant, reasoning.showThinking);
+  openCode.profiles = model ? [profile] : [];
+  openCode.activeProfileId = profile.id;
+  return openCode.profiles;
+}
+
+export function activeProfile(settings) {
+  const profiles = migrateProfiles(settings);
+  return profiles.find(p => p.id === settings.openCode.activeProfileId) || profiles[0] || null;
+}
+
+export function profileTitle(profile) {
+  if (!profile) return 'No profile selected';
+  const policy = profile.policy === 'api' ? 'API spending limits' : profile.policy === 'oauth-managed' ? 'OAuth provider-managed usage' : 'Local / no limits';
+  return `${profile.model}${profile.reasoningVariant ? `#${profile.reasoningVariant}` : ''} — ${policy}`;
+}
+
+export function applyProfile(settings, profile) {
+  const openCode = settings.openCode ||= {};
+  openCode.profiles ||= [];
+  openCode.activeProfileId = profile.id;
+  settings.model = `${profile.model}${profile.reasoningVariant ? `#${profile.reasoningVariant}` : ''}`;
+  openCode.reasoning = { variant: profile.reasoningVariant || '', showThinking: Boolean(profile.showThinking) };
+  if (profile.policy === 'local') {
+    const localId = `local:${profile.provider}`;
+    const index = openCode.accounts.findIndex(a => a.id === localId);
+    const local = { id: localId, provider: profile.provider, credentialId: '', label: 'Local inference', authMethod: 'local', usageKind: 'local' };
+    if (index >= 0) openCode.accounts[index] = local; else openCode.accounts.push(local);
+    openCode.activeAccountId = localId;
+  } else {
+    const account = openCode.accounts.find(a => a.credentialId === profile.credentialId && a.provider === profile.provider);
+    if (!account) throw new Error('The selected OpenCode credential is no longer available. Refresh profiles and select it again.');
+    account.usageKind = profile.policy === 'api' ? 'balance' : 'oauth';
+    delete account.quota;
+    openCode.activeAccountId = account.id;
+  }
+}

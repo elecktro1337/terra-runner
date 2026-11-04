@@ -13,3 +13,7 @@ TestResults/
 *.tmp
 Thumbs.db
 .DS_Store
+
+# Node.js UI dependencies and diagnostics
+node_modules/
+npm-debug.log*
