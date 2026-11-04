@@ -71,7 +71,11 @@ function selectedProject(settings) { return activeProject(settings); }
 function limitSummary(profile) {
   if (!profile) return 'No profile selected'; if (profile.policy === 'local') return 'No provider limits';
   const snapshot = profile.usageSource || {}; if (snapshot.remaining == null) return 'Snapshot required before development';
-  const unit = snapshot.unit === 'usd' ? 'USD' : '%'; return `Snapshot ${snapshot.remaining} ${unit}; stop at ${snapshot.reserve ?? 0} ${unit}`;
+  const unit = snapshot.unit === 'usd' ? 'USD' : '%'; const policy = profile.limitPolicy || {};
+  if (policy.mode === 'critical') return `Critical stop ${policy.amount ?? snapshot.reserve ?? 0} ${unit}`;
+  if (policy.mode === 'hourly') return `Hourly cap $${policy.amount}`;
+  if (policy.mode === 'daily') return `Daily cap $${policy.amount}`;
+  if (policy.mode === 'refresh-hourly') return 'Fresh snapshot required hourly'; if (policy.mode === 'refresh-daily') return 'Fresh snapshot required daily'; return 'Unlimited';
 }
 function usageSourceSummary(profile) {
   const source = profile?.usageSource || {}; if (source.kind !== 'snapshot') return 'Not applicable';
@@ -116,11 +120,9 @@ async function configureSnapshot(settings, profile) {
   const defaultRemaining = current.remaining == null ? (unit === 'percent' ? 100 : 0) : current.remaining;
   const remaining = numberValue(await input({ message: unit === 'percent' ? 'Provider-reported remaining percent' : 'Provider-reported remaining USD', default: String(defaultRemaining) }), Number(defaultRemaining));
   if (unit === 'percent' && remaining > 100) { console.log(chalk.yellow('Percent cannot exceed 100.')); return pause(); }
-  const reserveDefault = unit === 'percent' ? (current.unit === 'percent' ? current.reserve ?? 5 : 5) : (current.unit === 'usd' ? current.reserve ?? 0.5 : 0.5);
-  const reserve = numberValue(await input({ message: unit === 'percent' ? 'Hard stop at or below this percent' : 'Hard stop at or below this USD reserve', default: String(reserveDefault) }), Number(reserveDefault));
   const maxAgeMinutes = numberValue(await input({ message: 'Snapshot refresh interval (minutes)', default: String(current.maxAgeMinutes ?? 120) }), Number(current.maxAgeMinutes ?? 120));
   if (maxAgeMinutes < 1) { console.log(chalk.yellow('Refresh interval must be at least one minute.')); return pause(); }
-  profile.usageSource = { kind: 'snapshot', unit, remaining, reserve, maxAgeMinutes, observedAt: new Date().toISOString() };
+  profile.usageSource = { kind: 'snapshot', unit, remaining, reserve: current.reserve ?? 0, maxAgeMinutes, observedAt: new Date().toISOString() };
   if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings);
   const persisted = JSON.parse(await fs.readFile(configPath, 'utf8')); const saved = persisted.openCode?.profiles?.find(item => item.id === profile.id)?.usageSource;
   if (!saved || Number(saved.remaining) !== remaining || saved.unit !== unit) throw new Error('Snapshot save verification failed. Reopen the profile before starting development.');
@@ -135,6 +137,11 @@ async function configureLimitPolicy(settings, profile) {
   if (mode === 'unlimited' && !(await yesNo('Disable provider limits for this profile?'))) return;
   let amount = Number(profile.limitPolicy?.amount || 0);
   if (mode === 'hourly' || mode === 'daily') amount = numberValue(await input({ message: `${mode === 'hourly' ? 'Hourly' : 'Daily'} USD cap`, default: String(amount || 5) }), amount || 5);
+  if (mode === 'critical') {
+    const unit = profile.usageSource?.unit === 'usd' ? 'USD' : 'percent';
+    amount = numberValue(await input({ message: `Hard stop threshold (${unit})`, default: String(amount ?? (unit === 'USD' ? 0.5 : 5)) }), Number(amount ?? (unit === 'USD' ? 0.5 : 5)));
+    if (unit === 'percent' && amount > 100) { console.log(chalk.yellow('Percent cannot exceed 100.')); return pause(); }
+  }
   profile.limitPolicy = { mode, amount }; if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green('Limit policy saved.')); return pause();
 }
 async function configureUsageSource(settings, profile) {
