@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -115,6 +116,12 @@ function activityFromEvent(event) {
   if (/(read|list|glob|search|grep)/.test(tool)) return 'Inspecting project files';
   return 'Using OpenCode tools';
 }
+function iterationCheckpointText(event) {
+  const tasks = Array.isArray(event.completedTaskIds) && event.completedTaskIds.length ? event.completedTaskIds.join(', ') : event.completedCount ? `+${event.completedCount} roadmap task(s)` : 'no roadmap task completed';
+  const commit = Array.isArray(event.commits) && event.commits.length ? event.commits.map(item => item.hash ? `${item.hash} ${item.subject || ''}`.trim() : String(item)).join(', ') : 'no commit recorded';
+  const stopped = event.stoppedReason ? ` | ${event.stoppedReason}` : '';
+  return `Iteration ${event.iteration} complete | ${tasks} | ${durationText(Number(event.elapsedSeconds || 0) * 1000)} | ${commit}${stopped}`;
+}
 async function runWithTui(runnerArgs, settings, project, mode) {
   const executable = await resolveCommand('pwsh.exe');
   const previousSummaryId = (await latestIterationSummary(settings, project, configPath))?.id || '';
@@ -123,6 +130,7 @@ async function runWithTui(runnerArgs, settings, project, mode) {
   const spinner = ora({ text: `${stage} · 0m 00s`, color: 'cyan' }).start();
   const update = setInterval(() => { spinner.text = `${stage} · ${durationText(Date.now() - started)}`; }, 1000);
   const liveUpdate = setInterval(async () => {
+    if (control) return;
     if (!eventFile) return;
     try {
       const lines = (await fs.readFile(eventFile, 'utf8')).split(/\r?\n/).filter(Boolean);
@@ -134,6 +142,23 @@ async function runWithTui(runnerArgs, settings, project, mode) {
       if (activity) stage = `${iterationLabel ? `${iterationLabel} | ` : ''}${activity}${counters}`;
     } catch { }
   }, 900);
+  let control = '';
+  const requestControl = async kind => {
+    if (control) return;
+    control = kind;
+    const file = path.join(projectDataRoot(settings, project, configPath), kind === 'abort' ? 'ABORT' : 'STOP');
+    try {
+      await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, `${kind} requested by user at ${new Date().toISOString()}\n`, 'utf8');
+      const message = kind === 'abort' ? 'Emergency stop requested. The current iteration will be terminated.' : 'Stop requested. The current iteration will finish, then development will stop.';
+      spinner.stopAndPersist({ symbol: chalk.yellow('!'), text: message }); spinner.start(); stage = message;
+    } catch (error) { control = ''; spinner.stopAndPersist({ symbol: chalk.red('x'), text: `Could not request stop: ${error.message}` }); spinner.start(); }
+  };
+  const onInput = data => { const key = String(data).toLowerCase(); if (key === 's' || key === '\u0003') void requestControl('stop'); if (key === 'x') void requestControl('abort'); };
+  const onSigint = () => { void requestControl('stop'); };
+  const interactive = Boolean(process.stdin.isTTY);
+  if (interactive) { process.stdin.setRawMode?.(true); process.stdin.resume(); process.stdin.on('data', onInput); process.on('SIGINT', onSigint); console.log(chalk.gray('  Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop'));
+  }
+  const cleanupControls = () => { if (!interactive) return; process.stdin.off('data', onInput); process.off('SIGINT', onSigint); process.stdin.setRawMode?.(false); };
   try {
     const result = await new Promise((resolve, reject) => {
       const child = spawn(executable, runnerArgs, { cwd: root, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -147,7 +172,7 @@ async function runWithTui(runnerArgs, settings, project, mode) {
               iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`;
               stage = `${iterationLabel} | ${event.taskId || 'next roadmap task'} | ${event.pending} tasks pending`;
             }
-            if (event.type === 'iteration-finished') stage = 'Writing verified iteration summary';
+            if (event.type === 'iteration-finished') { spinner.stopAndPersist({ symbol: event.stoppedReason ? chalk.yellow('!') : chalk.green('✓'), text: iterationCheckpointText(event) }); spinner.start(); stage = 'Preparing next iteration'; }
           } catch { }
           return;
         }
@@ -161,7 +186,7 @@ async function runWithTui(runnerArgs, settings, project, mode) {
       child.stderr.on('data', chunk => { stderr += chunk.toString(); });
       child.once('error', reject); child.once('close', code => resolve({ code, stdout, stderr }));
     });
-    clearInterval(update); clearInterval(liveUpdate);
+    clearInterval(update); clearInterval(liveUpdate); cleanupControls();
     if (result.code === 0) spinner.succeed(`Development run finished · ${durationText(Date.now() - started)}`);
     else spinner.fail(`Development runner exited with code ${result.code}`);
     const summaries = (await iterationSummariesSince(settings, project, configPath, started)).filter(summary => summary.id !== previousSummaryId);
@@ -169,7 +194,7 @@ async function runWithTui(runnerArgs, settings, project, mode) {
     else if (result.code !== 0) console.log(chalk.red((result.stderr || result.stdout || 'No iteration summary was written.').trim()));
     return result.code === 0;
   } catch (error) {
-    clearInterval(update); clearInterval(liveUpdate); spinner.fail('Development runner could not start.'); console.log(chalk.red(error.message)); return false;
+    clearInterval(update); clearInterval(liveUpdate); cleanupControls(); spinner.fail('Development runner could not start.'); console.log(chalk.red(error.message)); return false;
   }
 }
 async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [], activeAccountId: '', reasoning: {} }; settings.openCode.accounts ||= []; migrateProfiles(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the legacy setup wizard once or pass --config <file>. ${error.message}`); } }
@@ -185,6 +210,19 @@ async function refreshOpenCode(settings) {
   } catch (error) { spinner.fail('OpenCode refresh failed.'); throw error; }
 }
 function selectedProject(settings) { return activeProject(settings); }
+function roadmapProgress(project) {
+  if (!project?.path || !project?.roadmap) return null;
+  try {
+    const pattern = project.taskIdPattern ? new RegExp(project.taskIdPattern) : null;
+    let complete = 0; let pending = 0;
+    for (const line of readFileSync(path.join(project.path, project.roadmap), 'utf8').split(/\r?\n/)) {
+      if (pattern && !pattern.test(line)) continue;
+      if (/^\s*-\s*\[[xX]\]/.test(line)) complete++;
+      if (/^\s*-\s*\[ \]/.test(line)) pending++;
+    }
+    const total = complete + pending; return { complete, pending, total, percent: total ? (complete / total) * 100 : 0 };
+  } catch { return null; }
+}
 function limitSummary(profile) {
   if (!profile) return 'No profile selected'; if (profile.policy === 'local') return 'No provider limits';
   const snapshot = profile.usageSource || {}; if (snapshot.remaining == null) return 'Snapshot required before development';
@@ -219,7 +257,10 @@ function header(settings) {
   const age = snapshot.observedAt ? `${Math.max(0, (Date.now() - Date.parse(snapshot.observedAt)) / 60000).toFixed(0)} min ago` : 'not recorded';
   console.log(`${chalk.bold('Project')}   ${chalk.white(project?.id || 'not selected')}  ${chalk.gray('│')}  ${chalk.bold('Branch')}  ${project?.branch || 'not configured'}`); console.log(`${chalk.bold('Path')}      ${chalk.gray(project?.path || 'not configured')}`);
   console.log(`${chalk.bold('Account')}   ${account?.label || profile?.credentialLabel || 'not selected'}  ${chalk.gray('│')}  ${profileKindLabel(profile || {})}`); console.log(`${chalk.bold('Model')}     ${chalk.cyan(profile?.model || 'not selected')}  ${chalk.gray('│')}  Reasoning ${profile?.reasoningVariant || 'provider default'}`);
-  console.log(`${chalk.bold('Snapshot')}  ${balance}  ${chalk.gray(`│ ${age}`)}`); console.log(`${chalk.bold('Limits')}    ${chalk.yellow(limitSummary(profile))}`); console.log(rule);
+  const roadmap = roadmapProgress(project);
+  console.log(`${chalk.bold('Snapshot')}  ${balance}  ${chalk.gray(`│ ${age}`)}`); console.log(`${chalk.bold('Limits')}    ${chalk.yellow(limitSummary(profile))}`);
+  if (roadmap) console.log(`${chalk.bold('Roadmap')}   ${roadmap.total} total  │  ${chalk.green(`${roadmap.complete} complete`)}  │  ${roadmap.pending} remaining  │  ${roadmap.percent.toFixed(1)}%`);
+  console.log(rule);
 }
 function numberValue(raw, fallback) { const parsed = Number(String(raw).trim().replace(',', '.')); return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback; }
 async function configureLimits(settings, profile) {
