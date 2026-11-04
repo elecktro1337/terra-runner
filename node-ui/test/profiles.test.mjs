@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyProfile, isLocalModel, migrateProfiles, policyFor, profileFrom, splitModelVariant } from '../lib/profiles.mjs';
 import { activeProject, validateProjectId } from '../lib/projects.mjs';
+import { projectDataRoot } from '../lib/reports.mjs';
 
 test('recognizes local model providers', () => {
   assert.equal(isLocalModel('ollama/qwen3-coder-64k:30b'), true);
@@ -62,4 +63,7 @@ test('keeps an explicit active project and validates project IDs', () => {
   assert.equal(activeProject(settings).id, 'b');
   assert.match(validateProjectId('bad id', settings.projects), /Use/);
   assert.match(validateProjectId('a', settings.projects), /already exists/);
+});
+test('derives an isolated project data root from the stable project ID', () => {
+  assert.match(projectDataRoot({ logs: { root: './data/projects' } }, { id: 'alpha' }, 'C:/Tools/Terra/terra-config.json'), /data[\\/]projects[\\/]alpha$/);
 });

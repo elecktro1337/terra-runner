@@ -10,6 +10,7 @@ import figlet from 'figlet';
 import ora from 'ora';
 import { activeProfile, applyProfile, isLocalModel, migrateProfiles, profileFrom } from './lib/profiles.mjs';
 import { activeProject, normalizeProjects, validateProjectId } from './lib/projects.mjs';
+import { dailyReports, latestIterationSummary } from './lib/reports.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -203,7 +204,12 @@ async function projectsMenu(settings) {
   }
 }
 async function reportsMenu(settings) {
-  const project = selectedProject(settings); if (!project) return pause();
+  const project = selectedProject(settings); if (!project) return pause(); const latest = await latestIterationSummary(settings, project, configPath); const reports = await dailyReports(settings, project, configPath);
+  header(settings); console.log(chalk.bold('REPORTS')); if (latest) {
+    const result = Number(latest.exitCode) === 0 && !latest.stoppedReason ? chalk.green('successful') : chalk.yellow(latest.stoppedReason || `exit ${latest.exitCode}`);
+    console.log(`  Last run     ${latest.id || 'unknown'}  ${result}`); console.log(`  Finished     ${latest.ended || 'unknown'}`); console.log(`  Tasks        ${(latest.completedTaskIds || []).join(', ') || 'none'}`); console.log(`  Files        code ${latest.codeFilesChanged || 0} · tests ${latest.testFilesChanged || 0} · docs ${latest.documentationFilesChanged || 0}`); console.log(`  Cost/tokens  ${latest.costDeltaUSD == null ? 'not available' : `$${Number(latest.costDeltaUSD).toFixed(4)}`} · ${latest.totalTokensAfter == null ? 'n/a' : Number(latest.totalTokensAfter).toLocaleString('en-US')}`);
+  } else console.log(chalk.gray('  No iteration summaries are available for this project.'));
+  console.log(`  Daily reports ${reports.length ? reports.slice(0, 5).join(', ') : 'none'}`);
   const action = await pick('Reports', [{ name: 'Generate current daily report', value: 'report' }, { name: 'Show runner status', value: 'status' }]); if (!action) return;
   const flag = action === 'report' ? '-Report' : '-Status'; const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, flag];
   try { await execute('pwsh.exe', runnerArgs, root, true); } catch (error) { console.log(chalk.yellow(`Report command ended: ${error.message}`)); } return pause();
