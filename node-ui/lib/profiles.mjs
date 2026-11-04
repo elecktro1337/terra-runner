@@ -30,7 +30,7 @@ export function profileFrom(model, account = null, reasoningVariant = '', showTh
     provider: modelProvider(parsed.model),
     credentialId: policy === 'local' ? '' : String(account?.credentialId || ''),
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(account?.label || ''),
-    policy, reasoningVariant: variant, limits: null, limitPolicy: { mode: 'critical', amount: null }, runControls: { maxIterations: 0 },
+    policy, reasoningVariant: variant, limits: null, limitPolicy: { mode: 'critical', amount: null, reserve: null }, runControls: { maxIterations: 0 },
     usageSource: policy === 'local' ? { kind: 'none' } : { kind: 'snapshot', unit: 'percent', remaining: null, reserve: 5, maxAgeMinutes: 120, observedAt: '' },
     showThinking: Boolean(showThinking)
   };
@@ -47,7 +47,7 @@ export function normalizeProfile(profile) {
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(profile?.credentialLabel || ''),
     policy, reasoningVariant: String(profile?.reasoningVariant || parsed.reasoningVariant || ''),
     limits: profile?.limits && typeof profile.limits === 'object' ? structuredClone(profile.limits) : null,
-    limitPolicy: { mode: String(profile?.limitPolicy?.mode || 'critical'), amount: profile?.limitPolicy?.amount ?? profile?.usageSource?.reserve ?? null, configured: Boolean(profile?.limitPolicy?.configured) },
+    limitPolicy: { mode: String(profile?.limitPolicy?.mode || 'critical'), amount: profile?.limitPolicy?.amount ?? null, reserve: profile?.limitPolicy?.reserve ?? profile?.usageSource?.reserve ?? null, configured: Boolean(profile?.limitPolicy?.configured) },
     runControls: { maxIterations: Number(profile?.runControls?.maxIterations || 0) || 0 },
     usageSource: policy === 'local' ? { kind: 'none' } : {
       kind: 'snapshot', unit: String(profile?.usageSource?.unit || 'percent'), remaining: profile?.usageSource?.remaining ?? null,
@@ -127,7 +127,7 @@ export function applyProfile(settings, profile) {
     account.usageKind = 'quota';
     const snapshot = profile.usageSource || {};
     const refresh = policy.mode === 'refresh-hourly' ? 60 : policy.mode === 'refresh-daily' ? 1440 : snapshot.maxAgeMinutes ?? 120;
-    const reserve = policy.mode === 'critical' ? Number(policy.amount ?? snapshot.reserve ?? 0) : 0;
+    const reserve = policy.mode === 'critical' ? Number(policy.amount ?? 0) + Number(policy.reserve ?? snapshot.reserve ?? 0) : 0;
     account.quota = { configured: snapshot.kind === 'snapshot' && snapshot.remaining !== null, unit: snapshot.unit || 'percent', remaining: snapshot.remaining, reserve, maxAgeMinutes: refresh, observedAt: snapshot.observedAt || '' };
     openCode.activeAccountId = account.id;
   }

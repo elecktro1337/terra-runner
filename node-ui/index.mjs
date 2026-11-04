@@ -72,7 +72,7 @@ function limitSummary(profile) {
   if (!profile) return 'No profile selected'; if (profile.policy === 'local') return 'No provider limits';
   const snapshot = profile.usageSource || {}; if (snapshot.remaining == null) return 'Snapshot required before development';
   const unit = snapshot.unit === 'usd' ? 'USD' : '%'; const policy = profile.limitPolicy || {};
-  if (policy.mode === 'critical') return `Critical stop ${policy.amount ?? snapshot.reserve ?? 0} ${unit}`;
+  if (policy.mode === 'critical') return `Minimum ${policy.amount ?? 0} ${unit}; next-run reserve ${policy.reserve ?? snapshot.reserve ?? 0} ${unit}`;
   if (policy.mode === 'hourly') return `Hourly cap $${policy.amount}`;
   if (policy.mode === 'daily') return `Daily cap $${policy.amount}`;
   if (policy.mode === 'refresh-hourly') return 'Fresh snapshot required hourly'; if (policy.mode === 'refresh-daily') return 'Fresh snapshot required daily'; return 'Unlimited';
@@ -133,7 +133,7 @@ async function configureSnapshot(settings, profile) {
   if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings);
   const persisted = JSON.parse(await fs.readFile(configPath, 'utf8')); const saved = persisted.openCode?.profiles?.find(item => item.id === profile.id)?.usageSource;
   if (!saved || Number(saved.remaining) !== remaining || saved.unit !== unit) throw new Error('Snapshot save verification failed. Reopen the profile before starting development.');
-  console.log(chalk.green('Provider snapshot and stop limit saved.')); return pause();
+  console.log(chalk.green('Provider snapshot saved.')); return pause();
 }
 async function configureLimitPolicy(settings, profile) {
   if (profile.policy === 'local') return pause();
@@ -146,11 +146,15 @@ async function configureLimitPolicy(settings, profile) {
   if (mode === 'hourly' || mode === 'daily') amount = numberValue(await input({ message: `${mode === 'hourly' ? 'Hourly' : 'Daily'} USD cap`, default: String(amount || 5) }), amount || 5);
   if (mode === 'critical') {
     const unit = profile.usageSource?.unit === 'usd' ? 'USD' : 'percent';
-    const suggested = profile.limitPolicy?.configured ? amount : Number(profile.usageSource?.reserve ?? (unit === 'USD' ? 0.5 : 5));
-    amount = numberValue(await input({ message: `Hard stop threshold (${unit})`, default: String(suggested) }), suggested);
+    const suggested = profile.limitPolicy?.configured ? amount : 0;
+    amount = numberValue(await input({ message: `Minimum allowed ${unit}`, default: String(suggested) }), suggested);
     if (unit === 'percent' && amount > 100) { console.log(chalk.yellow('Percent cannot exceed 100.')); return pause(); }
+    const reserveSuggested = Number(profile.limitPolicy?.reserve ?? profile.usageSource?.reserve ?? (unit === 'USD' ? 0.5 : 5));
+    const reserve = numberValue(await input({ message: `Next-run reserve (${unit})`, default: String(reserveSuggested) }), reserveSuggested);
+    if (unit === 'percent' && amount + reserve > 100) { console.log(chalk.yellow('Minimum plus reserve cannot exceed 100 percent.')); return pause(); }
+    profile.limitPolicy = { mode, amount, reserve, configured: true }; if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green(`Limit policy saved: minimum ${amount}, next-run reserve ${reserve}.`)); return pause();
   }
-  profile.limitPolicy = { mode, amount, configured: true }; if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green(`Limit policy saved: ${mode}${mode === 'critical' ? `, hard stop ${amount}` : ''}.`)); return pause();
+  profile.limitPolicy = { mode, amount, reserve: null, configured: true }; if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green(`Limit policy saved: ${mode}.`)); return pause();
 }
 async function configureUsageSource(settings, profile) {
   if (profile.policy === 'local') { console.log(chalk.green('\nLocal profile: no provider usage or balance source is needed.')); return pause(); }
