@@ -37,3 +37,9 @@ test('applying an OAuth profile replaces a legacy manual quota policy', () => {
   assert.equal(settings.openCode.accounts[0].usageKind, 'oauth');
   assert.equal('quota' in settings.openCode.accounts[0], false);
 });
+test('migrates legacy API profiles with their existing budget limits', () => {
+  const settings = { budget: { mode: 'balance', balance: { minimumUsd: 5 } }, openCode: { activeProfileId: 'api', profiles: [{ id: 'api', model: 'openai/gpt', policy: 'api' }], accounts: [] } };
+  const [profile] = migrateProfiles(settings);
+  assert.equal(profile.limits.mode, 'balance');
+  assert.equal(profile.limits.balance.minimumUsd, 5);
+});

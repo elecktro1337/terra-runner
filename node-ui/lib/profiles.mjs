@@ -55,6 +55,11 @@ export function migrateProfiles(settings) {
   const accounts = Array.isArray(openCode.accounts) ? openCode.accounts : [];
   if (Array.isArray(openCode.profiles) && openCode.profiles.length) {
     openCode.profiles = openCode.profiles.map(normalizeProfile);
+    // v1.6.0 profiles predate profile-scoped API limits. Preserve the legacy
+    // budget for each existing API profile instead of showing a zero floor.
+    for (const profile of openCode.profiles) {
+      if (profile.policy === 'api' && !profile.limits) profile.limits = structuredClone(settings.budget || {});
+    }
     if (!openCode.profiles.some(p => p.id === openCode.activeProfileId)) openCode.activeProfileId = openCode.profiles[0].id;
     return openCode.profiles;
   }

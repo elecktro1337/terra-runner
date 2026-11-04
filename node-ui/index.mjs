@@ -75,7 +75,7 @@ function header(settings) {
   clear(); const project = selectedProject(settings); const profile = activeProfile(settings);
   console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' }))); console.log(chalk.gray('RUNNER  v1.6  ·  Local OpenCode development orchestrator')); console.log(rule);
   console.log(`${chalk.bold('Project')}  ${chalk.white(project?.id || 'not selected')}  ${chalk.gray('│')}  ${chalk.bold('Branch')}  ${project?.branch || 'not configured'}`); console.log(`${chalk.bold('Path')}     ${chalk.gray(project?.path || 'not configured')}`);
-  console.log(`${chalk.bold('Profile')}  ${chalk.cyan(profile?.model || 'not selected')}${profile?.reasoningVariant ? chalk.gray(` #${profile.reasoningVariant}`) : ''}`); console.log(`${chalk.bold('Policy')}   ${chalk.yellow(profile?.policy || 'not configured')}  ${chalk.gray('│')}  ${limitSummary(profile)}`); console.log(rule);
+  console.log(`${chalk.bold('Profile')}  ${chalk.cyan(profile?.model || 'not selected')}`); console.log(`${chalk.bold('Policy')}   ${chalk.yellow(profile?.policy || 'not configured')}  ${chalk.gray('│')}  ${limitSummary(profile)}`); console.log(rule);
 }
 function numberValue(raw, fallback) { const parsed = Number(String(raw).trim().replace(',', '.')); return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback; }
 async function configureLimits(settings, profile) {
@@ -103,7 +103,8 @@ async function configureType(settings, profile) {
 async function profileScreen(settings, profile) {
   while (true) {
     header(settings); console.log(chalk.bold('PROFILE DETAILS')); console.log(`  Model      ${chalk.cyan(profile.model)}`); console.log(`  Account    ${profile.credentialLabel || 'Not selected'}`); console.log(`  Type       ${profile.policy}`); console.log(`  Reasoning  ${profile.reasoningVariant || 'provider default'}`); console.log(`  Limits     ${limitSummary(profile)}\n`);
-    const action = await pick('Profile actions', [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }, { name: 'Configure limits', value: 'limits' }]);
+    const limitAction = profile.policy === 'oauth-managed' ? { name: 'Provider usage information', value: 'limits' } : { name: 'Configure limits', value: 'limits' };
+    const action = await pick('Profile actions', [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }, limitAction]);
     if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'limits') await configureLimits(settings, profile);
   }
 }
@@ -115,7 +116,7 @@ async function createProfile(settings) {
 }
 async function profilesMenu(settings) {
   while (true) {
-    header(settings); console.log(chalk.bold('PROFILES')); const profiles = migrateProfiles(settings); const choice = await pick('Open a profile or create a new one', [...profiles.map(profile => ({ name: `${profile.id === settings.openCode.activeProfileId ? chalk.green('●') : ' '} ${profile.model}${profile.reasoningVariant ? chalk.gray(`#${profile.reasoningVariant}`) : ''}  ${chalk.gray(`— ${limitSummary(profile)}`)}`, value: profile.id })), { name: chalk.cyan('+ Create new profile'), value: '__create' }]);
+    header(settings); console.log(chalk.bold('PROFILES')); const profiles = migrateProfiles(settings); const choice = await pick('Open a profile or create a new one', [...profiles.map(profile => ({ name: `${profile.id === settings.openCode.activeProfileId ? chalk.green('●') : ' '} ${profile.model}  ${chalk.gray(`— ${limitSummary(profile)}`)}`, value: profile.id })), { name: chalk.cyan('+ Create new profile'), value: '__create' }]);
     if (!choice) return; if (choice === '__create') await createProfile(settings); else await profileScreen(settings, profiles.find(profile => profile.id === choice));
   }
 }
