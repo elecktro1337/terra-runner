@@ -31,6 +31,7 @@ export function profileFrom(model, account = null, reasoningVariant = '', showTh
     credentialId: policy === 'local' ? '' : String(account?.credentialId || ''),
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(account?.label || ''),
     policy, reasoningVariant: variant, limits: null, runControls: { maxIterations: 0 },
+    usageSource: { kind: policy === 'oauth-managed' ? 'provider-managed' : policy === 'local' ? 'none' : 'local-estimate' },
     showThinking: Boolean(showThinking)
   };
 }
@@ -47,6 +48,7 @@ export function normalizeProfile(profile) {
     policy, reasoningVariant: String(profile?.reasoningVariant || parsed.reasoningVariant || ''),
     limits: profile?.limits && typeof profile.limits === 'object' ? structuredClone(profile.limits) : null,
     runControls: { maxIterations: Number(profile?.runControls?.maxIterations || 0) || 0 },
+    usageSource: { kind: String(profile?.usageSource?.kind || (policy === 'oauth-managed' ? 'provider-managed' : policy === 'local' ? 'none' : 'local-estimate')), command: String(profile?.usageSource?.command || ''), arguments: Array.isArray(profile?.usageSource?.arguments) ? [...profile.usageSource.arguments] : [] },
     showThinking: Boolean(profile?.showThinking)
   };
 }

@@ -71,6 +71,11 @@ function limitSummary(profile) {
   const limits = profile.limits || {}; const floor = Number(limits.balance?.minimumUsd || 0).toFixed(2);
   return limits.mode === 'daily' ? `Daily $${Number(limits.dailyUsd || 0).toFixed(2)}` : limits.mode === 'hybrid' ? `Daily $${Number(limits.dailyUsd || 0).toFixed(2)} + floor $${floor}` : limits.mode === 'unlimited' ? 'Unlimited' : `Balance floor $${floor}`;
 }
+function usageSourceSummary(profile) {
+  const source = profile?.usageSource || {}; if (source.kind === 'provider-managed') return 'Provider-managed (no local quota API)';
+  if (source.kind === 'external-command') return `External read-only command: ${source.command || 'not configured'}`;
+  if (source.kind === 'local-estimate') return 'Local OpenCode cost estimate'; return 'Not applicable';
+}
 function header(settings) {
   clear(); const project = selectedProject(settings); const profile = activeProfile(settings);
   console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' }))); console.log(chalk.gray('RUNNER  v1.6  ·  Local OpenCode development orchestrator')); console.log(rule);
@@ -97,6 +102,30 @@ async function configureRunGuard(settings, profile) {
   profile.runControls = { ...(profile.runControls || {}), maxIterations: Math.floor(value) };
   await save(settings); console.log(chalk.green('Local run guard saved.')); return pause();
 }
+async function configureUsageSource(settings, profile) {
+  if (profile.policy === 'local') { console.log(chalk.green('\nLocal profile: no provider usage or balance source is needed.')); return pause(); }
+  if (profile.policy === 'oauth-managed') {
+    console.log(chalk.yellow('\nOAuth usage is managed by the provider. Terra Runner does not receive a personal quota API or store OAuth tokens.'));
+    console.log(chalk.gray('Use the provider Usage page for allowance and reset details; use the local run guard for automatic stopping.')); return pause();
+  }
+  const selected = await pick('API balance data source', [
+    { name: 'Local OpenCode cost estimate (existing balance snapshot)', value: 'local-estimate' },
+    { name: 'External read-only command (provider/API adapter)', value: 'external-command' }
+  ]); if (!selected) return;
+  profile.limits ||= {}; profile.limits.balance ||= {};
+  if (selected === 'local-estimate') {
+    profile.usageSource = { kind: 'local-estimate', command: '', arguments: [] }; profile.limits.balance.source = 'snapshot';
+  } else {
+    console.log(chalk.gray('\nThe command must write exactly one JSON object: {"balanceUsd": 12.34, "observedAt": "2026-11-04T12:00:00Z"}.'));
+    console.log(chalk.gray('Use a separate read-only provider credential or environment variable. Do not paste an OAuth token into Terra Runner.'));
+    const command = (await input({ message: 'Read-only command path or name' })).trim(); if (!command) { console.log(chalk.yellow('No command was saved.')); return pause(); }
+    const rawArguments = (await input({ message: 'Arguments as a JSON array', default: '[]' })).trim(); let commandArgs;
+    try { commandArgs = JSON.parse(rawArguments); if (!Array.isArray(commandArgs) || !commandArgs.every(value => typeof value === 'string')) throw new Error(); } catch { console.log(chalk.red('Arguments must be a JSON array of strings.')); return pause(); }
+    const maxAgeMinutes = numberValue(await input({ message: 'Maximum reading age in minutes', default: String(profile.limits.balance.maxAgeMinutes ?? 5) }), Number(profile.limits.balance.maxAgeMinutes ?? 5));
+    profile.usageSource = { kind: 'external-command', command, arguments: commandArgs }; profile.limits.balance = { ...profile.limits.balance, source: 'command', command, arguments: commandArgs, maxAgeMinutes };
+  }
+  if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green('Usage data source saved.')); return pause();
+}
 async function configureReasoning(settings, profile) { const variant = await pick('Reasoning level', [{ name: 'Provider default', value: '' }, ...['minimal', 'low', 'medium', 'high', 'xhigh'].map(value => ({ name: value, value }))]); if (variant === null) return; profile.reasoningVariant = variant; profile.showThinking = await yesNo('Show OpenCode thinking blocks during development?'); if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); }
 async function configureType(settings, profile) {
   const policy = await pick('Profile type', [{ name: 'API key — local spending limits', value: 'api' }, { name: 'OAuth — provider-managed usage', value: 'oauth-managed' }, { name: 'Local model — no limits', value: 'local' }]); if (!policy) return;
@@ -110,10 +139,10 @@ async function configureType(settings, profile) {
 }
 async function profileScreen(settings, profile) {
   while (true) {
-    header(settings); console.log(chalk.bold('PROFILE DETAILS')); console.log(`  Model      ${chalk.cyan(profile.model)}`); console.log(`  Account    ${profile.credentialLabel || 'Not selected'}`); console.log(`  Type       ${profile.policy}`); console.log(`  Reasoning  ${profile.reasoningVariant || 'provider default'}`); console.log(`  Limits     ${limitSummary(profile)}\n`);
+    header(settings); console.log(chalk.bold('PROFILE DETAILS')); console.log(`  Model      ${chalk.cyan(profile.model)}`); console.log(`  Account    ${profile.credentialLabel || 'Not selected'}`); console.log(`  Type       ${profile.policy}`); console.log(`  Reasoning  ${profile.reasoningVariant || 'provider default'}`); console.log(`  Limits     ${limitSummary(profile)}`); console.log(`  Data       ${usageSourceSummary(profile)}\n`);
     const limitAction = profile.policy === 'oauth-managed' ? { name: 'Provider usage information', value: 'limits' } : { name: 'Configure limits', value: 'limits' };
-    const action = await pick('Profile actions', [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }, limitAction, { name: 'Configure local run guard', value: 'guard' }]);
-    if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'limits') await configureLimits(settings, profile); if (action === 'guard') await configureRunGuard(settings, profile);
+    const action = await pick('Profile actions', [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }, limitAction, { name: 'Configure usage data source', value: 'source' }, { name: 'Configure local run guard', value: 'guard' }]);
+    if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'limits') await configureLimits(settings, profile); if (action === 'source') await configureUsageSource(settings, profile); if (action === 'guard') await configureRunGuard(settings, profile);
   }
 }
 async function createProfile(settings) {

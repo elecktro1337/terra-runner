@@ -48,3 +48,11 @@ test('keeps a local run guard independently from provider usage', () => {
   const [profile] = migrateProfiles(settings);
   assert.equal(profile.runControls.maxIterations, 7);
 });
+test('classifies default usage sources without storing credentials', () => {
+  const oauth = profileFrom('openai/gpt', { authMethod: 'oauth' });
+  const api = profileFrom('openai/gpt', { authMethod: 'key' });
+  const local = profileFrom('ollama/qwen3');
+  assert.equal(oauth.usageSource.kind, 'provider-managed');
+  assert.equal(api.usageSource.kind, 'local-estimate');
+  assert.equal(local.usageSource.kind, 'none');
+});
