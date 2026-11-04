@@ -27,6 +27,7 @@ param(
     [switch]$Stop,
     [switch]$Abort,
     [switch]$ClearStop,
+    [switch]$ClearControlFlags,
     [switch]$Report,
     [string]$ReportDate = '',
     [string]$SetBalanceUsd = '',
@@ -789,10 +790,12 @@ if ($Abort) {
     Write-Host "Abort requested: current iteration will be terminated on next poll."
     return
 }
-if ($ClearStop) {
+if ($ClearStop -or $ClearControlFlags) {
     foreach ($p in @($stopPath,$abortPath)) { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force } }
-    Write-Host 'Stop/abort flags cleared.'
-    return
+    if ($ClearStop) {
+        Write-Host 'Stop/abort flags cleared.'
+        return
+    }
 }
 
 $usageKind = Get-OpenCodeUsageKind $cfg

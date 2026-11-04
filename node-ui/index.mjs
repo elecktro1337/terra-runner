@@ -139,6 +139,9 @@ function showRunnerFailure(output) {
   } else if (/wrong Git branch/i.test(text)) {
     reason = 'The checked-out Git branch does not match this project profile.';
     action = 'Switch to the configured branch, then start again.';
+  } else if (/STOP flag exists|ABORT flag exists/i.test(text)) {
+    reason = 'A previous development run left a stop request behind.';
+    action = 'Start the run from the Node interface again; it now clears stale control flags automatically.';
   } else {
     const lines = text.split(/\r?\n/).map(line => line.trim().replace(/^\|\s?/, '')).filter(line => line && !/^Line \|$|^~+$|^Exception:$/.test(line));
     detail = lines.reverse().find(line => !/^(at |CategoryInfo|FullyQualifiedErrorId|\+ CategoryInfo)/i.test(line)) || '';
@@ -520,7 +523,8 @@ async function runRunner(settings, mode) {
   const runLabel = mode === 'continuous' ? (limit ? `Start continuous development for up to ${limit} iteration(s)` : 'Start continuous development until a safety stop') : 'Run one development iteration';
   const guardNote = skipSnapshotGuard ? ' without the provider snapshot guard' : '';
   if (!(await yesNo(`${runLabel}${guardNote}?`))) return;
-  const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-UiEvents', mode === 'continuous' ? '-Continuous' : '-Once'];
+  console.log(chalk.gray('Clearing any stop request from a previous run.'));
+  const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-UiEvents', '-ClearControlFlags', mode === 'continuous' ? '-Continuous' : '-Once'];
   if (mode === 'continuous') { if (limit > 0) runnerArgs.push('-MaxIterations', String(limit)); else runnerArgs.push('-UnlimitedIterations'); }
   if (skipSnapshotGuard) runnerArgs.push('-SkipProviderSnapshotGuard');
   await runWithTui(runnerArgs, settings, project, mode);
