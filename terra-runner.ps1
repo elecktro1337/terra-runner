@@ -212,15 +212,21 @@ function Get-EventErrors([string]$EventsFile) {
     }
 }
 function Test-TransientNetworkFailure([string]$EventsFile, [string]$ErrorFile) {
-    $content = ''
-    foreach ($file in @($EventsFile,$ErrorFile)) {
-        if (Test-Path -LiteralPath $file -PathType Leaf) {
-            try { $content += [IO.File]::ReadAllText($file,[Text.UTF8Encoding]::new($false)) + "`n" }
-            catch { }
-        }
+    $signature = '(?is)(?:\b(?:tls|ssl)\b.{0,120}\b(?:handshake|connection|socket|network|reset|timeout|certificate)\b|\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|SSL_ERROR|CERT_|UNABLE_TO_VERIFY)\b)'
+    if (Test-Path -LiteralPath $ErrorFile -PathType Leaf) {
+        try {
+            if ([IO.File]::ReadAllText($ErrorFile,[Text.UTF8Encoding]::new($false)) -match $signature) { return $true }
+        } catch { }
     }
-    if ([string]::IsNullOrWhiteSpace($content)) { return $false }
-    return $content -match '(?is)(?:\b(?:tls|ssl)\b.{0,120}\b(?:handshake|connection|socket|network|reset|timeout|certificate)\b|\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|SSL_ERROR|CERT_|UNABLE_TO_VERIFY)\b)'
+    if (-not (Test-Path -LiteralPath $EventsFile -PathType Leaf)) { return $false }
+    try {
+        foreach ($line in [IO.File]::ReadLines($EventsFile,[Text.UTF8Encoding]::new($false))) {
+            # A task, source file, or agent explanation may legitimately mention TLS/SSL.
+            # Treat it as a connection failure only when OpenCode marks the event as an error.
+            if ($line -match $signature -and $line -match '(?i)"(?:type|status)"\s*:\s*"[^"\r\n]*error[^"\r\n]*"') { return $true }
+        }
+    } catch { }
+    return $false
 }
 function Wait-ForOpenCodeRecovery([string]$Executable, [string]$Directory, $Budget, [string]$LogRoot, [int]$Attempts, [int]$DelaySeconds) {
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {

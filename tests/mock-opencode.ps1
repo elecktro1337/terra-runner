@@ -46,6 +46,7 @@ if ($cmd -eq 'run') {
     '{"type":"tool_use","part":{"id":"call_recovered","tool":"read","state":{"status":"error"}}}'
     '{"type":"text","part":{"text":"╨Т╤Б╨╡"}}'
     '{"type":"text","part":{"text":"Mock iteration completed"}}'
+    if ($env:TERRA_MOCK_TLS_TEXT -eq '1') { '{"type":"text","part":{"text":"TLS/HSTS is documented as a project security requirement."}}' }
     exit 0
 }
 exit 2

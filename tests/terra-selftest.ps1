@@ -61,7 +61,9 @@ try {
     $env:TERRA_MOCK_COST = '0.15'
     $env:TERRA_MOCK_BROKEN_STATS = '0'
     $env:TERRA_MOCK_ALL_COST = '0.15'
+    $env:TERRA_MOCK_TLS_TEXT = '1'
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once -ShowProgress
+    Remove-Item Env:TERRA_MOCK_TLS_TEXT -ErrorAction SilentlyContinue
     if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { throw 'Runner returned non-zero exit code' }
     if (Test-Path -LiteralPath $oldBundle) { throw 'Iteration rotation did not remove expired selected-project logs.' }
     if (-not (Test-Path -LiteralPath $newBundle) -or -not (Test-Path -LiteralPath $protectedBudget)) { throw 'Iteration rotation touched retained logs or protected budget data.' }
@@ -75,6 +77,7 @@ try {
     if ($summaries.Count -ne 1) { throw 'Expected one project-specific iteration summary.' }
     $summary = Get-Content -Raw -LiteralPath $summaries[0].FullName | ConvertFrom-Json
     if (-not $summary.pushVerified -or $summary.doneAfter -ne 1) { throw 'Summary validation failed.' }
+    if ($summary.transientNetworkFailure) { throw 'A successful text message mentioning TLS must not trigger retry logic.' }
     if ($summary.completedTaskIds -notcontains 'NTD-0001') { throw 'Missing completed TODO ID in iteration summary.' }
     if (-not $summary.commits -or $summary.commits.Count -lt 1) { throw 'Missing Git commit information in summary.' }
     if ($summary.toolErrors -ne 1) { throw 'Recovered tool error must be counted separately.' }
@@ -181,6 +184,7 @@ try {
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 1
     Remove-Item Env:TERRA_MOCK_TLS_ONCE -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_STATE_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:TERRA_MOCK_TLS_TEXT -ErrorAction SilentlyContinue
     $afterTls = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
     if ($afterTls.Count -ne ($beforeTls + 2)) { throw 'TLS interruption was not retried as the same iteration.' }
     $tlsSummary = @($afterTls | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json } | Where-Object { $_.transientNetworkFailure } | Select-Object -Last 1)
