@@ -107,14 +107,24 @@ function Get-LatestSummary {
 }
 function Get-LatestCompletedTask {
     $logs = Join-Path (Get-ProjectDataRoot) 'logs'
-    if (-not (Test-Path -LiteralPath $logs -PathType Container)) { return $null }
-    foreach ($file in @(Get-ChildItem -LiteralPath $logs -Recurse -File -Filter '*.summary.json' | Sort-Object LastWriteTimeUtc -Descending)) {
-        try { $summary = Get-Content -LiteralPath $file.FullName -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable -Depth 50 }
-        catch { continue }
-        foreach ($taskId in @(Read-SettingMember $summary 'completedTaskIds')) {
-            if (-not [string]::IsNullOrWhiteSpace([string]$taskId)) { return [string]$taskId }
+    if (Test-Path -LiteralPath $logs -PathType Container) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $logs -Recurse -File -Filter '*.summary.json' | Sort-Object LastWriteTimeUtc -Descending)) {
+            try { $summary = Get-Content -LiteralPath $file.FullName -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable -Depth 50 }
+            catch { continue }
+            foreach ($taskId in @(Read-SettingMember $summary 'completedTaskIds')) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$taskId)) { return [string]$taskId }
+            }
         }
     }
+    # Some agents commit a verified task but do not produce a roadmap-diff ID in the runner summary.
+    # The local commit subject is a read-only, project-scoped fallback for the dashboard only.
+    try {
+        $project = Get-SelectedProject
+        foreach ($subject in @(& git -C ([string]$project.path) log -n 250 --format=%s 2>$null)) {
+            $match = [regex]::Match([string]$subject, '(?<![A-Za-z0-9])[A-Za-z][A-Za-z0-9]*-\d{3,}(?![A-Za-z0-9])')
+            if ($match.Success) { return $match.Value }
+        }
+    } catch { }
     return $null
 }
 function Get-HeaderBudgetText($Budget, $LastSummary) {
@@ -275,12 +285,46 @@ function Show-Header {
     }
     Write-Rule
 }
+function Test-DevelopmentRestartRequired($Summary, [bool]$RunnerFailed) {
+    if ($RunnerFailed -or $null -eq $Summary) { return $true }
+    if ([bool](Read-SettingMember $Summary 'noActionableTasksReported')) { return $true }
+    $exitCode = Read-SettingMember $Summary 'exitCode'
+    if ($null -ne $exitCode -and [int]$exitCode -ne 0) { return $true }
+    $reason = [string](Read-SettingMember $Summary 'stoppedReason')
+    if ([string]::IsNullOrWhiteSpace($reason)) { return $false }
+    return $reason -notin @('roadmap-complete','stop-requested','abort-requested')
+}
+function Get-DevelopmentStopText($Summary, [bool]$RunnerFailed) {
+    if ($RunnerFailed) { return 'runner error' }
+    $reason = [string](Read-SettingMember $Summary 'stoppedReason')
+    if ($reason) { return $reason }
+    $blocker = [string](Read-SettingMember $Summary 'noActionableTasksMessage')
+    if ($blocker) { return (($blocker -replace '\s+',' ').Trim() | Select-Object -First 1) }
+    return 'unknown development error'
+}
 function Invoke-RunnerCommand([hashtable]$Command) {
-    $parameters = @{ Project=$script:ProjectId; Config=$script:ConfigFile }
-    foreach ($key in $Command.Keys) { $parameters[$key] = $Command[$key] }
-    try { & $script:Runner @parameters }
-    catch { Write-Line "Error: $($_.Exception.Message)" 'Red' }
-    Pause-Menu
+    $isDevelopmentRun = (($Command.ContainsKey('Once') -and [bool]$Command['Once']) -or ($Command.ContainsKey('Continuous') -and [bool]$Command['Continuous']))
+    while ($true) {
+        $parameters = @{ Project=$script:ProjectId; Config=$script:ConfigFile }
+        foreach ($key in $Command.Keys) { $parameters[$key] = $Command[$key] }
+        $runnerFailed = $false
+        try { & $script:Runner @parameters }
+        catch { $runnerFailed = $true; Write-Line "Error: $($_.Exception.Message)" 'Red' }
+        if (-not $isDevelopmentRun) { Pause-Menu; return }
+        $summary = Get-LatestSummary
+        if (-not (Test-DevelopmentRestartRequired $summary $runnerFailed)) { Pause-Menu; return }
+        Write-Line "Development stopped: $(Get-DevelopmentStopText $summary $runnerFailed)" 'Yellow'
+        if (-not (Confirm 'Reload configuration and restart this development run?')) { Pause-Menu; return }
+        try {
+            Load-Settings
+            [void](Get-SelectedProject)
+            Write-Line 'Configuration reloaded. Restarting development.' 'Cyan'
+        } catch {
+            Write-Line "Configuration reload failed: $($_.Exception.Message)" 'Red'
+            Pause-Menu
+            return
+        }
+    }
 }
 function Format-ProjectMenuEntry([int]$Number, $Project, [string]$SelectedProjectId) {
     $marker = if ([string]$Project.id -eq $SelectedProjectId) { '* ' } else { '  ' }
