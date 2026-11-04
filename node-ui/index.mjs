@@ -81,7 +81,6 @@ function showRunSummary(summary, settings, project) {
 function showRunOverview(runs, settings, project) {
   const summary = runs.at(-1) || {};
   const completed = [...new Set(runs.flatMap(run => Array.isArray(run?.completedTaskIds) ? run.completedTaskIds : []))];
-  const planned = [...new Map(runs.filter(run => run?.plannedTaskId).map(run => [run.plannedTaskId, run.plannedTaskTitle || ''])).entries()];
   const taskCount = runs.reduce((total, run) => total + Math.max(0, Number(run?.doneAfter || 0) - Number(run?.doneBefore || 0)), 0);
   const elapsed = runs.reduce((total, run) => total + Number(run?.elapsedSeconds || 0), 0);
   const code = runs.reduce((total, run) => total + Number(run?.codeFilesChanged || 0), 0);
@@ -97,7 +96,6 @@ function showRunOverview(runs, settings, project) {
   console.log(`  ${chalk.gray('Duration')}    ${durationText(elapsed * 1000)}`);
   console.log(`  ${chalk.gray('Roadmap')}     ${taskCount ? chalk.green(`+${taskCount} completed`) : 'no tasks completed'} | ${summary.pendingAfter ?? '?'} pending`);
   console.log(`  ${chalk.gray('Tasks')}       ${completed.length ? chalk.cyan(completed.join(', ')) : 'no task ID recorded'}`);
-  if (planned.length) console.log(`  ${chalk.gray('Work plan')}   ${planned.map(([id, title]) => title ? `${id} - ${title}` : id).join(' | ')}`);
   console.log(`  ${chalk.gray('Changes')}     ${code} code | ${tests} test files | ${docs} docs`);
   console.log(`  ${chalk.gray('Verification')} ${checks} command(s) observed${checkErrors ? chalk.yellow(` | ${checkErrors} reported error(s)`) : ''}`);
   if (summary.quotaEstimatedSpendUSD != null) console.log(`  ${chalk.gray('Estimate')}    provider snapshot ${summary.quotaReportedRemaining} ${summary.quotaUnit} | local OpenCode spend $${Number(summary.quotaEstimatedSpendUSD).toFixed(4)} | estimated ${summary.quotaRemaining} ${summary.quotaUnit}`);
@@ -121,7 +119,9 @@ function iterationCheckpointText(event) {
   const commit = Array.isArray(event.commits) && event.commits.length ? event.commits.map(item => item.hash ? `${item.hash} ${item.subject || ''}`.trim() : String(item)).join(', ') : 'no commit recorded';
   const stopped = event.stoppedReason ? ` | ${event.stoppedReason}` : '';
   const cost = event.costDeltaUSD == null ? '' : ` | $${Number(event.costDeltaUSD).toFixed(4)}`;
-  return `Iteration ${event.iteration} complete | ${tasks} | ${durationText(Number(event.elapsedSeconds || 0) * 1000)}${cost} | ${commit}${stopped}`;
+  const total = Number(event.totalRoadmap || 0); const done = Number(event.doneAfter || 0);
+  const roadmap = total ? ` | roadmap ${done}/${total} (${((done / total) * 100).toFixed(1)}%)` : '';
+  return `Iteration ${event.iteration} complete | ${tasks} | ${durationText(Number(event.elapsedSeconds || 0) * 1000)}${cost}${roadmap} | ${commit}${stopped}`;
 }
 function showRunnerFailure(output) {
   const text = String(output || ''); let title = 'DEVELOPMENT DID NOT START'; let reason = 'Terra Runner could not start the development run.'; let action = 'Open the project logs or run Project preflight, then try again.'; let detail = '';
@@ -155,22 +155,11 @@ async function runWithTui(runnerArgs, settings, project, mode) {
   const previousSummaryId = (await latestIterationSummary(settings, project, configPath))?.id || '';
   const started = Date.now(); let iterationStarted = started; let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration';
   let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let control = '';
-  const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-  console.log(rule);
+  const interactive = Boolean(process.stdin.isTTY);
+  console.log(rule); console.log(chalk.gray('  Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop'));
   const spinner = ora({ text: `${stage} · 0m 00s`, color: 'cyan', discardStdin: false }).start();
-  let controlFooter = chalk.gray('  Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop');
-  const renderControlFooter = () => {
-    if (!interactive || !process.stdout.rows) return;
-    process.stdout.write(`\x1b[s\x1b[${process.stdout.rows};1H\x1b[2K${controlFooter}\x1b[u`);
-  };
-  const clearControlFooter = () => {
-    if (!interactive || !process.stdout.rows) return;
-    process.stdout.write(`\x1b[s\x1b[${process.stdout.rows};1H\x1b[2K\x1b[u`);
-  };
-  renderControlFooter();
-  const update = setInterval(() => { spinner.text = `${stage} · ${durationText(Date.now() - iterationStarted)}`; renderControlFooter(); }, 1000);
+  const update = setInterval(() => { spinner.text = `${stage} · ${durationText(Date.now() - iterationStarted)}`; }, 1000);
   const liveUpdate = setInterval(async () => {
-    if (control) return;
     if (!eventFile) return;
     try {
       const lines = (await fs.readFile(eventFile, 'utf8')).split(/\r?\n/).filter(Boolean);
@@ -196,7 +185,7 @@ async function runWithTui(runnerArgs, settings, project, mode) {
   const onSigint = () => { void requestControl('stop'); };
   if (interactive) { process.stdin.setRawMode?.(true); process.stdin.resume(); process.stdin.on('data', onInput); process.on('SIGINT', onSigint);
   }
-  const cleanupControls = () => { clearControlFooter(); if (!interactive) return; process.stdin.off('data', onInput); process.off('SIGINT', onSigint); process.stdin.setRawMode?.(false); };
+  const cleanupControls = () => { if (!interactive) return; process.stdin.off('data', onInput); process.off('SIGINT', onSigint); process.stdin.setRawMode?.(false); };
   try {
     const result = await new Promise((resolve, reject) => {
       const child = spawn(executable, runnerArgs, { cwd: root, shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
