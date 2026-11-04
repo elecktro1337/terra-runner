@@ -32,6 +32,10 @@ User-entered money accepts `96.11` or `96,11`, is parsed with invariant decimal 
 
 OpenCode usage is not a provider balance. A snapshot balance is an estimate: recorded balance minus the change in local all-time OpenCode usage. Limited modes fail closed when required usage information is unavailable.
 
+## Accounts and reasoning
+
+Use **Settings → OpenCode accounts and reasoning** to refresh and select saved OpenCode accounts by their existing labels. API-key accounts use balance limits; OAuth accounts use a user-reported quota snapshot; local profiles show no balance or quota at all. Credentials remain in OpenCode — Terra Runner stores only non-secret IDs and labels. The same screen configures a supported model reasoning variant and optional OpenCode thinking-block display.
+
 ## Project isolation
 
 Each project has a stable ID and its own logs, reports, control state, and stop files. The selected project path is always absolute and may contain spaces or Unicode characters. Terra Runner never derives it from its own installation path.

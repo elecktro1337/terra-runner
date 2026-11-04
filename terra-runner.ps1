@@ -353,6 +353,48 @@ function Get-BudgetMode($Settings) {
     }
     return $m
 }
+function Get-ActiveOpenCodeAccount($Config) {
+    $settings = Read-Member $Config 'openCode'
+    if ($null -eq $settings) { return [ordered]@{ id='legacy'; usageKind='balance'; provider=''; credentialId=''; label='Legacy API configuration'; authMethod='key' } }
+    $activeId = [string](Read-Member $settings 'activeAccountId')
+    $accounts = @((Read-Member $settings 'accounts'))
+    if ($accounts.Count -eq 0) { return [ordered]@{ id='legacy'; usageKind='balance'; provider=''; credentialId=''; label='Legacy API configuration'; authMethod='key' } }
+    foreach ($account in $accounts) {
+        if ([string](Read-Member $account 'id') -eq $activeId) { return $account }
+    }
+    throw 'No active OpenCode account is configured. Select one in Settings > OpenCode accounts, model and reasoning.'
+}
+function Get-OpenCodeUsageKind($Config) {
+    $kind = [string](Read-Member (Get-ActiveOpenCodeAccount $Config) 'usageKind')
+    if ($kind -notin @('balance','quota','local')) { throw "Unsupported or unclassified OpenCode account usage kind '$kind'. Select the account again and choose its usage type." }
+    return $kind
+}
+function New-ZeroUsage([string]$Scope) {
+    return [pscustomobject]@{ Scope=$Scope; Day=(Get-Date).ToString('yyyy-MM-dd'); CostUSD=0.0; Tokens=0.0; CheckedAt=(Get-Date).ToString('o') }
+}
+function Get-QuotaSnapshot($Account) {
+    $quota = Read-Member $Account 'quota'
+    if ($null -eq $quota -or -not [bool](Read-Member $quota 'configured')) {
+        throw 'OAuth quota is not configured. Set a provider-reported quota snapshot in Settings > OpenCode accounts, model and reasoning.'
+    }
+    $remaining = Require-NonNegativeNumber (Read-Member $quota 'remaining') 'quota.remaining'
+    $reserve = Require-NonNegativeNumber (Read-Member $quota 'reserve') 'quota.reserve'
+    $observedAt = [string](Read-Member $quota 'observedAt')
+    try { $observed = [DateTimeOffset]::Parse($observedAt,$Invariant) } catch { throw 'OAuth quota snapshot has no valid observation time. Reconcile it in Settings.' }
+    $maxAge = Require-PositiveNumber (Read-Member $quota 'maxAgeMinutes') 'quota.maxAgeMinutes'
+    $age = ([DateTimeOffset]::UtcNow - $observed.ToUniversalTime()).TotalMinutes
+    if ($age -lt -2 -or $age -gt $maxAge) { throw "OAuth quota snapshot is stale ($([Math]::Round($age,1)) minutes). Reconcile it in Settings before development." }
+    return [pscustomobject]@{ Kind='quota'; Mode='quota'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$remaining; QuotaReserve=$reserve; QuotaUnit=[string](Read-Member $quota 'unit'); QuotaObservedAt=$observedAt }
+}
+function New-LocalSnapshot {
+    return [pscustomobject]@{ Kind='local'; Mode='local'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
+}
+function Switch-OpenCodeAccount([string]$Executable, $Account, [string]$Directory) {
+    if ([string](Read-Member $Account 'usageKind') -eq 'local') { return }
+    $provider = [string](Read-Member $Account 'provider'); $credential = [string](Read-Member $Account 'credentialId')
+    if (-not $provider -or -not $credential) { throw 'The selected OpenCode account has no provider or credential ID.' }
+    [void](Invoke-Cli $Executable @('auth','switch',$provider,$credential) $Directory)
+}
 function Get-BalanceStatePath([string]$Root, $Settings) {
     $id = [string](Read-Member $Settings 'id')
     if ($id -cnotmatch '^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$') { throw 'Unsafe or missing balance.id' }
@@ -395,6 +437,10 @@ function Set-BalanceSnapshot([string]$File, [double]$Amount, $Usage, [bool]$Over
     })
 }
 function Get-BudgetSnapshot([string]$Executable, [string]$Directory, $Budget, [string]$Root) {
+    $account = Get-ActiveOpenCodeAccount $cfg
+    $kind = Get-OpenCodeUsageKind $cfg
+    if ($kind -eq 'quota') { return (Get-QuotaSnapshot $account) }
+    if ($kind -eq 'local') { return (New-LocalSnapshot) }
     $mode = Get-BudgetMode $Budget
     $day = Get-Usage $Executable $Directory $Budget 'day'
     $all = Get-Usage $Executable $Directory $Budget 'all'
@@ -422,11 +468,17 @@ function Get-BudgetSnapshot([string]$Executable, [string]$Directory, $Budget, [s
         } else { throw "Unsupported balance.source '$balanceSource'. Use snapshot or command." }
     }
     return [pscustomobject]@{
-        Mode=$mode; Daily=$day; AllTime=$all; BalanceUSD=$balance
-        BalanceSource=$source; BalanceObservedAt=$observedAt
+        Kind='balance'; Mode=$mode; Daily=$day; AllTime=$all; BalanceUSD=$balance
+        BalanceSource=$source; BalanceObservedAt=$observedAt; QuotaRemaining=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt=''
     }
 }
 function Get-BudgetStopReason($Snapshot, $Budget, [bool]$Emergency) {
+    if ($Snapshot.Kind -eq 'local') { return '' }
+    if ($Snapshot.Kind -eq 'quota') {
+        $cutoff = if ($Emergency) { [double]$Snapshot.QuotaReserve } else { [double]$Snapshot.QuotaReserve }
+        if ([double]$Snapshot.QuotaRemaining -le $cutoff) { return "quota threshold reached (reported $($Snapshot.QuotaRemaining) $($Snapshot.QuotaUnit), reserve $cutoff)" }
+        return ''
+    }
     $mode = $Snapshot.Mode
     if ($mode -in @('daily','hybrid')) {
         $cap = [double]$Budget.dailyUsd
@@ -447,6 +499,11 @@ function Get-BudgetStopReason($Snapshot, $Budget, [bool]$Emergency) {
     return ''
 }
 function Show-Usage($Snapshot, $Budget) {
+    if ($Snapshot.Kind -eq 'local') { Write-Host 'Local model: no provider balance or quota limits are configured.'; return }
+    if ($Snapshot.Kind -eq 'quota') {
+        $message = ('OpenCode OAuth quota: {0:N2} {1} remaining; reserve {2:N2} {1}; user-reported snapshot' -f $Snapshot.QuotaRemaining,$Snapshot.QuotaUnit,$Snapshot.QuotaReserve)
+        Write-Host $message; Show-ProgressMeters $Snapshot $Budget; return
+    }
     $usage = $Snapshot.Daily
     $message = ('Day {0}: OpenCode cost ${1:N4}; tokens {2:N0}' -f $usage.Day,$usage.CostUSD,$usage.Tokens)
     if ($Snapshot.Mode -in @('daily','hybrid')) {
@@ -463,6 +520,15 @@ function Show-Usage($Snapshot, $Budget) {
 }
 function Show-ProgressMeters($Snapshot, $Budget) {
     if (-not $ShowProgress) { return }
+    if ($Snapshot.Kind -eq 'local') { return }
+    if ($Snapshot.Kind -eq 'quota') {
+        if ($Snapshot.QuotaUnit -eq 'percent') {
+            $ratio = [Math]::Min(1.0,[Math]::Max(0.0,[double]$Snapshot.QuotaRemaining / 100.0))
+            $filled = [Math]::Min(26,[Math]::Max(0,[int][Math]::Round($ratio*26)))
+            Write-Host ('  QUOTA   [{0}{1}] {2:N1}% remaining' -f ('█'*$filled),('░'*(26-$filled)),($ratio*100)) -ForegroundColor $(if ($ratio -le 0.1) { 'Yellow' } else { 'Cyan' })
+        }
+        return
+    }
     if ($Snapshot.Mode -in @('daily','hybrid')) {
         $cap = [double]$Budget.dailyUsd
         $spent = [double]$Snapshot.Daily.CostUSD
@@ -580,9 +646,12 @@ function Write-EnglishDailyReport([string]$DataDirectory, [string]$Date) {
     $reportDirectory = Join-Path $DataDirectory 'reports'
     Ensure-Directory $reportDirectory
     $cost = 0.0; $tasks = 0; $pushes = 0; $code = 0; $tests = 0; $docs = 0; $errors = 0
+    $usageKinds = [System.Collections.Generic.HashSet[string]]::new(); $latestQuota = $null
     $ids = [System.Collections.Generic.HashSet[string]]::new(); $commits = [System.Collections.Generic.List[string]]::new()
     foreach ($summary in $summaries) {
-        $delta = Read-Member $summary 'costDeltaUSD'; if ($null -ne $delta) { $cost += [double]$delta }
+        $kind = [string](Read-Member $summary 'accountUsageKind'); if (-not $kind) { $kind = 'balance' }; [void]$usageKinds.Add($kind)
+        $delta = Read-Member $summary 'costDeltaUSD'; if ($kind -eq 'balance' -and $null -ne $delta) { $cost += [double]$delta }
+        if ($kind -eq 'quota') { $latestQuota = $summary }
         $tasks += [Math]::Max(0,[int](Read-Member $summary 'doneAfter')-[int](Read-Member $summary 'doneBefore'))
         if ([bool](Read-Member $summary 'pushVerified')) { $pushes++ }
         $code += [int](Read-Member $summary 'codeFilesChanged'); $tests += [int](Read-Member $summary 'testFilesChanged'); $docs += [int](Read-Member $summary 'documentationFilesChanged'); $errors += [int](Read-Member $summary 'toolErrors')
@@ -592,19 +661,23 @@ function Write-EnglishDailyReport([string]$DataDirectory, [string]$Date) {
     $rows = [System.Collections.Generic.List[string]]::new()
     $rows.Add("# Terra Runner daily report — $Date"); $rows.Add(''); $rows.Add("Project: **$(Split-Path $DataDirectory -Leaf)**"); $rows.Add('')
     $rows.Add("- Iterations: **$($summaries.Count)**; completed roadmap tasks: **$tasks**; verified pushes: **$pushes**")
-    $rows.Add(('- Estimated local OpenCode usage during iterations: **${0:N4}**' -f $cost))
+    if ($usageKinds.Count -eq 1 -and $usageKinds.Contains('balance')) { $rows.Add(('- Estimated local OpenCode usage during iterations: **${0:N4}**' -f $cost)) }
+    elseif ($usageKinds.Count -eq 1 -and $usageKinds.Contains('quota') -and $null -ne $latestQuota) { $rows.Add(('- Latest provider-reported quota snapshot: **{0} {1}**; reserve **{2} {1}**' -f (Read-Member $latestQuota 'quotaRemaining'),(Read-Member $latestQuota 'quotaUnit'),(Read-Member $latestQuota 'quotaReserve'))) }
+    elseif ($usageKinds.Count -eq 1 -and $usageKinds.Contains('local')) { $rows.Add('- Local model profile: **no provider balance or quota tracking**.') }
+    else { $rows.Add('- Mixed account usage: see each iteration policy below.') }
     $rows.Add("- Changed files: code **$code**, tests **$tests**, documentation **$docs**; tool errors **$errors**")
     if ($ids.Count) { $rows.Add('- Completed task IDs: ' + (@($ids | Sort-Object) -join ', ')) }
     if ($commits.Count) { $rows.Add(''); $rows.Add('## Commits'); foreach ($commit in $commits) { $rows.Add('- ' + $commit) } }
-    $rows.Add(''); $rows.Add('| Time | Iteration | Tasks | Code | Tests | Docs | Cost | Push | Stop reason |'); $rows.Add('|---|---|---:|---:|---:|---:|---:|---|---|')
+    $rows.Add(''); $rows.Add('| Time | Iteration | Policy | Tasks | Code | Tests | Docs | Usage | Push | Stop reason |'); $rows.Add('|---|---|---|---:|---:|---:|---:|---|---|---|')
     foreach ($summary in $summaries) {
         $started = [string](Read-Member $summary 'started'); $time = if ($started.Length -ge 19) { $started.Substring(11,8) } else { '--:--:--' }
         $completed = [Math]::Max(0,[int](Read-Member $summary 'doneAfter')-[int](Read-Member $summary 'doneBefore'))
-        $delta = Read-Member $summary 'costDeltaUSD'; $displayCost = if ($null -eq $delta) { '?' } else { ('$' + ([double]$delta).ToString('F4',$Invariant)) }
+        $kind = [string](Read-Member $summary 'accountUsageKind'); if (-not $kind) { $kind='balance' }
+        $delta = Read-Member $summary 'costDeltaUSD'; $displayCost = if ($kind -eq 'quota') { ('{0} {1}' -f (Read-Member $summary 'quotaRemaining'),(Read-Member $summary 'quotaUnit')) } elseif ($kind -eq 'local') { 'not tracked' } elseif ($null -eq $delta) { '?' } else { ('$' + ([double]$delta).ToString('F4',$Invariant)) }
         $reason = [string](Read-Member $summary 'stoppedReason'); if (-not $reason) { $reason = '-' }
-        $rows.Add(('| {0} | `{1}` | {2} | {3} | {4} | {5} | {6} | {7} | {8} |' -f $time,[string](Read-Member $summary 'id'),$completed,[int](Read-Member $summary 'codeFilesChanged'),[int](Read-Member $summary 'testFilesChanged'),[int](Read-Member $summary 'documentationFilesChanged'),$displayCost,([bool](Read-Member $summary 'pushVerified')),$reason.Replace('|','/')))
+        $rows.Add(('| {0} | `{1}` | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} |' -f $time,[string](Read-Member $summary 'id'),$kind,$completed,[int](Read-Member $summary 'codeFilesChanged'),[int](Read-Member $summary 'testFilesChanged'),[int](Read-Member $summary 'documentationFilesChanged'),$displayCost,([bool](Read-Member $summary 'pushVerified')),$reason.Replace('|','/')))
     }
-    $rows.Add(''); $rows.Add('Usage is derived from local OpenCode statistics. It is an estimate, not a provider-reported account balance. Verification commands observed in agent logs do not by themselves prove successful tests.')
+    $rows.Add(''); $rows.Add('Balance is derived from local OpenCode statistics and is an estimate, not provider billing. OAuth quota is a user-reported snapshot, not a provider API reading. Local profiles have no provider-limit tracking. Verification commands observed in agent logs do not by themselves prove successful tests.')
     $markdown = Join-Path $reportDirectory "$Date.md"
     [IO.File]::WriteAllText($markdown,(($rows -join "`n") + "`n"),[Text.UTF8Encoding]::new($false))
     Save-Json (Join-Path $reportDirectory "$Date.json") ([ordered]@{ project=(Split-Path $DataDirectory -Leaf); date=$Date; iterations=$summaries.Count; tasksCompleted=$tasks; pushesVerified=$pushes; costDeltaUsd=[Math]::Round($cost,6); codeFilesChanged=$code; testFilesChanged=$tests; documentationFilesChanged=$docs; toolErrors=$errors; completedTaskIds=@($ids | Sort-Object); commits=@($commits.ToArray()); generatedAt=(Get-Date).ToString('o') })
@@ -620,7 +693,7 @@ function Rotate-Reports([string]$DataDirectory, $Settings) {
 }
 
 $cfg = Get-Content -LiteralPath $Config -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 40
-if ([int]$cfg.schemaVersion -notin @(1,2,3)) { throw 'Unsupported terra-config.json schemaVersion.' }
+if ([int]$cfg.schemaVersion -notin @(1,2,3,4)) { throw 'Unsupported terra-config.json schemaVersion.' }
 $projectConfig = @($cfg.projects | Where-Object { $_.id -eq $Project })
 if ($projectConfig.Count -ne 1) { throw "Expected exactly one project with id '$Project'." }
 $projectConfig = $projectConfig[0]
@@ -655,11 +728,13 @@ if ($ClearStop) {
     return
 }
 
-$budgetMode = Get-BudgetMode $cfg.budget
-if (-not [bool]$cfg.budget.requireGlobalOpenCodeStats) {
+$usageKind = Get-OpenCodeUsageKind $cfg
+$activeOpenCodeAccount = Get-ActiveOpenCodeAccount $cfg
+$budgetMode = if ($usageKind -eq 'balance') { Get-BudgetMode $cfg.budget } else { $usageKind }
+if ($usageKind -eq 'balance' -and -not [bool]$cfg.budget.requireGlobalOpenCodeStats) {
     throw 'The global OpenCode usage scope is required for reliable local accounting.'
 }
-if ($budgetMode -in @('daily','hybrid')) {
+if ($usageKind -eq 'balance' -and $budgetMode -in @('daily','hybrid')) {
     Require-PositiveNumber $cfg.budget.dailyUsd 'budget.dailyUsd' | Out-Null
     [void](Require-NonNegativeNumber $cfg.budget.reserveUsd 'budget.reserveUsd')
     Require-PositiveNumber $cfg.budget.emergencyStopUsd 'budget.emergencyStopUsd' | Out-Null
@@ -670,14 +745,14 @@ if ($budgetMode -in @('daily','hybrid')) {
         throw 'reserveUsd must be below dailyUsd.'
     }
 }
-if ($budgetMode -in @('balance','hybrid')) {
+if ($usageKind -eq 'balance' -and $budgetMode -in @('balance','hybrid')) {
     if ($null -eq (Read-Member $cfg.budget 'balance')) { throw 'budget.balance is required.' }
     [void](Require-NonNegativeNumber $cfg.budget.balance.minimumUsd 'budget.balance.minimumUsd')
     [void](Require-NonNegativeNumber $cfg.budget.balance.iterationReserveUsd 'budget.balance.iterationReserveUsd')
     if ($cfg.budget.balance.source -eq 'snapshot') { [void](Get-BalanceStatePath $logRoot $cfg.budget.balance) }
     elseif ($cfg.budget.balance.source -ne 'command') { throw 'budget.balance.source must be snapshot or command.' }
 }
-if ($hasSetBalance -and $budgetMode -notin @('balance','hybrid')) {
+if ($hasSetBalance -and ($usageKind -ne 'balance' -or $budgetMode -notin @('balance','hybrid'))) {
     throw '-SetBalanceUsd is only available in balance/hybrid modes.'
 }
 if ($hasSetBalance -and $cfg.budget.balance.source -ne 'snapshot') {
@@ -773,8 +848,14 @@ try {
     foreach ($flag in @('--agent','--format','--auto')) {
         if ($help -notmatch [regex]::Escape($flag)) { throw "Installed OpenCode does not support $flag; update OpenCode first." }
     }
-    $statsHelp = Invoke-Cli $openCode @('stats','--help') $repo
-    if ($statsHelp -notmatch '\-\-json') { throw 'Installed OpenCode lacks stats --json; update to compatible OpenCode v2.' }
+    if ($usageKind -eq 'balance') {
+        $statsHelp = Invoke-Cli $openCode @('stats','--help') $repo
+        if ($statsHelp -notmatch '\-\-json') { throw 'Installed OpenCode lacks stats --json; update to compatible OpenCode v2.' }
+    }
+    if (($Once -or $Continuous -or $hasSetBalance) -and [string](Read-Member $activeOpenCodeAccount 'id') -ne 'legacy') {
+        Switch-OpenCodeAccount $openCode $activeOpenCodeAccount $repo
+        Write-Host "OpenCode account selected: $([string](Read-Member $activeOpenCodeAccount 'label')) ($usageKind)"
+    }
     if ($hasSetBalance) {
         $all = Get-Usage $openCode $repo $cfg.budget 'all'
         $stateFile = Get-BalanceStatePath $logRoot $cfg.budget.balance
@@ -831,6 +912,8 @@ try {
             $argsList = @('-NoProfile','-NonInteractive','-File',$workerFile,
                 '-OpenCodeCommand',$openCode,'-ProjectPath',$repo,'-PromptFile',$promptFile,
                 '-EventsFile',$eventsPath,'-ErrorFile',$stderrPath,'-Agent',([string]$cfg.agent),'-Model',([string]$cfg.model))
+            $reasoning = Read-Member (Read-Member $cfg 'openCode') 'reasoning'
+            if ($null -ne $reasoning -and [bool](Read-Member $reasoning 'showThinking')) { $argsList += '-ShowThinking' }
             foreach ($item in $argsList) { [void]$psi.ArgumentList.Add([string]$item) }
             $child = [System.Diagnostics.Process]::Start($psi)
             if ($null -eq $child) { throw 'Failed to start OpenCode worker.' }
@@ -975,6 +1058,12 @@ try {
             totalTokensBefore = $usageBefore.AllTime.Tokens
             totalTokensAfter = $(if ($null -ne $usageAfter) { $usageAfter.AllTime.Tokens } else { $null })
             budgetMode = $budgetMode
+            accountUsageKind = $usageKind
+            openCodeAccountId = [string](Read-Member $activeOpenCodeAccount 'id')
+            openCodeAccountLabel = [string](Read-Member $activeOpenCodeAccount 'label')
+            quotaRemaining = $(if ($null -ne $usageAfter) { $usageAfter.QuotaRemaining } else { $usageBefore.QuotaRemaining })
+            quotaReserve = $(if ($null -ne $usageAfter) { $usageAfter.QuotaReserve } else { $usageBefore.QuotaReserve })
+            quotaUnit = $(if ($null -ne $usageAfter) { $usageAfter.QuotaUnit } else { $usageBefore.QuotaUnit })
             balanceBeforeUSD = $usageBefore.BalanceUSD
             balanceAfterUSD = $(if ($null -ne $usageAfter) { $usageAfter.BalanceUSD } else { $null })
             balanceSource = $usageBefore.BalanceSource

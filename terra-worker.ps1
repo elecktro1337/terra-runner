@@ -7,7 +7,8 @@ param(
     [Parameter(Mandatory)][string]$EventsFile,
     [Parameter(Mandatory)][string]$ErrorFile,
     [Parameter(Mandatory)][string]$Agent,
-    [string]$Model = ''
+    [string]$Model = '',
+    [switch]$ShowThinking
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -22,6 +23,7 @@ try {
     $prompt = Get-Content -LiteralPath $PromptFile -Raw -Encoding UTF8
     $arguments = @('run', '--agent', $Agent, '--format', 'json', '--auto')
     if (-not [string]::IsNullOrWhiteSpace($Model)) { $arguments += @('--model', $Model) }
+    if ($ShowThinking) { $arguments += '--thinking' }
     $arguments += $prompt
     & $OpenCodeCommand @arguments 1>> $EventsFile 2>> $ErrorFile
     $code = $LASTEXITCODE

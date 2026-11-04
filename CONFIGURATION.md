@@ -12,6 +12,16 @@ Each project has an ID, absolute path, Git branch, roadmap, and progress file. P
 
 `daily`, `balance`, `hybrid`, and `unlimited` are supported. User-entered amounts accept `.` or `,` and are stored using invariant JSON numbers. A snapshot balance is an estimate based on local OpenCode usage; it is not provider billing.
 
+## OpenCode accounts, quotas, and local models
+
+Open **Settings → OpenCode accounts and reasoning → Refresh accounts from OpenCode**. Terra Runner reads `opencode auth list --format json` and presents saved provider/credential labels; it never reads, exports, or stores API keys or OAuth tokens. Selecting an account calls OpenCode's normal `auth switch` command.
+
+- API-key accounts use the existing USD balance modes and local OpenCode usage accounting.
+- OAuth accounts use a separately configured, provider-reported quota snapshot. Set its unit (percent, requests, or sessions), remaining quota, reserve, and validity period. It is intentionally never displayed as USD or called a balance. OpenCode currently exposes no general quota API, so Terra Runner does not invent provider quota usage; an expired snapshot fails closed until reconciled.
+- Local profiles have no balance or quota UI and do not require `opencode stats --json`. Select **Use the selected model as a local/no-limit profile** when OpenCode cannot classify the provider automatically.
+
+Reasoning is a model variant. Choose it in the same menu; Terra Runner appends `#low`, `#medium`, `#high`, and so on to the selected model and can pass OpenCode's `--thinking` display flag. Unsupported variants are rejected by OpenCode before an agent run.
+
 ## Recovery
 
 Settings are written atomically and backups are retained in `config-backups`. If the active JSON is invalid, Terra Runner offers the newest valid backup. Accepting recovery preserves the invalid file as a timestamped `.corrupt-*` copy.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.0 - account and quota upgrade
+
+- Added OpenCode account discovery and selection through `auth list --format json` and `auth switch`, without exporting or storing credentials.
+- Added separate API balance, OAuth quota, and local/no-limit execution policies with schema 4 migration.
+- Added OpenCode model reasoning variant selection and optional thinking-block display.
+
 ## 1.5.0 - 2026-11-03
 
 - Added generic Markdown checkbox roadmap tracking with optional project `taskIdPattern` metadata, and replaced runtime daily report output with English reports.

@@ -75,6 +75,65 @@ function Read-SettingMember($Value, [string]$Name) {
     if ($null -ne $property) { return $property.Value }
     return $null
 }
+function Ensure-OpenCodeSettings($Settings) {
+    $openCode = Read-SettingMember $Settings 'openCode'
+    if ($null -eq $openCode) {
+        $openCode = [ordered]@{ accounts=@(); activeAccountId=''; reasoning=[ordered]@{ variant=''; showThinking=$false } }
+        $Settings['openCode'] = $openCode
+    }
+    if ($null -eq (Read-SettingMember $openCode 'accounts')) { $openCode['accounts'] = @() }
+    if ($null -eq (Read-SettingMember $openCode 'activeAccountId')) { $openCode['activeAccountId'] = '' }
+    if ($null -eq (Read-SettingMember $openCode 'reasoning')) { $openCode['reasoning'] = [ordered]@{ variant=''; showThinking=$false } }
+    return $openCode
+}
+function Invoke-OpenCodeText([string[]]$Arguments) {
+    $command = [string]$script:Settings.openCodeCommand
+    if ([string]::IsNullOrWhiteSpace($command)) { throw 'OpenCode command is not configured.' }
+    $psi = [Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $command; $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.WorkingDirectory = $script:Root
+    foreach ($argument in $Arguments) { [void]$psi.ArgumentList.Add($argument) }
+    $process = [Diagnostics.Process]::Start($psi)
+    $stdout = $process.StandardOutput.ReadToEnd(); $stderr = $process.StandardError.ReadToEnd(); $process.WaitForExit()
+    if ($process.ExitCode -ne 0) { throw "OpenCode $($Arguments -join ' ') failed: $stderr" }
+    return $stdout
+}
+function Get-OpenCodeAccountKind($Provider, $Method) {
+    if ([string]$Method -eq 'key') { return 'balance' }
+    if ([string]$Method -eq 'oauth') { return 'quota' }
+    if ([string]$Provider -match '^(local|ollama|lmstudio|llama\.cpp|vllm)$') { return 'local' }
+    return 'unknown'
+}
+function Sync-OpenCodeAccounts {
+    $openCode = Ensure-OpenCodeSettings $script:Settings
+    $raw = Invoke-OpenCodeText @('auth','list','--format','json')
+    try { $providers = ConvertFrom-Json -InputObject $raw -AsHashtable -Depth 30 } catch { throw 'OpenCode auth list did not return valid JSON.' }
+    $existing = @((Read-SettingMember $openCode 'accounts'))
+    $accounts = [Collections.Generic.List[object]]::new()
+    foreach ($provider in @($providers)) {
+        foreach ($connection in @(Read-SettingMember $provider 'connections')) {
+            $providerId = [string](Read-SettingMember $provider 'id'); $credentialId = [string](Read-SettingMember $connection 'id')
+            if (-not $providerId -or -not $credentialId) { continue }
+            $previous = @($existing | Where-Object { [string](Read-SettingMember $_ 'provider') -eq $providerId -and [string](Read-SettingMember $_ 'credentialId') -eq $credentialId } | Select-Object -First 1)
+            $kind = if ($previous.Count) { [string](Read-SettingMember $previous[0] 'usageKind') } else { Get-OpenCodeAccountKind $providerId ([string](Read-SettingMember $connection 'method')) }
+            $quota = if ($previous.Count) { Read-SettingMember $previous[0] 'quota' } else { [ordered]@{ configured=$false; unit='percent'; remaining=$null; reserve=5; maxAgeMinutes=120; observedAt='' } }
+            $accounts.Add([ordered]@{ id=($providerId + '/' + $credentialId); provider=$providerId; providerName=[string](Read-SettingMember $provider 'name'); credentialId=$credentialId; label=[string](Read-SettingMember $connection 'label'); authMethod=[string](Read-SettingMember $connection 'method'); usageKind=$kind; quota=$quota })
+        }
+    }
+    foreach ($account in $existing | Where-Object { [string](Read-SettingMember $_ 'usageKind') -eq 'local' }) { $accounts.Add($account) }
+    $openCode['accounts'] = @($accounts)
+    if (-not $openCode.activeAccountId -or @($accounts | Where-Object { $_.id -eq $openCode.activeAccountId }).Count -ne 1) { $openCode['activeAccountId'] = if ($accounts.Count) { [string]$accounts[0].id } else { '' } }
+    return @($accounts)
+}
+function Get-ActiveOpenCodeAccount {
+    $openCode = Ensure-OpenCodeSettings $script:Settings
+    $accounts = @((Read-SettingMember $openCode 'accounts'))
+    return ($accounts | Where-Object { [string](Read-SettingMember $_ 'id') -eq [string]$openCode.activeAccountId } | Select-Object -First 1)
+}
+function Format-OpenCodeAccount($Account) {
+    if ($null -eq $Account) { return 'legacy OpenCode configuration' }
+    return ('{0} | {1} | {2}' -f [string](Read-SettingMember $Account 'providerName'),[string](Read-SettingMember $Account 'label'),[string](Read-SettingMember $Account 'usageKind'))
+}
 
 function Get-ConfigRoot { return (Split-Path -Parent $script:ConfigFile) }
 function Get-StorageRoot {
@@ -128,6 +187,16 @@ function Get-LatestCompletedTask {
     return $null
 }
 function Get-HeaderBudgetText($Budget, $LastSummary) {
+    $account = Get-ActiveOpenCodeAccount
+    $usageKind = if ($account) { [string](Read-SettingMember $account 'usageKind') } else { 'balance' }
+    if ($usageKind -eq 'local') { return 'Local model: no balance or quota limits' }
+    if ($usageKind -eq 'quota') {
+        $quota = Read-SettingMember $account 'quota'
+        if ($null -eq $quota -or -not [bool](Read-SettingMember $quota 'configured')) { return 'Quota: not configured' }
+        $unit = [string](Read-SettingMember $quota 'unit')
+        $remaining = [decimal](Read-SettingMember $quota 'remaining'); $reserve = [decimal](Read-SettingMember $quota 'reserve')
+        return "Quota: $remaining $unit | reserve $reserve $unit"
+    }
     $balance = Read-SettingMember $LastSummary 'balanceAfterUSD'
     if ($null -eq $balance) { $balance = Read-SettingMember $LastSummary 'balanceBeforeUSD' }
     $balanceText = if ($null -ne $balance) { Format-TerraMoney ([decimal]$balance) } else { 'unavailable' }
@@ -149,7 +218,8 @@ function Save-Settings {
     if (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf) {
         Copy-Item -LiteralPath $script:ConfigFile -Destination (Join-Path $backupDir ('terra-config-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.json')) -Force
     }
-    $script:Settings.schemaVersion = 3
+    Ensure-OpenCodeSettings $script:Settings | Out-Null
+    $script:Settings.schemaVersion = 4
     $json = ConvertTo-Json -InputObject $script:Settings -Depth 60
     $validated = ConvertFrom-Json -InputObject $json -AsHashtable -Depth 60
     if (-not $validated.projects -or -not $validated.budget -or -not $validated.execution -or -not $validated.logs) { throw 'Configuration validation failed.' }
@@ -194,14 +264,15 @@ function Load-Settings {
         $script:Settings = Get-Content -LiteralPath $script:ConfigFile -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable -Depth 60
     }
     if (-not (Test-SettingsShape $script:Settings)) { throw 'Configuration is incomplete.' }
-    if ([int]$script:Settings.schemaVersion -lt 3) { $script:Settings.schemaVersion = 3 }
+    if ([int]$script:Settings.schemaVersion -lt 4) { $script:Settings.schemaVersion = 4 }
+    Ensure-OpenCodeSettings $script:Settings | Out-Null
     if (-not $script:ProjectId -or @($script:Settings.projects | Where-Object { $_.id -eq $script:ProjectId }).Count -ne 1) { $script:ProjectId = [string]$script:Settings.projects[0].id }
 }
 
 function New-DefaultSettings([string]$ProjectId,[string]$ProjectPath,[string]$Branch,[string]$Roadmap,[string]$Progress,[string]$OpenCode,[string]$TaskIdPattern = '') {
     $root = Get-ConfigRoot
     return [ordered]@{
-        schemaVersion=3; openCodeCommand=$OpenCode; agent='build'; model=''
+        schemaVersion=4; openCodeCommand=$OpenCode; agent='build'; model=''; openCode=[ordered]@{ accounts=@(); activeAccountId=''; reasoning=[ordered]@{ variant=''; showThinking=$false } }
         projects=@([ordered]@{ id=$ProjectId; path=$ProjectPath; branch=$Branch; roadmap=$Roadmap; progress=$Progress; prompt='terra-prompt.md'; taskIdPattern=$TaskIdPattern })
         budget=[ordered]@{ mode='daily'; dailyUsd=5.0; reserveUsd=0.5; emergencyStopUsd=4.95; allowUnlimited=$false; requireGlobalOpenCodeStats=$true; stopOnZeroCostWithTokens=$true; balance=[ordered]@{ source='snapshot'; id='default-account'; minimumUsd=5.0; iterationReserveUsd=0.5; maxAgeMinutes=5; command=''; arguments=@() } }
         execution=[ordered]@{ pollSeconds=20; maxIterationMinutes=45; maxIterationsPerRun=500; maxConsecutiveNoProgress=3; maxConsecutiveDocumentationOnly=12; maxToolErrorsPerIteration=15; maxTransientRetries=3; transientRetryDelaySeconds=30; maxPushRetries=3; pushRetryDelaySeconds=30; pauseBetweenIterationsSeconds=3; maxRawLogMiB=80 }
@@ -273,7 +344,11 @@ function Show-Header {
     Write-Line "Path:    $($project.path)" 'Gray'
     $openCode = [string]$script:Settings.openCodeCommand
     $openCodeAvailable = $null -ne (Get-Command $openCode -ErrorAction SilentlyContinue)
-    Write-Line "OpenCode: $(if ($openCodeAvailable) { 'available' } else { 'not found' }) | Model: $($script:Settings.model)" $(if ($openCodeAvailable) { 'Green' } else { 'Yellow' })
+    $account = Get-ActiveOpenCodeAccount
+    $reasoning = Read-SettingMember (Ensure-OpenCodeSettings $script:Settings) 'reasoning'
+    $reasoningText = if ([string](Read-SettingMember $reasoning 'variant')) { [string](Read-SettingMember $reasoning 'variant') } else { 'provider default' }
+    Write-Line "OpenCode: $(if ($openCodeAvailable) { 'available' } else { 'not found' }) | Account: $(Format-OpenCodeAccount $account)" $(if ($openCodeAvailable) { 'Green' } else { 'Yellow' })
+    Write-Line "Model: $($script:Settings.model) | Reasoning: $reasoningText" 'Gray'
     $budget = $script:Settings.budget
     $last = Get-LatestSummary
     Write-Line (Get-HeaderBudgetText $budget $last) $(if ($budget.mode -eq 'unlimited') { 'Yellow' } else { 'Green' })
@@ -324,6 +399,83 @@ function Invoke-RunnerCommand([hashtable]$Command) {
             Pause-Menu
             return
         }
+    }
+}
+function Read-QuotaValue([string]$Prompt, [decimal]$Current, [decimal]$Minimum = 0) {
+    while ($true) {
+        $value = Read-Host "$Prompt [$Current]"
+        if ([string]::IsNullOrWhiteSpace($value)) { return $Current }
+        try { return (ConvertTo-TerraMoney -Text $value -Minimum $Minimum) }
+        catch { Write-Line $_.Exception.Message 'Yellow' }
+    }
+}
+function Set-OpenCodeAccountUsageKind($Account) {
+    if ([string](Read-SettingMember $Account 'usageKind') -ne 'unknown') { return }
+    Write-Line "OpenCode cannot classify '$([string](Read-SettingMember $Account 'label'))' automatically." 'Yellow'
+    $kind = switch (Read-Choice 'Usage type: 1 API balance, 2 OAuth quota, 3 local/no limits') { '1' { 'balance' } '2' { 'quota' } '3' { 'local' } default { '' } }
+    if (-not $kind) { throw 'Choose a usage type before selecting this account.' }
+    $Account['usageKind'] = $kind
+    if ($kind -eq 'quota' -and $null -eq (Read-SettingMember $Account 'quota')) { $Account['quota'] = [ordered]@{ configured=$false; unit='percent'; remaining=$null; reserve=5; maxAgeMinutes=120; observedAt='' } }
+}
+function Show-OpenCodeAccountsMenu {
+    while ($true) {
+        Show-Header
+        $openCode = Ensure-OpenCodeSettings $script:Settings
+        $accounts = @((Read-SettingMember $openCode 'accounts'))
+        Write-Line 'OpenCode accounts and reasoning' 'White'
+        if (-not $accounts.Count) { Write-Line '  No saved OpenCode accounts have been imported yet.' 'Yellow' }
+        for ($i=0; $i -lt $accounts.Count; $i++) {
+            $active = if ([string]$accounts[$i].id -eq [string]$openCode.activeAccountId) { '* ' } else { '  ' }
+            Write-Line ('  {0}  {1}{2} [{3}]' -f ($i + 1),$active,(Format-OpenCodeAccount $accounts[$i]),[string]$accounts[$i].authMethod)
+        }
+        Write-Line '  R  Refresh accounts from OpenCode'
+        Write-Line '  Q  Configure selected OAuth quota'
+        Write-Line '  L  Use the selected model as a local/no-limit profile'
+        Write-Line '  M  Set model and reasoning variant'
+        Write-Line '  0  Back'
+        $choice = Read-Choice 'Choose an option'
+        if ($choice -eq '0') { return }
+        if ($choice -eq 'r') {
+            try { [void](Sync-OpenCodeAccounts); Save-Settings; Write-Line 'OpenCode accounts refreshed.' 'Green' } catch { Write-Line "Account refresh failed: $($_.Exception.Message)" 'Red' }
+            Pause-Menu; continue
+        }
+        if ($choice -eq 'q') {
+            $account = Get-ActiveOpenCodeAccount
+            if ($null -eq $account -or [string]$account.usageKind -ne 'quota') { Write-Line 'Select an OAuth quota account first.' 'Yellow'; Pause-Menu; continue }
+            $quota = Read-SettingMember $account 'quota'; if ($null -eq $quota) { $quota = [ordered]@{}; $account['quota'] = $quota }
+            $unit = switch (Read-Choice 'Quota unit: 1 percent, 2 requests, 3 sessions') { '2' { 'requests' } '3' { 'sessions' } default { 'percent' } }
+            $current = if ($null -ne (Read-SettingMember $quota 'remaining')) { [decimal](Read-SettingMember $quota 'remaining') } else { if ($unit -eq 'percent') { 100 } else { 0 } }
+            $quota['unit'] = $unit; $quota['remaining'] = Read-QuotaValue 'Provider-reported quota remaining' $current 0; $quota['reserve'] = Read-QuotaValue 'Safety reserve' ([decimal]5) 0
+            $quota['maxAgeMinutes'] = Read-Integer 'Quota snapshot validity in minutes' 120 1 10080; $quota['observedAt'] = (Get-Date).ToString('o'); $quota['configured'] = $true
+            Save-Settings; Write-Line 'Quota snapshot saved. Terra Runner never claims it is a provider billing balance.' 'Green'; Pause-Menu; continue
+        }
+        if ($choice -eq 'l') {
+            $model = ([string]$script:Settings.model -replace '#.*$','').Trim()
+            if (-not $model) { Write-Line 'Set a model first.' 'Yellow'; Pause-Menu; continue }
+            $id = 'local/' + (($model -replace '[^A-Za-z0-9_.-]','-').Trim('-'))
+            $local = [ordered]@{ id=$id; provider='local'; providerName='Local model'; credentialId=$model; label=$model; authMethod='local'; usageKind='local'; quota=$null }
+            $openCode['accounts'] = @($accounts | Where-Object { [string]$_.id -ne $id }) + @($local); $openCode['activeAccountId'] = $id
+            Save-Settings; Write-Line 'Local/no-limit profile selected. No balance or quota will be displayed.' 'Green'; Pause-Menu; continue
+        }
+        if ($choice -eq 'm') {
+            $baseModel = Read-Text 'Model' (([string]$script:Settings.model -replace '#.*$','')) $true
+            $variant = switch (Read-Choice 'Reasoning: 1 provider default, 2 none, 3 minimal, 4 low, 5 medium, 6 high, 7 xhigh') { '2' {'none'} '3' {'minimal'} '4' {'low'} '5' {'medium'} '6' {'high'} '7' {'xhigh'} default {''} }
+            $openCode.reasoning['variant'] = $variant; $openCode.reasoning['showThinking'] = Confirm 'Show OpenCode thinking blocks during runs?'
+            $script:Settings.model = if ($variant) { "$baseModel#$variant" } else { $baseModel }
+            Save-Settings; Write-Line 'Model and reasoning settings saved.' 'Green'; Pause-Menu; continue
+        }
+        $number = 0
+        if ([int]::TryParse($choice,[ref]$number) -and $number -ge 1 -and $number -le $accounts.Count) {
+            $account = $accounts[$number - 1]
+            try {
+                Set-OpenCodeAccountUsageKind $account
+                if ([string]$account.usageKind -ne 'local') { [void](Invoke-OpenCodeText @('auth','switch',[string]$account.provider,[string]$account.credentialId)) }
+                $openCode['activeAccountId'] = [string]$account.id; Save-Settings
+                Write-Line "Selected: $(Format-OpenCodeAccount $account)" 'Green'
+            } catch { Write-Line "Account selection failed: $($_.Exception.Message)" 'Red' }
+            Pause-Menu; continue
+        }
+        Write-Line 'Unknown option.' 'Yellow'; Pause-Menu
     }
 }
 function Format-ProjectMenuEntry([int]$Number, $Project, [string]$SelectedProjectId) {
@@ -387,13 +539,14 @@ function Show-ProjectsMenu {
 function Show-SettingsMenu {
     while ($true) {
         Show-Header; $e=$script:Settings.execution; $l=$script:Settings.logs
-        Write-Line 'Settings' 'White'; Write-Line '  1  OpenCode command and model'; Write-Line '  2  Iteration limits and timeout'; Write-Line '  3  Logging and retention'; Write-Line '  4  Run setup wizard again'; Write-Line '  0  Back'
+        Write-Line 'Settings' 'White'; Write-Line '  1  OpenCode command and model'; Write-Line '  2  Iteration limits and timeout'; Write-Line '  3  Logging and retention'; Write-Line '  4  Run setup wizard again'; Write-Line '  5  OpenCode accounts and reasoning'; Write-Line '  0  Back'
         switch (Read-Choice 'Choose an option') {
             '0' { return }
             '1' { $script:Settings.openCodeCommand=Read-Text 'OpenCode command' $script:Settings.openCodeCommand $true; $script:Settings.model=Read-Text 'Model (optional)' $script:Settings.model; $script:Settings.agent=Read-Text 'Agent' $script:Settings.agent $true; Save-Settings }
             '2' { $e.maxIterationsPerRun=Read-Integer 'Maximum iterations per run' $e.maxIterationsPerRun 1 1000; $e.maxIterationMinutes=Read-Integer 'Iteration timeout in minutes' $e.maxIterationMinutes 1 1440; $e.pollSeconds=Read-Integer 'Poll interval in seconds' $e.pollSeconds 1 300; Save-Settings }
             '3' { $l.retainDays=Read-Integer 'Log retention in days' $l.retainDays 1; $l.maxIterationsPerProject=Read-Integer 'Maximum saved iterations' $l.maxIterationsPerProject 1; $l.maxTotalMiBPerProject=Read-Integer 'Maximum project log size in MiB' $l.maxTotalMiBPerProject 1; Save-Settings }
             '4' { if (Confirm 'Replace current settings through setup?') { if (Start-SetupWizard) { Load-Settings } } }
+            '5' { Show-OpenCodeAccountsMenu }
             default { Write-Line 'Unknown option.' 'Yellow'; Pause-Menu }
         }
     }

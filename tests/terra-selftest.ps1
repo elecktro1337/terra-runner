@@ -47,6 +47,23 @@ try {
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun
     if (-not (Test-Path -LiteralPath $oldBundle) -or -not (Test-Path -LiteralPath $newBundle) -or -not (Test-Path -LiteralPath $protectedBudget)) { throw 'Dry run modified logs or budget snapshots.' }
     Write-Host 'PASS: dry run leaves logs and budget snapshots unchanged.' -ForegroundColor Green
+    # Local and OAuth quota accounts deliberately bypass money/stat accounting.
+    $cfg.schemaVersion = 4
+    $cfg.openCode = [ordered]@{ accounts=@(
+        [ordered]@{ id='local/mock'; provider='local'; credentialId='mock'; label='Mock local'; authMethod='local'; usageKind='local'; quota=$null },
+        [ordered]@{ id='openai/mock-oauth'; provider='openai'; credentialId='mock-oauth'; label='Mock OAuth'; authMethod='oauth'; usageKind='quota'; quota=[ordered]@{ configured=$true; unit='percent'; remaining=80; reserve=5; maxAgeMinutes=120; observedAt=(Get-Date).ToString('o') } }
+    ); activeAccountId='local/mock'; reasoning=[ordered]@{ variant='high'; showThinking=$true } }
+    $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
+    $env:TERRA_MOCK_BROKEN_STATS = '1'
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun
+    $cfg.openCode.activeAccountId = 'openai/mock-oauth'
+    $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Status
+    Remove-Item Env:TERRA_MOCK_BROKEN_STATS -ErrorAction SilentlyContinue
+    $cfg.Remove('openCode')
+    $cfg.schemaVersion = 2
+    $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
+    Write-Host 'PASS: local and OAuth quota profiles do not invoke money accounting.' -ForegroundColor Green
     # The global accounting lock blocks concurrent runners before they can launch an agent.
     $lockPath = Join-Path $tempRoot 'project-data/global-runner.lock'
     $lock = [IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
