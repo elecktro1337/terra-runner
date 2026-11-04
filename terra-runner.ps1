@@ -386,15 +386,15 @@ function New-ZeroUsage([string]$Scope) {
 function Get-QuotaSnapshot($Account) {
     $quota = Read-Member $Account 'quota'
     if ($null -eq $quota -or -not [bool](Read-Member $quota 'configured')) {
-        throw 'OAuth quota is not configured. Set a provider-reported quota snapshot in Settings > OpenCode accounts, model and reasoning.'
+        throw 'Provider snapshot is not configured. Set a current balance or quota snapshot in Profiles before development.'
     }
     $remaining = Require-NonNegativeNumber (Read-Member $quota 'remaining') 'quota.remaining'
     $reserve = Require-NonNegativeNumber (Read-Member $quota 'reserve') 'quota.reserve'
     $observedAt = [string](Read-Member $quota 'observedAt')
-    try { $observed = [DateTimeOffset]::Parse($observedAt,$Invariant) } catch { throw 'OAuth quota snapshot has no valid observation time. Reconcile it in Settings.' }
+    try { $observed = [DateTimeOffset]::Parse($observedAt,$Invariant) } catch { throw 'Provider snapshot has no valid observation time. Refresh it in Profiles.' }
     $maxAge = Require-PositiveNumber (Read-Member $quota 'maxAgeMinutes') 'quota.maxAgeMinutes'
     $age = ([DateTimeOffset]::UtcNow - $observed.ToUniversalTime()).TotalMinutes
-    if ($age -lt -2 -or $age -gt $maxAge) { throw "OAuth quota snapshot is stale ($([Math]::Round($age,1)) minutes). Reconcile it in Settings before development." }
+    if ($age -lt -2 -or $age -gt $maxAge) { throw "Provider snapshot is stale ($([Math]::Round($age,1)) minutes). Refresh it in Profiles before development." }
     return [pscustomobject]@{ Kind='quota'; Mode='quota'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$remaining; QuotaReserve=$reserve; QuotaUnit=[string](Read-Member $quota 'unit'); QuotaObservedAt=$observedAt }
 }
 function New-LocalSnapshot {
@@ -885,12 +885,12 @@ try {
         Write-Host ('Balance snapshot saved: {0}; OpenCode lifetime baseline ${1:N4}; file: {2}' -f (Format-TerraMoney $setBalanceAmount),$all.CostUSD,$stateFile)
         return
     }
-    $initialUsage = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot
-    Show-Usage $initialUsage $cfg.budget
     if ($DryRun) {
         Write-Host "DRY RUN OK: project=$Project branch=$branch iterations=$maxCycles; would launch agent '$($cfg.agent)'."
         return
     }
+    $initialUsage = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot
+    Show-Usage $initialUsage $cfg.budget
     Rotate-ProjectLogs $logsPath $cfg.logs
     Rotate-Reports $projectData $cfg.logs
     if (Test-Path -LiteralPath $stopPath) { throw "STOP flag exists: $stopPath. Use -ClearStop after review." }
