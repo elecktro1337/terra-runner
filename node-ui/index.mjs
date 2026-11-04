@@ -41,9 +41,13 @@ async function execute(name, commandArgs, cwd = root, inherited = false) {
   const executable = await resolveCommand(name);
   return new Promise((resolve, reject) => {
     const batch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable);
+    // Windows npm CLIs are .cmd files. Pass the nested command unchanged to
+    // cmd.exe; Node's normal Windows escaping otherwise turns quotes literal.
     const quote = value => `"${String(value).replace(/"/g, '""')}"`;
-    const batchLine = `"${quote(executable)} ${commandArgs.map(quote).join(' ')}"`;
-    const child = batch ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', batchLine], { cwd, shell: false, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'] }) : spawn(executable, commandArgs, { cwd, shell: false, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'] });
+    const commandLine = `"${quote(executable)} ${commandArgs.map(quote).join(' ')}"`;
+    const child = batch
+      ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', commandLine], { cwd, shell: false, windowsVerbatimArguments: true, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'] })
+      : spawn(executable, commandArgs, { cwd, shell: false, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     if (!inherited) { child.stdout.on('data', data => stdout += data); child.stderr.on('data', data => stderr += data); }
     child.once('error', reject); child.once('close', code => code === 0 ? resolve(stdout) : reject(new Error(`${executable} exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`)));
