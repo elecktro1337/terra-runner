@@ -1,6 +1,12 @@
 import crypto from 'node:crypto';
 
 const LOCAL_PROVIDERS = new Set(['ollama', 'lmstudio', 'local', 'llamacpp', 'llama.cpp', 'vllm']);
+const REASONING_SUFFIX = /#(minimal|low|medium|high|xhigh)$/i;
+
+export function splitModelVariant(value = '') {
+  const text = String(value).trim(); const match = text.match(REASONING_SUFFIX);
+  return { model: match ? text.slice(0, -match[0].length) : text, reasoningVariant: match ? match[1].toLowerCase() : '' };
+}
 
 export function modelProvider(model = '') {
   return String(model).trim().split('/')[0].toLowerCase();
@@ -16,21 +22,21 @@ export function policyFor(model, account) {
 }
 
 export function profileFrom(model, account = null, reasoningVariant = '', showThinking = false) {
-  const policy = policyFor(model, account);
+  const parsed = splitModelVariant(model); const variant = String(reasoningVariant || parsed.reasoningVariant || '');
+  const policy = policyFor(parsed.model, account);
   return {
     id: crypto.randomUUID(),
-    model: String(model).trim(),
-    provider: modelProvider(model),
+    model: parsed.model,
+    provider: modelProvider(parsed.model),
     credentialId: policy === 'local' ? '' : String(account?.credentialId || ''),
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(account?.label || ''),
-    policy,
-    reasoningVariant: String(reasoningVariant || ''),
+    policy, reasoningVariant: variant,
     showThinking: Boolean(showThinking)
   };
 }
 
 export function normalizeProfile(profile) {
-  const model = String(profile?.model || '').trim();
+  const parsed = splitModelVariant(profile?.model); const model = parsed.model;
   const policy = ['api', 'oauth-managed', 'local'].includes(profile?.policy)
     ? profile.policy
     : policyFor(model, { authMethod: profile?.authMethod });
@@ -38,7 +44,7 @@ export function normalizeProfile(profile) {
     id: String(profile?.id || crypto.randomUUID()), model, provider: modelProvider(model),
     credentialId: policy === 'local' ? '' : String(profile?.credentialId || ''),
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(profile?.credentialLabel || ''),
-    policy, reasoningVariant: String(profile?.reasoningVariant || ''), showThinking: Boolean(profile?.showThinking)
+    policy, reasoningVariant: String(profile?.reasoningVariant || parsed.reasoningVariant || ''), showThinking: Boolean(profile?.showThinking)
   };
 }
 

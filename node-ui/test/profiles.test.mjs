@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyProfile, isLocalModel, migrateProfiles, policyFor, profileFrom } from '../lib/profiles.mjs';
+import { applyProfile, isLocalModel, migrateProfiles, policyFor, profileFrom, splitModelVariant } from '../lib/profiles.mjs';
 
 test('recognizes local model providers', () => {
   assert.equal(isLocalModel('ollama/qwen3-coder-64k:30b'), true);
@@ -9,6 +9,12 @@ test('recognizes local model providers', () => {
 test('maps OAuth to provider-managed usage and API keys to spending limits', () => {
   assert.equal(policyFor('openai/gpt', { authMethod: 'oauth' }), 'oauth-managed');
   assert.equal(policyFor('openai/gpt', { authMethod: 'key' }), 'api');
+});
+test('keeps a reasoning variant out of the model identifier', () => {
+  assert.deepEqual(splitModelVariant('openai/gpt-5.6-terra#medium'), { model: 'openai/gpt-5.6-terra', reasoningVariant: 'medium' });
+  const profile = profileFrom('openai/gpt-5.6-terra#medium', { authMethod: 'key' }, 'medium');
+  assert.equal(profile.model, 'openai/gpt-5.6-terra');
+  assert.equal(profile.reasoningVariant, 'medium');
 });
 test('migrates a legacy selected OAuth account without a manual quota', () => {
   const settings = { model: 'openai/gpt', openCode: { activeAccountId: 'oauth', accounts: [{ id: 'oauth', authMethod: 'oauth', credentialId: 'c', label: 'Codex' }], reasoning: {} } };

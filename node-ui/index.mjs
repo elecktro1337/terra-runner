@@ -24,9 +24,29 @@ async function choose(title, choices) {
   console.log(`\n${bold(title)}`); choices.forEach((c, i) => console.log(`  ${i + 1}  ${c.label}`)); console.log('  0  Back');
   while (true) { const v = await ask('Choose an option: '); if (v === '0' || !v) return null; const choice = choices[Number(v) - 1]; if (choice) return choice.value; console.log(yellow('Choose one of the listed options.')); }
 }
-function command(command, commandArgs, cwd = root, inherited = false) {
+async function resolveCommand(commandName) {
+  if (path.isAbsolute(commandName) || /[\\/]/.test(commandName)) return commandName;
+  if (process.platform !== 'win32') return commandName;
+  // npm installs CLI shims in %APPDATA%\\npm but that directory is not always
+  // inherited by processes started from IDE terminals or a double-clicked CMD.
+  const npmShim = path.join(process.env.APPDATA || '', 'npm', `${commandName}.cmd`);
+  try { await fs.access(npmShim); return npmShim; } catch { }
+  const locations = await new Promise((resolve, reject) => {
+    const child = spawn('where.exe', [commandName], { cwd: root, shell: false, stdio: ['ignore', 'pipe', 'pipe'] }); let text = '';
+    child.stdout.on('data', d => text += d); child.once('error', reject); child.once('close', code => code === 0 ? resolve(text) : reject(new Error(`Command '${commandName}' was not found on PATH.`)));
+  });
+  return locations.split(/\r?\n/).map(s => s.trim()).find(Boolean);
+}
+async function command(commandName, commandArgs, cwd = root, inherited = false) {
+  const command = await resolveCommand(commandName);
   return new Promise((resolve, reject) => {
-    const child = spawn(command, commandArgs, { cwd, shell: false, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'] });
+    // Node cannot execute a .cmd shim directly with shell:false (EINVAL). Run
+    // only that shim through cmd.exe; native executables retain direct spawning.
+    const isBatch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
+    const escapeCmd = value => `"${String(value).replace(/[\^&|<>()!\"]/g, '^$&')}"`;
+    const child = isBatch
+      ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `${escapeCmd(command)} ${commandArgs.map(escapeCmd).join(' ')}`], { cwd, shell: false, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'] })
+      : spawn(command, commandArgs, { cwd, shell: false, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     if (!inherited) { child.stdout.on('data', d => stdout += d); child.stderr.on('data', d => stderr += d); }
     child.once('error', reject); child.once('close', code => code === 0 ? resolve(stdout) : reject(new Error(`${command} exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`)));
@@ -127,6 +147,19 @@ async function configureActivePolicy(settings) {
   }
   await save(settings); console.log(green('API spending policy saved for the active API profile.')); await ask('Press Enter to continue');
 }
+async function developmentMenu(settings) {
+  const action = await choose('Development', [
+    { label: 'Run one iteration', value: 'once' }, { label: 'Run continuously', value: 'continuous' }, { label: 'Validate project (dry run)', value: 'dry' }
+  ]);
+  if (action) await runRunner(settings, action);
+}
+async function profilesMenu(settings) {
+  const action = await choose('Profiles', [
+    { label: 'Select or create a model profile', value: 'select' }, { label: 'Configure active profile policy and limits', value: 'limits' }
+  ]);
+  if (action === 'select') await selectProfile(settings);
+  if (action === 'limits') await configureActivePolicy(settings);
+}
 async function runRunner(settings, mode) {
   const profile = activeProfile(settings); if (!profile) { console.log(yellow('Create and select a model profile first.')); await ask('Press Enter to continue'); return; }
   applyProfile(settings, profile); await save(settings); const project = currentProject(settings);
@@ -142,12 +175,11 @@ async function main() {
     const settings = await load();
     while (true) {
       header(settings);
-      const action = await choose('Development', [
-        { label: 'Run one iteration', value: 'once' }, { label: 'Run continuously', value: 'continuous' }, { label: 'Validate project (dry run)', value: 'dry' },
-        { label: 'Profiles, models, accounts and reasoning', value: 'profiles' }, { label: 'Configure active profile limits', value: 'limits' }, { label: 'Save configuration and exit', value: 'exit' }
+      const action = await choose('Main menu', [
+        { label: 'Development', value: 'development' }, { label: 'Profiles', value: 'profiles' }, { label: 'Save configuration and exit', value: 'exit' }
       ]);
       if (!action || action === 'exit') { await save(settings); break; }
-      if (action === 'profiles') await selectProfile(settings); else if (action === 'limits') await configureActivePolicy(settings); else await runRunner(settings, action);
+      if (action === 'development') await developmentMenu(settings); else if (action === 'profiles') await profilesMenu(settings);
     }
   } finally { rl.close(); }
 }
