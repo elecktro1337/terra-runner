@@ -97,8 +97,12 @@ function profileKindLabel(profile) {
 function header(settings) {
   clear(); const project = selectedProject(settings); const profile = activeProfile(settings);
   console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' }))); console.log(chalk.gray('RUNNER  v1.6  ·  Local OpenCode development orchestrator')); console.log(rule);
-  console.log(`${chalk.bold('Project')}  ${chalk.white(project?.id || 'not selected')}  ${chalk.gray('│')}  ${chalk.bold('Branch')}  ${project?.branch || 'not configured'}`); console.log(`${chalk.bold('Path')}     ${chalk.gray(project?.path || 'not configured')}`);
-  console.log(`${chalk.bold('Profile')}  ${chalk.cyan(profile?.model || 'not selected')}`); console.log(`${chalk.bold('Policy')}   ${chalk.yellow(profile?.policy || 'not configured')}  ${chalk.gray('│')}  ${limitSummary(profile)}`); console.log(rule);
+  const account = settings.openCode?.accounts?.find(item => item.id === settings.openCode?.activeAccountId); const snapshot = profile?.usageSource || {}; const unit = snapshot.unit === 'usd' ? 'USD' : '%';
+  const balance = profile?.policy === 'local' ? 'not applicable' : snapshot.remaining == null ? 'snapshot required' : `${snapshot.remaining} ${unit}`;
+  const age = snapshot.observedAt ? `${Math.max(0, (Date.now() - Date.parse(snapshot.observedAt)) / 60000).toFixed(0)} min ago` : 'not recorded';
+  console.log(`${chalk.bold('Project')}   ${chalk.white(project?.id || 'not selected')}  ${chalk.gray('│')}  ${chalk.bold('Branch')}  ${project?.branch || 'not configured'}`); console.log(`${chalk.bold('Path')}      ${chalk.gray(project?.path || 'not configured')}`);
+  console.log(`${chalk.bold('Account')}   ${account?.label || profile?.credentialLabel || 'not selected'}  ${chalk.gray('│')}  ${profileKindLabel(profile || {})}`); console.log(`${chalk.bold('Model')}     ${chalk.cyan(profile?.model || 'not selected')}  ${chalk.gray('│')}  Reasoning ${profile?.reasoningVariant || 'provider default'}`);
+  console.log(`${chalk.bold('Snapshot')}  ${balance}  ${chalk.gray(`│ ${age}`)}`); console.log(`${chalk.bold('Limits')}    ${chalk.yellow(limitSummary(profile))}`); console.log(rule);
 }
 function numberValue(raw, fallback) { const parsed = Number(String(raw).trim().replace(',', '.')); return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback; }
 async function configureLimits(settings, profile) {
