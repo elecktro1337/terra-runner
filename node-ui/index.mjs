@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
-import { confirm, input, select } from 'inquirer';
+import inquirer from 'inquirer';
 import chalk from 'chalk';
 import figlet from 'figlet';
 import ora from 'ora';
@@ -15,6 +15,9 @@ const args = process.argv.slice(2);
 const valueOf = name => { const i = args.indexOf(name); return i < 0 ? '' : args[i + 1]; };
 const configPath = valueOf('--config') || (args.includes('--portable') ? path.join(root, 'terra-config.json') : path.join(process.env.LOCALAPPDATA || process.env.APPDATA || root, 'TerraRunner', 'terra-config.json'));
 const rule = chalk.gray('─'.repeat(78));
+const input = options => inquirer.prompt([{ type: 'input', name: 'value', ...options }]).then(answer => answer.value);
+const confirm = options => inquirer.prompt([{ type: 'confirm', name: 'value', ...options }]).then(answer => answer.value);
+const select = options => inquirer.prompt([{ type: 'list', name: 'value', ...options }]).then(answer => answer.value);
 function clear() { if (process.stdout.isTTY) process.stdout.write('\x1Bc'); }
 function pause() { return input({ message: 'Press Enter to continue' }); }
 async function pick(message, choices) {
