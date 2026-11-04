@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import { spawn } from 'node:child_process';
-import { confirm, input, select, Separator } from 'inquirer';
+import { confirm, input, select } from 'inquirer';
 import chalk from 'chalk';
 import figlet from 'figlet';
 import ora from 'ora';
@@ -18,7 +18,7 @@ const rule = chalk.gray('─'.repeat(78));
 function clear() { if (process.stdout.isTTY) process.stdout.write('\x1Bc'); }
 function pause() { return input({ message: 'Press Enter to continue' }); }
 async function pick(message, choices) {
-  try { return await select({ message, choices: [...choices, new Separator(), { name: '← Back', value: null }], loop: false, pageSize: 14 }); }
+  try { return await select({ message, choices: [...choices, { name: '← Back', value: null }], loop: false, pageSize: 14 }); }
   catch (error) { if (error?.name === 'ExitPromptError') return null; throw error; }
 }
 async function yesNo(message) { try { return await confirm({ message, default: false }); } catch { return false; } }
@@ -108,7 +108,7 @@ async function createProfile(settings) {
 }
 async function profilesMenu(settings) {
   while (true) {
-    header(settings); console.log(chalk.bold('PROFILES')); const profiles = migrateProfiles(settings); const choice = await pick('Open a profile or create a new one', [...profiles.map(profile => ({ name: `${profile.id === settings.openCode.activeProfileId ? chalk.green('●') : ' '} ${profile.model}${profile.reasoningVariant ? chalk.gray(`#${profile.reasoningVariant}`) : ''}  ${chalk.gray(`— ${limitSummary(profile)}`)}`, value: profile.id })), new Separator(), { name: chalk.cyan('+ Create new profile'), value: '__create' }]);
+    header(settings); console.log(chalk.bold('PROFILES')); const profiles = migrateProfiles(settings); const choice = await pick('Open a profile or create a new one', [...profiles.map(profile => ({ name: `${profile.id === settings.openCode.activeProfileId ? chalk.green('●') : ' '} ${profile.model}${profile.reasoningVariant ? chalk.gray(`#${profile.reasoningVariant}`) : ''}  ${chalk.gray(`— ${limitSummary(profile)}`)}`, value: profile.id })), { name: chalk.cyan('+ Create new profile'), value: '__create' }]);
     if (!choice) return; if (choice === '__create') await createProfile(settings); else await profileScreen(settings, profiles.find(profile => profile.id === choice));
   }
 }
