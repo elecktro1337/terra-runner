@@ -126,6 +126,17 @@ async function configureSnapshot(settings, profile) {
   if (!saved || Number(saved.remaining) !== remaining || saved.unit !== unit) throw new Error('Snapshot save verification failed. Reopen the profile before starting development.');
   console.log(chalk.green('Provider snapshot and stop limit saved.')); return pause();
 }
+async function configureLimitPolicy(settings, profile) {
+  if (profile.policy === 'local') return pause();
+  const choices = profile.policy === 'api'
+    ? [{ name: 'Hourly USD cap', value: 'hourly' }, { name: 'Daily USD cap', value: 'daily' }, { name: 'Critical balance snapshot', value: 'critical' }, { name: 'Unlimited', value: 'unlimited' }]
+    : [{ name: 'Critical quota snapshot', value: 'critical' }, { name: 'Require snapshot every hour', value: 'refresh-hourly' }, { name: 'Require snapshot every day', value: 'refresh-daily' }, { name: 'Unlimited', value: 'unlimited' }];
+  const mode = await pick('Limit policy', choices); if (!mode) return;
+  if (mode === 'unlimited' && !(await yesNo('Disable provider limits for this profile?'))) return;
+  let amount = Number(profile.limitPolicy?.amount || 0);
+  if (mode === 'hourly' || mode === 'daily') amount = numberValue(await input({ message: `${mode === 'hourly' ? 'Hourly' : 'Daily'} USD cap`, default: String(amount || 5) }), amount || 5);
+  profile.limitPolicy = { mode, amount }; if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green('Limit policy saved.')); return pause();
+}
 async function configureUsageSource(settings, profile) {
   if (profile.policy === 'local') { console.log(chalk.green('\nLocal profile: no provider usage or balance source is needed.')); return pause(); }
   if (profile.policy === 'oauth-managed') {
@@ -166,11 +177,11 @@ async function profileScreen(settings, profile) {
     header(settings); console.log(chalk.bold('PROFILE DETAILS')); console.log(`  Model      ${chalk.cyan(profile.model)}`); console.log(`  Account    ${profile.credentialLabel || 'Not selected'}`); console.log(`  Type       ${profile.policy}`); console.log(`  Reasoning  ${profile.reasoningVariant || 'provider default'}`); console.log(`  Limits     ${limitSummary(profile)}`); console.log(`  Data       ${usageSourceSummary(profile)}\n`);
     const canDelete = settings.openCode.profiles.length > 1;
     const actions = [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }];
-    if (profile.policy !== 'local') actions.push({ name: 'Configure provider snapshot and stop limits', value: 'snapshot' });
+    if (profile.policy !== 'local') actions.push({ name: 'Configure provider snapshot', value: 'snapshot' }, { name: 'Configure limits', value: 'policy' });
     actions.push({ name: 'Configure local run guard', value: 'guard' });
     if (canDelete) actions.push({ name: chalk.red('Remove this profile'), value: 'remove' });
     const action = await pick('Profile actions', actions);
-    if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'snapshot') await configureSnapshot(settings, profile); if (action === 'guard') await configureRunGuard(settings, profile);
+    if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'snapshot') await configureSnapshot(settings, profile); if (action === 'policy') await configureLimitPolicy(settings, profile); if (action === 'guard') await configureRunGuard(settings, profile);
     if (action === 'remove' && await yesNo(`Remove profile '${profile.model}'? This does not disconnect or delete the OpenCode account.`)) {
       settings.openCode.profiles = settings.openCode.profiles.filter(item => item.id !== profile.id);
       if (settings.openCode.activeProfileId === profile.id) applyProfile(settings, settings.openCode.profiles[0]);

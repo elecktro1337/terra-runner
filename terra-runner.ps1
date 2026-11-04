@@ -151,6 +151,17 @@ function Get-Usage([string]$Executable, [string]$Directory, $Settings, [string]$
         CostUSD = $cost; Tokens = $tokens; CheckedAt = (Get-Date).ToString('o')
     }
 }
+function Get-HourlyUsage([string]$Root) {
+    $sum = 0.0; $cutoff = (Get-Date).ToUniversalTime().AddHours(-1)
+    $logs = Join-Path (Join-Path $Root $Project) 'logs'
+    if (Test-Path -LiteralPath $logs) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $logs -Recurse -File -Filter '*.summary.json' -ErrorAction SilentlyContinue)) {
+            try { $summary = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 30; $ended = [DateTimeOffset]::Parse([string]$summary.ended).ToUniversalTime()
+                if ($ended -ge $cutoff -and $null -ne $summary.costDeltaUSD) { $sum += [double]$summary.costDeltaUSD } } catch { }
+        }
+    }
+    return [pscustomobject]@{ CostUSD=$sum; Tokens=0.0 }
+}
 function Get-Head([string]$Directory) {
     return (Invoke-Cli 'git' @('-C', $Directory, 'rev-parse', 'HEAD') $Directory).Trim()
 }
@@ -347,7 +358,7 @@ function Require-NonNegativeNumber($Value, [string]$Name) {
 function Get-BudgetMode($Settings) {
     $m = [string](Read-Member $Settings 'mode')
     if ([string]::IsNullOrWhiteSpace($m)) { $m = 'daily' } # schema v1 compatibility
-    if ($m -cnotin @('daily','balance','hybrid','unlimited')) { throw "Unsupported budget mode '$m'." }
+    if ($m -cnotin @('daily','hourly','balance','hybrid','unlimited')) { throw "Unsupported budget mode '$m'." }
     if ($m -eq 'unlimited' -and -not [bool](Read-Member $Settings 'allowUnlimited')) {
         throw 'Unrestricted spending requires explicit budget.allowUnlimited=true.'
     }
@@ -366,7 +377,7 @@ function Get-ActiveOpenCodeAccount($Config) {
 }
 function Get-OpenCodeUsageKind($Config) {
     $kind = [string](Read-Member (Get-ActiveOpenCodeAccount $Config) 'usageKind')
-    if ($kind -notin @('balance','quota','oauth','local')) { throw "Unsupported or unclassified OpenCode account usage kind '$kind'. Select a profile again." }
+    if ($kind -notin @('balance','quota','oauth','local','unlimited')) { throw "Unsupported or unclassified OpenCode account usage kind '$kind'. Select a profile again." }
     return $kind
 }
 function New-ZeroUsage([string]$Scope) {
@@ -393,6 +404,9 @@ function New-OAuthSnapshot {
     # OAuth plan usage and reset windows belong to the provider. Never invent a
     # local number or block a paid-free OAuth account on a manually typed quota.
     return [pscustomobject]@{ Kind='oauth'; Mode='oauth'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource='provider-managed'; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
+}
+function New-UnlimitedSnapshot {
+    return [pscustomobject]@{ Kind='unlimited'; Mode='unlimited'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
 }
 function Switch-OpenCodeAccount([string]$Executable, $Account, [string]$Directory) {
     if ([string](Read-Member $Account 'usageKind') -eq 'local') { return }
@@ -446,10 +460,12 @@ function Get-BudgetSnapshot([string]$Executable, [string]$Directory, $Budget, [s
     $kind = Get-OpenCodeUsageKind $cfg
     if ($kind -eq 'quota') { return (Get-QuotaSnapshot $account) }
     if ($kind -eq 'oauth') { return (New-OAuthSnapshot) }
+    if ($kind -eq 'unlimited') { return (New-UnlimitedSnapshot) }
     if ($kind -eq 'local') { return (New-LocalSnapshot) }
     $mode = Get-BudgetMode $Budget
     $day = Get-Usage $Executable $Directory $Budget 'day'
     $all = Get-Usage $Executable $Directory $Budget 'all'
+    $hour = Get-HourlyUsage $Root
     $balance = $null; $source = ''; $observedAt = ''
     if ($mode -in @('balance','hybrid')) {
         $settings = Read-Member $Budget 'balance'
@@ -474,13 +490,17 @@ function Get-BudgetSnapshot([string]$Executable, [string]$Directory, $Budget, [s
         } else { throw "Unsupported balance.source '$balanceSource'. Use snapshot or command." }
     }
     return [pscustomobject]@{
-        Kind='balance'; Mode=$mode; Daily=$day; AllTime=$all; BalanceUSD=$balance
+        Kind='balance'; Mode=$mode; Daily=$day; Hourly=$hour; AllTime=$all; BalanceUSD=$balance
         BalanceSource=$source; BalanceObservedAt=$observedAt; QuotaRemaining=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt=''
     }
 }
 function Get-BudgetStopReason($Snapshot, $Budget, [bool]$Emergency) {
-    if ($Snapshot.Kind -in @('local','oauth')) { return '' }
+    if ($Snapshot.Kind -in @('local','oauth','unlimited')) { return '' }
     $mode = $Snapshot.Mode
+    if ($mode -eq 'hourly') {
+        $cap = [double]$Budget.hourlyUsd
+        if ($Snapshot.Hourly.CostUSD -ge $cap) { return "hourly budget threshold reached (spent $($Snapshot.Hourly.CostUSD), threshold $cap)" }
+    }
     if ($mode -in @('daily','hybrid')) {
         $cap = [double]$Budget.dailyUsd
         $reserve = [double]$Budget.reserveUsd
@@ -502,6 +522,7 @@ function Get-BudgetStopReason($Snapshot, $Budget, [bool]$Emergency) {
 function Show-Usage($Snapshot, $Budget) {
     if ($Snapshot.Kind -eq 'local') { Write-Host 'Local model: no provider balance or quota limits are configured.'; return }
     if ($Snapshot.Kind -eq 'oauth') { Write-Host 'OpenCode OAuth: usage and reset windows are managed by the provider; no local quota is estimated.'; return }
+    if ($Snapshot.Kind -eq 'unlimited') { Write-Host 'WARNING: provider limits are disabled for this profile.' -ForegroundColor Yellow; return }
     $usage = $Snapshot.Daily
     $message = ('Day {0}: OpenCode cost ${1:N4}; tokens {2:N0}' -f $usage.Day,$usage.CostUSD,$usage.Tokens)
     if ($Snapshot.Mode -in @('daily','hybrid')) {
@@ -742,6 +763,9 @@ if ($usageKind -eq 'balance' -and $budgetMode -in @('daily','hybrid')) {
     if ([double]$cfg.budget.reserveUsd -ge [double]$cfg.budget.dailyUsd) {
         throw 'reserveUsd must be below dailyUsd.'
     }
+}
+if ($usageKind -eq 'balance' -and $budgetMode -eq 'hourly') {
+    Require-PositiveNumber $cfg.budget.hourlyUsd 'budget.hourlyUsd' | Out-Null
 }
 if ($usageKind -eq 'balance' -and $budgetMode -in @('balance','hybrid')) {
     if ($null -eq (Read-Member $cfg.budget 'balance')) { throw 'budget.balance is required.' }
