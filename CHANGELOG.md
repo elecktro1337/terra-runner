@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Close the dispatcher terminal window when its project-instance Node process exits instead of leaving a `cmd` prompt behind.
 - Live Development now waits for an explicit worker task-selection marker instead of labelling every iteration with the first unchecked roadmap item.
 - Permit a new or edited project-instructions file as the sole local Git change; the worker commits that unchanged file separately before task work.
 - Fixed project-instance results: the roadmap is shown once, and the result now includes completed tasks and iteration count for the current launch.
