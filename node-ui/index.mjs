@@ -159,14 +159,14 @@ async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
   const executable = await resolveCommand('pwsh.exe');
   const previousSummaryId = (await latestIterationSummary(settings, project, configPath))?.id || '';
   const started = Date.now(); let iterationStarted = started; let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing continuous development' : mode === 'dry-run' ? 'Preparing dry run' : 'Preparing iteration';
-  let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let control = ''; let checkpoint = ''; const completedIterations = [];
+  let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let control = ''; let checkpoint = ''; let controlNotice = ''; const completedIterations = [];
   const interactive = Boolean(process.stdin.isTTY);
   const controls = chalk.gray('Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop');
   const footer = new LiveFooter(process.stdout, controls);
   const status = new LiveStatusBlock(process.stdout, statusRow, 1);
   const spinnerFrames = ['-', '\\', '|', '/']; let frame = 0;
   const statusText = () => `${chalk.cyan(spinnerFrames[frame++ % spinnerFrames.length])} ${stage} · ${durationText(Date.now() - iterationStarted)}`;
-  const renderStatus = () => status.render(statusText(), checkpoint, completedIterations);
+  const renderStatus = () => status.render(statusText(), checkpoint, completedIterations, controlNotice);
   const footerAttached = footer.enabled;
   const statusAttached = status.enabled;
   const liveAttached = footerAttached && statusAttached;
@@ -199,8 +199,8 @@ async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
     try {
       await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, `${kind} requested by user at ${new Date().toISOString()}\n`, 'utf8');
       const message = kind === 'abort' ? 'Emergency abort requested' : 'Stop requested';
-      stage = kind === 'abort' ? `Stopping current iteration — ${message.toLowerCase()}` : `Finishing current iteration — ${message.toLowerCase()}`;
-      if (liveAttached) renderStatus(); else console.log(`  ${chalk.yellow(`! ${message}.`)}`);
+      controlNotice = chalk.yellow(`! ${message}. ${kind === 'abort' ? 'The current iteration will be terminated.' : 'The current iteration will finish, then development will stop.'}`);
+      if (liveAttached) renderStatus(); else console.log(`  ${controlNotice}`);
     } catch (error) { control = ''; stage = `Stop request failed: ${error.message}`; if (liveAttached) renderStatus(); else console.log(`  ${chalk.red(`x ${stage}`)}`); }
   };
   const onInput = data => { const key = String(data).toLowerCase(); if (key === 's' || key === '\u0003') void requestControl('stop'); if (key === 'x') void requestControl('abort'); };
@@ -223,7 +223,7 @@ async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
               stage = `${iterationLabel} | selecting actionable task | ${event.pending} tasks pending`;
             }
               if (event.type === 'recovery-finished') { checkpoint = `Recovered interrupted work: ${event.recoveryCommit || 'checkpoint committed and pushed'}`; stage = 'Recovered interrupted Terra work'; }
-              if (event.type === 'iteration-finished') { const completed = `${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`; completedIterations.push(completed); checkpoint = ''; stage = 'Preparing next iteration'; if (liveAttached) renderStatus(); else console.log(`  ${completed}`); }
+              if (event.type === 'iteration-finished') { const completed = `${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`; completedIterations.push(completed); checkpoint = ''; stage = control ? 'Finalizing requested stop' : 'Preparing next iteration'; if (liveAttached) renderStatus(); else console.log(`  ${completed}`); }
           } catch { }
           return;
         }

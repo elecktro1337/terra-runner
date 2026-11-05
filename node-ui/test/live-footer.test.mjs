@@ -15,10 +15,19 @@ test('keeps completed iteration history below the changing live status', () => {
   ]);
 });
 
-test('keeps the current task visible while the status changes to a graceful stop', () => {
-  assert.deepEqual(liveStatusRows('Finishing current iteration — stop requested', 'Task: NTD-0010'), [
-    '  Finishing current iteration — stop requested', '  Task: NTD-0010'
+test('keeps the current task visible and pins a separate graceful-stop notice', () => {
+  assert.deepEqual(liveStatusRows('Iteration 3 | Running verification', 'Task: NTD-0010', [], '! Stop requested. The current iteration will finish.'), [
+    '  Iteration 3 | Running verification', '  Task: NTD-0010', '  ! Stop requested. The current iteration will finish.'
   ]);
+});
+
+test('reserves a visible row for a control notice before iteration history', () => {
+  let written = '';
+  const stream = { isTTY: true, rows: 16, write(value) { written += value; return true; } };
+  const status = new LiveStatusBlock(stream, 10);
+  status.render('Iteration 3 | tools', 'Task: ERP-0001', ['✓ Iteration 1', '✓ Iteration 2'], '! Stop requested.');
+  assert.match(written, /Task: ERP-0001/);
+  assert.match(written, /! Stop requested\./);
 });
 
 test('footer clears its former row before drawing at a resized terminal bottom', () => {

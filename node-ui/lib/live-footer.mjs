@@ -4,8 +4,8 @@ export function footerRows(controls) {
   return [`  ${controls}`];
 }
 
-export function liveStatusRows(status, detail = '', history = []) {
-  return [`  ${status}`, `  ${detail || 'Waiting for runner events…'}`, ...history.map(item => `  ${item}`)];
+export function liveStatusRows(status, detail = '', history = [], notice = '') {
+  return [`  ${status}`, `  ${detail || 'Waiting for runner events…'}`, ...(notice ? [`  ${notice}`] : []), ...history.map(item => `  ${item}`)];
 }
 
 class FixedRows {
@@ -75,9 +75,10 @@ export class LiveStatusBlock extends FixedRows {
     this.reservedRows = Math.max(0, Number(reservedRows) || 0);
   }
 
-  render(status, detail = '', history = []) {
+  render(status, detail = '', history = [], notice = '') {
     const available = Math.max(2, Number(this.stream?.rows || 0) - this.row - this.reservedRows);
-    const previous = Array.isArray(history) ? history.slice(-(available - 2)) : [];
-    return this.renderRows(liveStatusRows(status, detail, previous), this.row);
+    const noticeRows = notice ? 1 : 0;
+    const previous = Array.isArray(history) ? history.slice(-Math.max(0, available - 2 - noticeRows)) : [];
+    return this.renderRows(liveStatusRows(status, detail, previous, notice), this.row);
   }
 }

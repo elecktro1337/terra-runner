@@ -99,9 +99,9 @@ async function run(mode, limit = 1) {
   const roadmap = await readRoadmapProgress(project);
   const statusRow = renderRunHeader(settings, project, instance.profile || {}, command, roadmap);
   const footer = new LiveFooter(process.stdout, controls); const status = new LiveStatusBlock(process.stdout, statusRow, 1);
-  const liveAttached = footer.enabled && status.enabled; let frame = 0; const frames = ['-', '\\', '|', '/']; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration'; let detail = 'Waiting for runner events…'; let iterationStarted = Date.now(); let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let control = ''; const completedIterations = [];
+  const liveAttached = footer.enabled && status.enabled; let frame = 0; const frames = ['-', '\\', '|', '/']; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration'; let detail = 'Waiting for runner events…'; let iterationStarted = Date.now(); let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let control = ''; let controlNotice = ''; const completedIterations = [];
   const statusText = () => `${chalk.cyan(frames[frame++ % frames.length])} ${stage} · ${durationText(Date.now() - iterationStarted)}`;
-  const renderStatus = () => status.render(statusText(), detail, completedIterations);
+  const renderStatus = () => status.render(statusText(), detail, completedIterations, controlNotice);
   if (liveAttached) { process.stdout.write('\x1b[?25l'); renderStatus(); footer.render(); }
   else { console.log(`  ${statusText()}`); console.log(`  ${controls}`); }
   const paint = liveAttached ? setInterval(renderStatus, 180) : null;
@@ -132,14 +132,14 @@ async function run(mode, limit = 1) {
         if (event.type === 'recovery-finished') { stage = 'Recovered interrupted Terra work'; detail = `Recovery commit ${event.recoveryCommit || 'created and pushed'}`; }
         if (event.type === 'network-waiting') { stage = `Waiting for ${event.source || 'network'} connection`; detail = `Retry ${event.attempt || 1}; next check in ${event.delaySeconds || '?'}s`; }
         if (event.type === 'iteration-heartbeat') { stage = `Iteration ${event.iteration} | working`; }
-        if (event.type === 'iteration-finished') { completedIterations.push(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`); stage = 'Preparing next iteration'; detail = ''; }
+        if (event.type === 'iteration-finished') { completedIterations.push(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`); stage = control ? 'Finalizing requested stop' : 'Preparing next iteration'; detail = ''; }
         const instanceActivity = event.type === 'iteration-heartbeat' ? `Iteration ${event.iteration}: ${event.elapsedSeconds}s` : event.type === 'network-waiting' ? `Waiting for ${event.source || 'network'} connection` : event.type;
         await safeUpdate({ state: 'running', activity: instanceActivity, iteration: event.iteration ?? null });
       } catch { }
     }
   };
   child.stdout.on('data', data => void consume(data)); child.stderr.on('data', data => { stderr += String(data); });
-  const requestRunControl = async kind => { if (control) return; control = kind; await request(kind); const message = kind === 'ABORT' ? 'emergency abort requested' : 'stop requested'; stage = kind === 'ABORT' ? `Stopping current iteration — ${message}` : `Finishing current iteration — ${message}`; if (liveAttached) renderStatus(); };
+  const requestRunControl = async kind => { if (control) return; control = kind; await request(kind); const message = kind === 'ABORT' ? 'Emergency abort requested' : 'Stop requested'; controlNotice = chalk.yellow(`! ${message}. ${kind === 'ABORT' ? 'The current iteration will be terminated.' : 'The current iteration will finish, then development will stop.'}`); if (liveAttached) renderStatus(); else console.log(`  ${controlNotice}`); };
   const keyHandler = data => { const key = String(data).toLowerCase(); if (key === 's' || key === '\u0003') void requestRunControl('STOP'); if (key === 'x') void requestRunControl('ABORT'); };
   if (process.stdin.isTTY) { process.stdin.setRawMode?.(true); process.stdin.resume(); process.stdin.on('data', keyHandler); }
   await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }).then(async code => {
