@@ -96,9 +96,9 @@ async function run(mode, limit = 1) {
   const roadmap = await readRoadmapProgress(project);
   const statusRow = renderRunHeader(settings, project, instance.profile || {}, command, roadmap);
   const footer = new LiveFooter(process.stdout, controls); const status = new LiveStatusBlock(process.stdout, statusRow, 1);
-  const liveAttached = footer.enabled && status.enabled; let frame = 0; const frames = ['-', '\\', '|', '/']; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration'; let detail = roadmap.nextTask ? `Next task: ${roadmap.nextTask}` : 'Waiting for runner events…'; let iterationStarted = Date.now(); let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let notice = ''; let control = ''; const completedIterations = [];
+  const liveAttached = footer.enabled && status.enabled; let frame = 0; const frames = ['-', '\\', '|', '/']; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration'; let detail = roadmap.nextTask ? `Next task: ${roadmap.nextTask}` : 'Waiting for runner events…'; let iterationStarted = Date.now(); let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let control = ''; const completedIterations = [];
   const statusText = () => `${chalk.cyan(frames[frame++ % frames.length])} ${stage} · ${durationText(Date.now() - iterationStarted)}`;
-  const renderStatus = () => status.render(statusText(), notice || detail, completedIterations);
+  const renderStatus = () => status.render(statusText(), detail, completedIterations);
   if (liveAttached) { process.stdout.write('\x1b[?25l'); renderStatus(); footer.render(); }
   else { console.log(`  ${statusText()}`); console.log(`  ${controls}`); }
   const paint = liveAttached ? setInterval(renderStatus, 180) : null;
@@ -133,7 +133,7 @@ async function run(mode, limit = 1) {
     }
   };
   child.stdout.on('data', data => void consume(data)); child.stderr.on('data', data => { stderr += String(data); });
-  const requestRunControl = async kind => { if (control) return; control = kind; await request(kind); notice = chalk.yellow(kind === 'ABORT' ? '! Emergency stop requested. The current iteration will be terminated.' : '! Stop requested. The current iteration will finish, then development will stop.'); stage = kind === 'ABORT' ? 'Stopping current iteration' : 'Finishing current iteration'; if (liveAttached) renderStatus(); };
+  const requestRunControl = async kind => { if (control) return; control = kind; await request(kind); const message = kind === 'ABORT' ? 'emergency abort requested' : 'stop requested'; stage = kind === 'ABORT' ? `Stopping current iteration — ${message}` : `Finishing current iteration — ${message}`; if (liveAttached) renderStatus(); };
   const keyHandler = data => { const key = String(data).toLowerCase(); if (key === 's' || key === '\u0003') void requestRunControl('STOP'); if (key === 'x') void requestRunControl('ABORT'); };
   if (process.stdin.isTTY) { process.stdin.setRawMode?.(true); process.stdin.resume(); process.stdin.on('data', keyHandler); }
   await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }).then(async code => {

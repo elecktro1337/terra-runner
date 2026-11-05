@@ -15,6 +15,12 @@ test('keeps completed iteration history below the changing live status', () => {
   ]);
 });
 
+test('keeps the current task visible while the status changes to a graceful stop', () => {
+  assert.deepEqual(liveStatusRows('Finishing current iteration — stop requested', 'Task: NTD-0010'), [
+    '  Finishing current iteration — stop requested', '  Task: NTD-0010'
+  ]);
+});
+
 test('footer clears its former row before drawing at a resized terminal bottom', () => {
   let written = '';
   const stream = { isTTY: true, rows: 24, write(value) { written += value; return true; } };
