@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.3.4 - 2026-11-05
+
+- Continuous development now treats clean, pushed code or test changes as verified progress even before a larger roadmap checkbox is completed; it no longer stops after useful multi-commit implementation work.
+- Strengthened task selection so an external block on the first unchecked item cannot produce `NO_ACTIONABLE_TASKS` before OpenCode has searched every independent technical path.
+
 ## 2.3.3 - 2026-11-05
 
 - Moved the active-route HTTPS CONNECT check from Development into System diagnostics, alongside configuration, project-folder, PowerShell, Node.js, and OpenCode checks; diagnostics never start a model.

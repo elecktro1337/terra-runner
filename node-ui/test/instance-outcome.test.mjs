@@ -32,3 +32,12 @@ test('labels no-roadmap-progress as a safety stop instead of normal completion',
   assert.equal(outcome.kind, 'stopped');
   assert.match(outcome.reason, /^Safety stop — 3 consecutive iteration/);
 });
+
+test('explains a safety stop only after roadmap and implementation progress are both absent', () => {
+  const outcome = instanceOutcome(
+    { state: 'stopped', stopReason: 'no-verified-implementation-progress: 3 consecutive iteration(s) made no roadmap, code, or test progress' },
+    { stoppedReason: 'no-verified-implementation-progress: 3 consecutive iteration(s) made no roadmap, code, or test progress' },
+    { available: true, completed: 3, pending: 2, total: 5 }
+  );
+  assert.match(outcome.reason, /^Safety stop — 3 consecutive iteration\(s\) made no roadmap, code, or test progress/);
+});

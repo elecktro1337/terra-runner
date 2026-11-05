@@ -51,10 +51,10 @@ Choose **Development → One iteration** for one explicit agent run. **Main wind
 
 For **Run continuously**, choose the iteration limit at launch:
 
-- `0` means continue until a normal safety stop, budget stop, roadmap completion, or user stop.
+- `0` means continue until a normal safety stop, budget stop, roadmap completion, or user stop. A larger roadmap item may span several commits: a clean, pushed code or test change counts as verified implementation progress even before its checkbox is completed.
 - `1`–`1000` limits only this run and is not saved in the profile.
 
-The continuous launch also asks whether to use the provider snapshot guard. It is on by default. Disabling it is a temporary, clearly labelled override for that run; it bypasses provider snapshot freshness and threshold checks only. Other runner safety checks remain active.
+The continuous launch also asks whether to use the provider snapshot guard. It is on by default. Disabling it is a temporary, clearly labelled override for that run; it bypasses provider snapshot freshness and threshold checks only. Other runner safety checks remain active. A runner stops when it has repeatedly produced neither a completed roadmap item nor a clean, pushed code/test change. It also stops when every remaining technical path is explicitly blocked by an unavailable external dependency; Terra will not fake evidence for a live service, approval, or manual test.
 
 Before every main-window run, including **Dry run**, a missing or stale provider snapshot is requested directly and the original command continues after it is saved. While a run is active, the terminal shows the selected project/profile context and live status under the run header; only controls are pinned to the bottom line:
 

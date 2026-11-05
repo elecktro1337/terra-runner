@@ -1285,7 +1285,13 @@ try {
         catch { if (-not $termination) { $termination = "git-diff-review-error: $($_.Exception.Message)" } }
         if ($null -eq $changedFiles) { $changedFiles = [pscustomobject]@{ Code=0; Docs=0; Tests=0; Other=0; Paths=@() } }
         $stateFile = Join-Path $projectData 'control-state.json'
-        $noProgressNow = ($doneAfter -le $doneBefore) -and -not $transientNetworkFailure
+        # A roadmap checkbox is the strongest completion signal, but it is not
+        # the only useful output of an iteration. A verified, pushed code or
+        # test change is real implementation progress even when the agent has
+        # not yet completed the larger roadmap item. Do not stop an unattended
+        # run merely because that item spans several commits.
+        $implementationProgressNow = ($doneAfter -gt $doneBefore) -or ($changedFiles.Code -gt 0) -or ($changedFiles.Tests -gt 0)
+        $noProgressNow = (-not $implementationProgressNow) -and -not $transientNetworkFailure
         $noProgress = if ($transientNetworkFailure) { $noProgress } elseif ($noProgressNow) { $noProgress + 1 } else { 0 }
         $docsOnlyNow = ($changedFiles.Docs -gt 0 -and $changedFiles.Code -eq 0 -and $changedFiles.Tests -eq 0)
         $docsOnly = if ($docsOnlyNow) { $docsOnly + 1 } else { 0 }
@@ -1296,7 +1302,7 @@ try {
             $termination = if ($pendingAfter -eq 0) { 'roadmap-complete' } else { 'no-actionable-roadmap-task' }
         }
         elseif (-not $termination -and $noProgress -ge [int]$cfg.execution.maxConsecutiveNoProgress) {
-            $termination = "no-roadmap-progress: $noProgress consecutive iteration(s) completed no roadmap task"
+            $termination = "no-verified-implementation-progress: $noProgress consecutive iteration(s) made no roadmap, code, or test progress"
         }
         elseif (-not $termination -and $docsOnly -ge $docsLimit) {
             $termination = "documentation-only-progress: $docsOnly consecutive iteration(s) changed no code or tests"
@@ -1345,6 +1351,7 @@ try {
             testFilesChanged = $changedFiles.Tests
             otherFilesChanged = $changedFiles.Other
             changedFiles = @($changedFiles.Paths)
+            implementationProgress = $implementationProgressNow
             documentationOnly = $docsOnlyNow
             consecutiveDocumentationOnly = $docsOnly
             consecutiveNoProgress = $noProgress

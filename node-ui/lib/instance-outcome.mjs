@@ -15,6 +15,8 @@ function formatSafetyReason(value) {
   const reason = String(value || '');
   const noProgress = reason.match(/^no-roadmap-progress:\s*(\d+)/i);
   if (noProgress) return `Safety stop — ${noProgress[1]} consecutive iteration(s) completed no roadmap task.`;
+  const noImplementationProgress = reason.match(/^no-verified-implementation-progress:\s*(\d+)/i);
+  if (noImplementationProgress) return `Safety stop — ${noImplementationProgress[1]} consecutive iteration(s) made no roadmap, code, or test progress.`;
   if (/^no-actionable-roadmap-task$/i.test(reason)) return 'Safety stop — OpenCode reported no actionable roadmap task.';
   if (/^roadmap-complete$/i.test(reason)) return 'Roadmap complete.';
   const docsOnly = reason.match(/^documentation-only-progress:\s*(\d+)/i);
@@ -37,7 +39,7 @@ export function instanceOutcome(instance = {}, summary = null, roadmap = {}) {
   // The runner records a terse process status as stopReason and a separately
   // redacted, actionable diagnosis as error. Prefer the diagnosis.
   if (state === 'failed') reason = String(instance.error || reason || 'Runner failed.');
-  if (state === 'stopped' || state === 'aborted') reason ||= state === 'aborted' ? 'Emergency abort completed.' : 'Graceful stop completed.';
+  if (state === 'stopped' || state === 'aborted') reason = formatSafetyReason(reason || (state === 'aborted' ? 'Emergency abort completed.' : 'Graceful stop completed.'));
   const taskIds = Array.isArray(summary?.completedTaskIds) ? summary.completedTaskIds.filter(Boolean) : [];
   return {
     kind, reason,

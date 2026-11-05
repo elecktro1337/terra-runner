@@ -214,6 +214,18 @@ try {
     if (-not $noActionSummary.noActionableTasksReported) { throw 'NO_ACTIONABLE_TASKS signal was not recorded.' }
     Write-Host 'PASS: NO_ACTIONABLE_TASKS stops before a second paid iteration.' -ForegroundColor Green
 
+    # A larger roadmap task can span several commits. Code/test changes must
+    # keep Continuous moving even before that task's checkbox is completed.
+    $beforeImplementationProgress = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
+    $env:TERRA_MOCK_IMPLEMENTATION_PROGRESS = '1'
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 3
+    Remove-Item Env:TERRA_MOCK_IMPLEMENTATION_PROGRESS -ErrorAction SilentlyContinue
+    $afterImplementationProgress = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
+    if ($afterImplementationProgress.Count -ne ($beforeImplementationProgress + 3)) { throw 'Verified implementation progress should continue through the requested iterations.' }
+    $implementationSummary = Get-Content -Raw -LiteralPath ($afterImplementationProgress | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).FullName | ConvertFrom-Json
+    if (-not $implementationSummary.implementationProgress -or $implementationSummary.consecutiveNoProgress -ne 0 -or $implementationSummary.stoppedReason) { throw 'Code/test progress was incorrectly treated as no roadmap progress.' }
+    Write-Host 'PASS: code/test progress keeps continuous development running without a roadmap checkbox.' -ForegroundColor Green
+
     # A TLS interruption must be checked and retried without counting as no progress.
     $beforeTls = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
     $env:TERRA_MOCK_TLS_ONCE = '1'
@@ -250,6 +262,7 @@ finally {
     Remove-Item Env:TERRA_MOCK_BROKEN_STATS -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_ALL_COST -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_NO_ACTIONABLE -ErrorAction SilentlyContinue
+    Remove-Item Env:TERRA_MOCK_IMPLEMENTATION_PROGRESS -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_TLS_ONCE -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_STATE_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_BLOCKED -ErrorAction SilentlyContinue

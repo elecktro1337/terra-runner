@@ -45,6 +45,23 @@ if ($cmd -eq 'run') {
         exit 0
     }
     $repo = (Get-Location).Path
+    if ($env:TERRA_MOCK_IMPLEMENTATION_PROGRESS -eq '1') {
+        $source = Join-Path $repo 'src/MockImplementation.php'
+        $test = Join-Path $repo 'tests/MockImplementationTest.php'
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $source))
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $test))
+        $stamp = [guid]::NewGuid().ToString('N')
+        if (-not (Test-Path -LiteralPath $source)) { [IO.File]::WriteAllText($source,"<?php`n`ndeclare(strict_types=1);`n") }
+        if (-not (Test-Path -LiteralPath $test)) { [IO.File]::WriteAllText($test,"<?php`n`ndeclare(strict_types=1);`n") }
+        Add-Content -LiteralPath $source -Value "// mock implementation $stamp"
+        Add-Content -LiteralPath $test -Value "// mock test $stamp"
+        & git -C $repo add src/MockImplementation.php tests/MockImplementationTest.php | Out-Null
+        & git -C $repo commit -m 'test(mock): implementation progress without roadmap completion' | Out-Null
+        & git -C $repo push origin codex/terra 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { exit 3 }
+        '{"type":"text","part":{"text":"Mock implementation progress"}}'
+        exit 0
+    }
     $roadmap = Join-Path $repo 'NTD-ROADMAP.md'
     $text = Get-Content -LiteralPath $roadmap -Raw
     $text = $text.Replace('[ ]','[x]')

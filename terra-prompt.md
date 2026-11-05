@@ -8,4 +8,4 @@ Implement production-quality code using the project's existing architecture. Add
 
 Review `git diff`, confirm no secrets were introduced, commit the completed change using the repository's conventions, and push only when the configured remote accepts it. Never force-push.
 
-If no safe actionable task exists, report `NO_ACTIONABLE_TASKS` and make no speculative change. Finish after one logical iteration.
+Do not report `NO_ACTIONABLE_TASKS` merely because the first unchecked item needs an external approval, local service, credential, hardware, or manual test. Before using that signal, exhaustively scan the remaining roadmap for an independent technical implementation or test task that is safe to perform now, respecting only explicit prerequisites. Continue with such work and leave the blocked item unchecked. Use `NO_ACTIONABLE_TASKS` only when every remaining safe technical path is blocked; name the blocking task IDs, the concrete unavailable dependency, and why the next items cannot proceed without it. Never invent evidence or mark a blocked task complete. Finish after one logical iteration.
