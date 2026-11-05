@@ -56,6 +56,8 @@ For **Run continuously**, choose the iteration limit at launch:
 
 The continuous launch also asks whether to use the provider snapshot guard. It is on by default. Disabling it is a temporary, clearly labelled override for that run; it bypasses provider snapshot freshness and threshold checks only. Other runner safety checks remain active. A runner stops when it has repeatedly produced neither a completed roadmap item nor a clean, pushed code/test change. It also stops when every remaining technical path is explicitly blocked by an unavailable external dependency; Terra will not fake evidence for a live service, approval, or manual test.
 
+The development agent may prepare already-installed local development infrastructure needed for verification: for example, start Docker Desktop, project-scoped Compose services, and wait for their readiness. It may not install or reconfigure system software, request elevation, change network/security settings, touch production, or stop/delete resources it did not start for the project.
+
 Before every main-window run, including **Dry run**, a missing or stale provider snapshot is requested directly and the original command continues after it is saved. While a run is active, the terminal shows the selected project/profile context and live status under the run header; only controls are pinned to the bottom line:
 
 - `S` or `Ctrl+C` requests a stop after the current iteration.

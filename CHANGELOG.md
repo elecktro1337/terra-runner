@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.3.5 - 2026-11-05
+
+- Granted the development agent a bounded local-infrastructure capability: it can start and await already-installed local development dependencies such as Docker Desktop and project-scoped Compose services, while remaining prohibited from installation, elevation, system/network reconfiguration, production access, and destructive cleanup outside resources it started.
+
 ## 2.3.4 - 2026-11-05
 
 - Continuous development now treats clean, pushed code or test changes as verified progress even before a larger roadmap checkbox is completed; it no longer stops after useful multi-commit implementation work.

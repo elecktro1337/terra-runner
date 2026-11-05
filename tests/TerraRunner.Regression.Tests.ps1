@@ -31,6 +31,13 @@ Describe 'Terra Runner safe command dispatch' {
         & $runner -Project safe-project -Config $script:config -Status
         (Get-Content -LiteralPath $script:calls -Raw) | Should Not Match '(?m)^run(?:\s|$)'
     }
+    It 'grants bounded local infrastructure bootstrap to the development prompt' {
+        $prompt = Get-Content -LiteralPath (Join-Path $here 'terra-prompt.md') -Raw
+        $prompt | Should Match 'start.*Docker Desktop'
+        $prompt | Should Match 'already-installed local development infrastructure'
+        $prompt | Should Match 'Do not install, upgrade, uninstall, or reconfigure system software'
+        $prompt | Should Match 'Do not.*request elevation'
+    }
     It 'does not start an agent for Report' {
         & $runner -Project safe-project -Config $script:config -Report
         (Test-Path -LiteralPath $script:calls) | Should Be $false

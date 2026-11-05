@@ -60,4 +60,4 @@ Terminal instance records are runtime metadata, not historical evidence. `Develo
 
 ## Safety boundaries
 
-Only `-Once` and `-Continuous` start an agent. Status, reports, setup, preflight, cancelled prompts, and configuration edits are read-only with respect to OpenCode execution. `STOP` requests finish the current iteration; `ABORT` requests terminate it on the next poll. The UI clears stale flags only when the user explicitly starts a new run.
+Only `-Once` and `-Continuous` start an agent. Status, reports, setup, preflight, cancelled prompts, and configuration edits are read-only with respect to OpenCode execution. `STOP` requests finish the current iteration; `ABORT` requests terminate it on the next poll. The UI clears stale flags only when the user explicitly starts a new run. The versioned task prompt grants the agent a bounded local-infrastructure capability: it may start and await already-installed development dependencies required by the selected task, but may not install or reconfigure system software, elevate privileges, alter network/security settings, touch production, or remove resources it did not start.
