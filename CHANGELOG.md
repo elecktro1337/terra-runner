@@ -5,6 +5,7 @@
 - Removed global active profile/account state and project default profiles; every Development launch now explicitly selects a profile.
 - Made schema v9 execution and status CLI require `-ProfileId`, while non-execution commands remain profile-free.
 - Removed profile-specific header fields and simplified profile management to editing only.
+- Stabilized the main-window Development display: the selected profile context appears during a run, live status stays below it, and only controls are pinned to the terminal bottom.
 
 ## 2.2.0 - 2026-11-05
 

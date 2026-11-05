@@ -53,7 +53,7 @@ For **Run continuously**, choose the iteration limit at launch:
 
 The continuous launch also asks whether to use the provider snapshot guard. It is on by default. Disabling it is a temporary, clearly labelled override for that run; it bypasses provider snapshot freshness and threshold checks only. Other runner safety checks remain active.
 
-Before every main-window run, including **Dry run**, a missing or stale provider snapshot is requested directly and the original command continues after it is saved. While a run is active, the terminal keeps its status and controls in a fixed two-line footer:
+Before every main-window run, including **Dry run**, a missing or stale provider snapshot is requested directly and the original command continues after it is saved. While a run is active, the terminal shows the selected project/profile context and live status under the run header; only controls are pinned to the bottom line:
 
 - `S` or `Ctrl+C` requests a stop after the current iteration.
 - `X` requests an emergency stop of the current iteration.
@@ -65,14 +65,14 @@ Starting a new UI run automatically clears stale stop requests left by a previou
 All public commands use named parameters. OpenCode starts only with an explicit execution command.
 
 ```powershell
-pwsh -File .\terra-runner.ps1 -Project my-project -Once
-pwsh -File .\terra-runner.ps1 -Project my-project -Continuous
-pwsh -File .\terra-runner.ps1 -Project my-project -DryRun
-pwsh -File .\terra-runner.ps1 -Project my-project -Status
+pwsh -File .\terra-runner.ps1 -Project my-project -ProfileId my-profile -Once
+pwsh -File .\terra-runner.ps1 -Project my-project -ProfileId my-profile -Continuous
+pwsh -File .\terra-runner.ps1 -Project my-project -ProfileId my-profile -DryRun
+pwsh -File .\terra-runner.ps1 -Project my-project -ProfileId my-profile -Status
 pwsh -File .\terra-runner.ps1 -Project my-project -Report
 ```
 
-`-Status`, `-Report`, preflight, configuration actions, cancelled menus, and an invocation without an execution command never launch `opencode run`.
+In schema v9, model execution and `-Status` require `-ProfileId`; `-Report`, proxy commands and controls do not. `-Status`, `-Report`, preflight, configuration actions, cancelled menus, and an invocation without an execution command never launch `opencode run`.
 
 ## Tests
 

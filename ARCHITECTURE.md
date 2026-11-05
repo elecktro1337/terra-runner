@@ -36,7 +36,7 @@ Terra Runner separates presentation, execution, and persistent project evidence.
 4. The runner emits compact `__TERRA_UI__` telemetry records only when requested by the Node UI.
 5. Node reads safe tool-event metadata from the raw JSONL stream to render activity and verification counts. It does not render model reasoning content.
 6. The runner writes immutable per-iteration JSON summaries and raw/readable event logs under the stable project ID.
-7. Node renders checkpoints during continuous execution and keeps live status plus Stop/Abort controls in a fixed terminal footer; it aggregates new summaries at completion.
+7. Node renders the selected run context and live status below the header, pins only Stop/Abort controls to the terminal bottom, and aggregates new summaries at completion.
 
 ## State boundaries
 

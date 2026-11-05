@@ -1,26 +1,47 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { footerRows, LiveFooter } from '../lib/live-footer.mjs';
+import { footerRows, LiveFooter, LiveStatusBlock, liveStatusRows } from '../lib/live-footer.mjs';
 
-test('formats stable status and controls rows', () => {
-  assert.deepEqual(footerRows('Preparing iteration · 0m 09s', 'Controls: [S] stop'), [
-    '  Preparing iteration · 0m 09s', '  Controls: [S] stop'
+test('formats one pinned controls row and a separate status block', () => {
+  assert.deepEqual(footerRows('Controls: [S] stop'), ['  Controls: [S] stop']);
+  assert.deepEqual(liveStatusRows('Preparing iteration', 'Waiting for runner events…'), [
+    '  Preparing iteration', '  Waiting for runner events…'
   ]);
 });
 
-test('renders and clears a footer only on a usable TTY', () => {
+test('footer clears its former row before drawing at a resized terminal bottom', () => {
   let written = '';
   const stream = { isTTY: true, rows: 24, write(value) { written += value; return true; } };
   const footer = new LiveFooter(stream, 'Controls: [S] stop');
-  footer.render('Preparing iteration'); footer.clear();
-  assert.match(written, /Preparing iteration/);
+  footer.render();
+  assert.equal(footer.lastRow, 23);
+  const cleared = [];
+  const original = footer.clearRowsAt.bind(footer);
+  footer.clearRowsAt = (row, count) => { cleared.push([row, count]); return original(row, count); };
+  stream.rows = 40;
+  footer.render();
+  assert.deepEqual(cleared, [[23, 1]]);
+  assert.equal(footer.lastRow, 39);
   assert.match(written, /Controls: \[S\] stop/);
-  assert.equal(footer.visible, false);
+});
+
+test('status block stays below the header and clears without writing normal output', () => {
+  let written = '';
+  const stream = { isTTY: true, rows: 30, write(value) { written += value; return true; } };
+  const status = new LiveStatusBlock(stream, 11);
+  status.render('Iteration 1 | task', '✓ Previous iteration complete');
+  assert.equal(status.lastRow, 11);
+  assert.match(written, /Iteration 1 \| task/);
+  assert.match(written, /Previous iteration complete/);
+  status.clear();
+  assert.equal(status.visible, false);
 });
 
 test('does not emit cursor commands for a non-interactive stream', () => {
   let written = '';
-  const footer = new LiveFooter({ isTTY: false, rows: 24, write(value) { written += value; } }, 'Controls');
-  footer.render('status'); footer.persist('checkpoint'); footer.clear();
-  assert.equal(written, '\ncheckpoint\n');
+  const stream = { isTTY: false, rows: 24, write(value) { written += value; } };
+  const footer = new LiveFooter(stream, 'Controls');
+  const status = new LiveStatusBlock(stream, 8);
+  footer.render(); status.render('status', 'detail'); footer.clear(); status.clear();
+  assert.equal(written, '');
 });

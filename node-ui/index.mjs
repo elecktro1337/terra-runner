@@ -14,7 +14,8 @@ import { normalizeProjects, validateProjectId } from './lib/projects.mjs';
 import { dailyReports, latestIterationSummary, iterationSummariesSince, projectDataRoot } from './lib/reports.mjs';
 import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, redactedRoute, validateProxyRoute } from './lib/proxy.mjs';
 import { authStorePath, cleanupLegacyReservations, createInstance, isTerminalInstance, listInstances, normalizeRuntime, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
-import { LiveFooter } from './lib/live-footer.mjs';
+import { LiveFooter, LiveStatusBlock } from './lib/live-footer.mjs';
+import { developmentHeaderRows } from './lib/run-display.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -157,23 +158,26 @@ function showRunnerFailure(output) {
   console.log(`\n${chalk.red.bold(title)}`); console.log(rule);
   console.log(`  ${chalk.bold('Reason')}  ${reason}`); if (detail) console.log(`  ${chalk.bold('Detail')}  ${detail.slice(0, 360)}`); console.log(`  ${chalk.bold('Next step')} ${action}`); console.log(rule);
 }
-async function runWithTui(runnerArgs, settings, project, mode) {
+async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
   const executable = await resolveCommand('pwsh.exe');
   const previousSummaryId = (await latestIterationSummary(settings, project, configPath))?.id || '';
   const started = Date.now(); let iterationStarted = started; let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing continuous development' : mode === 'dry-run' ? 'Preparing dry run' : 'Preparing iteration';
-  let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let control = '';
+  let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let control = ''; let checkpoint = ''; let notice = '';
   const interactive = Boolean(process.stdin.isTTY);
   const controls = chalk.gray('Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop');
   const footer = new LiveFooter(process.stdout, controls);
+  const status = new LiveStatusBlock(process.stdout, statusRow);
   const spinnerFrames = ['-', '\\', '|', '/']; let frame = 0;
   const statusText = () => `${chalk.cyan(spinnerFrames[frame++ % spinnerFrames.length])} ${stage} · ${durationText(Date.now() - iterationStarted)}`;
-  const renderFooter = () => footer.render(statusText());
+  const renderStatus = () => status.render(statusText(), notice || checkpoint);
   const footerAttached = footer.enabled;
-  if (footerAttached) { process.stdout.write('\x1b[?25l'); renderFooter(); }
-  else { console.log(rule); console.log(chalk.gray(`  ${controls}`)); }
-  const update = setInterval(renderFooter, 180);
-  const onResize = () => renderFooter();
-  if (footerAttached) process.stdout.on('resize', onResize);
+  const statusAttached = status.enabled;
+  const liveAttached = footerAttached && statusAttached;
+  if (liveAttached) { process.stdout.write('\x1b[?25l'); renderStatus(); footer.render(); }
+  else { console.log(`  ${statusText()}`); console.log(`  ${controls}`); }
+  const update = liveAttached ? setInterval(renderStatus, 180) : null;
+  const onResize = () => { renderStatus(); footer.render(); };
+  if (liveAttached) process.stdout.on('resize', onResize);
   const liveUpdate = setInterval(async () => {
     if (!eventFile) return;
     try {
@@ -193,8 +197,8 @@ async function runWithTui(runnerArgs, settings, project, mode) {
     try {
       await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, `${kind} requested by user at ${new Date().toISOString()}\n`, 'utf8');
       const message = kind === 'abort' ? 'Emergency stop requested. The current iteration will be terminated.' : 'Stop requested. The current iteration will finish, then development will stop.';
-      footer.persist(chalk.yellow(`! ${message}`)); stage = kind === 'abort' ? 'Stopping current iteration' : 'Finishing current iteration'; renderFooter();
-    } catch (error) { control = ''; footer.persist(chalk.red(`x Could not request stop: ${error.message}`)); renderFooter(); }
+      notice = chalk.yellow(`! ${message}`); stage = kind === 'abort' ? 'Stopping current iteration' : 'Finishing current iteration'; if (liveAttached) renderStatus(); else console.log(`  ${notice}`);
+    } catch (error) { control = ''; notice = chalk.red(`x Could not request stop: ${error.message}`); if (liveAttached) renderStatus(); else console.log(`  ${notice}`); }
   };
   const onInput = data => { const key = String(data).toLowerCase(); if (key === 's' || key === '\u0003') void requestControl('stop'); if (key === 'x') void requestControl('abort'); };
   const onSigint = () => { void requestControl('stop'); };
@@ -212,9 +216,9 @@ async function runWithTui(runnerArgs, settings, project, mode) {
             if (event.type === 'iteration-started') {
               eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; iterationStarted = Date.now();
               iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`;
-              stage = `${iterationLabel} | ${event.taskId || 'next roadmap task'} | ${event.pending} tasks pending`;
+              checkpoint = ''; notice = ''; stage = `${iterationLabel} | ${event.taskId || 'next roadmap task'} | ${event.pending} tasks pending`;
             }
-              if (event.type === 'iteration-finished') { footer.persist(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${iterationCheckpointText(event)}`); stage = 'Preparing next iteration'; renderFooter(); }
+              if (event.type === 'iteration-finished') { checkpoint = `${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${iterationCheckpointText(event)}`; notice = ''; stage = 'Preparing next iteration'; if (liveAttached) renderStatus(); else console.log(`  ${checkpoint}`); }
           } catch { }
           return;
         }
@@ -228,7 +232,7 @@ async function runWithTui(runnerArgs, settings, project, mode) {
       child.stderr.on('data', chunk => { stderr += chunk.toString(); });
       child.once('error', reject); child.once('close', code => resolve({ code, stdout, stderr }));
     });
-    clearInterval(update); clearInterval(liveUpdate); cleanupControls(); if (footerAttached) process.stdout.off('resize', onResize); footer.clear(); if (footerAttached) process.stdout.write('\x1b[?25h');
+    if (update) clearInterval(update); clearInterval(liveUpdate); cleanupControls(); if (liveAttached) process.stdout.off('resize', onResize); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h'); clear();
     if (result.code === 0) console.log(chalk.green(`✓ Development run finished · ${durationText(Date.now() - started)}`));
     else console.log(chalk.red('x Development run could not start.'));
     const summaries = (await iterationSummariesSince(settings, project, configPath, started)).filter(summary => summary.id !== previousSummaryId);
@@ -236,7 +240,7 @@ async function runWithTui(runnerArgs, settings, project, mode) {
     else if (result.code !== 0) showRunnerFailure(result.stderr || result.stdout);
     return result.code === 0;
   } catch (error) {
-    clearInterval(update); clearInterval(liveUpdate); cleanupControls(); if (footerAttached) process.stdout.off('resize', onResize); footer.clear(); if (footerAttached) process.stdout.write('\x1b[?25h'); console.log(chalk.red(`x Development runner could not start: ${error.message}`)); return false;
+    if (update) clearInterval(update); clearInterval(liveUpdate); cleanupControls(); if (liveAttached) process.stdout.off('resize', onResize); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h'); clear(); console.log(chalk.red(`x Development runner could not start: ${error.message}`)); return false;
   }
 }
 async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [] }; settings.openCode.accounts ||= []; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the setup wizard once or pass --config <file>. ${error.message}`); } }
@@ -284,6 +288,18 @@ function header(settings) {
   console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' }))); console.log(chalk.gray('RUNNER  v2.3  ·  Local OpenCode development orchestrator')); console.log(rule);
   console.log(`${chalk.bold('Workspace')} ${projects.length} project(s)  ${chalk.gray('│')}  ${profiles.length} profile(s)  ${chalk.gray('│')}  Proxy ${route ? route.name : 'Direct'}`);
   console.log(rule);
+}
+function renderDevelopmentHeader(project, profile, command) {
+  clear();
+  const rows = [
+    chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' })),
+    chalk.gray('RUNNER  v2.3  ·  Active development run'),
+    rule,
+    ...developmentHeaderRows({ project, profile, command, limitText: limitSummary(profile) }),
+    rule
+  ];
+  for (const row of rows) console.log(row);
+  return rows.reduce((total, row) => total + String(row).split(/\r?\n/).length, 0);
 }
 function numberValue(raw, fallback) { const parsed = Number(String(raw).trim().replace(',', '.')); return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback; }
 async function configureLimits(settings, profile) {
@@ -517,8 +533,8 @@ async function runInMainWindow(settings, command, project, profile, maxIteration
   if (command === 'dry-run') args.push('-DryRun'); else { args.push('-UiEvents', '-ClearControlFlags', command === 'continuous' ? '-Continuous' : '-Once'); if (command === 'continuous') args.push(maxIterations > 0 ? '-MaxIterations' : '-UnlimitedIterations', ...(maxIterations > 0 ? [String(maxIterations)] : [])); }
   const label = command === 'dry-run' ? 'Run a dry run' : command === 'continuous' ? `Run continuously${maxIterations ? ` for up to ${maxIterations} iteration(s)` : ''}` : 'Run one iteration';
   if (!(await yesNo(`${label} for '${project.id}' in the main window?`))) return;
-  clear(); console.log(chalk.bold('DEVELOPMENT')); console.log(rule); console.log(`  Project  ${chalk.white(project.id)}`); console.log(`  Profile  ${chalk.cyan(profile.model)}  ${chalk.gray(`(${profile.credentialLabel || profile.policy})`)}`); console.log(`  Command  ${label}`); console.log(rule);
-  await runWithTui(args, settings, project, command); return pause();
+  const statusRow = renderDevelopmentHeader(project, profile, label);
+  await runWithTui(args, settings, project, command, statusRow); return pause();
 }
 async function testProxyForProject(settings, project) {
   if (!(await yesNo(`Test the active proxy route for '${project.id}' without starting a model?`))) return;
