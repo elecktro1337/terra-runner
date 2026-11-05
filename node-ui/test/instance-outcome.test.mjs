@@ -19,8 +19,8 @@ test('explains that a finished continuous instance completed its roadmap', () =>
 test('explains normal completion with remaining work and preserves failures', () => {
   const normal = instanceOutcome({ state: 'finished' }, null, { available: true, completed: 12, pending: 3, total: 15 });
   assert.match(normal.reason, /3 roadmap task/);
-  const failed = instanceOutcome({ state: 'failed', error: 'runner exit 1' });
-  assert.equal(failed.reason, 'runner exit 1');
+  const failed = instanceOutcome({ state: 'failed', stopReason: 'runner exit 1', error: 'Git working tree has uncommitted changes.' });
+  assert.equal(failed.reason, 'Git working tree has uncommitted changes.');
 });
 
 test('labels no-roadmap-progress as a safety stop instead of normal completion', () => {

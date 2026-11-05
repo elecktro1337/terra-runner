@@ -34,7 +34,9 @@ export function instanceOutcome(instance = {}, summary = null, roadmap = {}) {
     else if (summary?.stoppedReason) { kind = 'stopped'; reason = formatSafetyReason(summary.stoppedReason); }
     else if (!reason) reason = pending > 0 ? `Runner completed normally; ${pending} roadmap task(s) remain.` : 'Runner completed normally.';
   }
-  if (state === 'failed') reason ||= String(instance.error || 'Runner failed.');
+  // The runner records a terse process status as stopReason and a separately
+  // redacted, actionable diagnosis as error. Prefer the diagnosis.
+  if (state === 'failed') reason = String(instance.error || reason || 'Runner failed.');
   if (state === 'stopped' || state === 'aborted') reason ||= state === 'aborted' ? 'Emergency abort completed.' : 'Graceful stop completed.';
   const taskIds = Array.isArray(summary?.completedTaskIds) ? summary.completedTaskIds.filter(Boolean) : [];
   return {
