@@ -43,6 +43,14 @@ Describe 'Terra Runner safe command dispatch' {
         $source | Should Match '\$OutputEncoding\s*=\s*\$Utf8NoBom'
         $source | Should Match '\[Console\]::OutputEncoding\s*=\s*\$Utf8NoBom'
     }
+    It 'waits for transient Git and OpenCode network recovery instead of stopping a run' {
+        $source = Get-Content -LiteralPath $runner -Raw
+        $source | Should Match 'function Wait-ForGitRemotePublish'
+        $source | Should Match 'schannel'
+        $source | Should Match "Write-UiEvent 'network-waiting'"
+        $source | Should Match 'function Wait-ForOpenCodeRecovery'
+        $source | Should Not Match 'Transient TLS/SSL failure retry limit'
+    }
     It 'composes each worker prompt with committed project instructions' {
         $worker = Get-Content -LiteralPath (Join-Path $here 'terra-worker.ps1') -Raw
         $worker | Should Match '\[Parameter\(Mandatory\)\]\[string\]\$ProjectInstructionsFile'

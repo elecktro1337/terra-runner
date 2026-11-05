@@ -41,3 +41,18 @@ test('explains a safety stop only after roadmap and implementation progress are 
   );
   assert.match(outcome.reason, /^Safety stop — 3 consecutive iteration\(s\) made no roadmap, code, or test progress/);
 });
+
+test('reports unique completed roadmap tasks across the current run', () => {
+  const outcome = instanceOutcome(
+    { state: 'finished' },
+    { completedTaskIds: ['NTD-0002'], elapsedSeconds: 8 },
+    { available: true, completed: 2, pending: 3, total: 5 },
+    [
+      { completedTaskIds: ['NTD-0001'], doneBefore: 0, doneAfter: 1 },
+      { completedTaskIds: ['NTD-0002'], doneBefore: 1, doneAfter: 2 },
+      { completedTaskIds: ['NTD-0002'], doneBefore: 1, doneAfter: 2 }
+    ]
+  );
+  assert.equal(outcome.runIterations, 3);
+  assert.equal(outcome.runCompletedTasks, 2);
+});

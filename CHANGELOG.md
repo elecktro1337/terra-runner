@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Fixed project-instance results: the roadmap is shown once, and the result now includes completed tasks and iteration count for the current launch.
+- Temporary OpenCode and Git TLS/network failures now keep the instance waiting for reconnection instead of ending the development run; Stop and Abort remain available during the wait.
+
 ## 2.4.0 - 2026-11-05
 
 - Added mandatory per-project `PROJECT-INSTRUCTIONS.md` files, tracked and clean in Git, with safe paths, UI creation/opening, and per-iteration worker prompt composition.

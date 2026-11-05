@@ -244,7 +244,7 @@ function Confirm-RemotePush([string]$Directory, [string]$Branch) {
     return $remoteHead -ceq $head
 }
 function Test-TransientGitPushFailure([string]$Output) {
-    return $Output -match '(?i)(internal server error|\b5\d\d\b|temporar(?:y|ily)|timed? out|connection (?:reset|refused)|network|tls|ssl|service unavailable|rate limit)'
+    return $Output -match '(?i)(internal server error|\b5\d\d\b|temporar(?:y|ily)|timed? out|connection (?:reset|refused)|network|tls|ssl|schannel|handshake|service unavailable|rate limit)'
 }
 function Invoke-GitPushWithRetry([string]$Directory, [string]$Branch, [int]$Attempts, [int]$DelaySeconds) {
     $lastOutput = ''
@@ -255,7 +255,12 @@ function Invoke-GitPushWithRetry([string]$Directory, [string]$Branch, [int]$Atte
             $exitCode = $LASTEXITCODE
         } finally { Pop-Location }
         $lastOutput = [string]::Join("`n",[string[]]@($lines))
-        if ($exitCode -eq 0 -and (Confirm-RemotePush $Directory $Branch)) {
+        $confirmed = $false
+        if ($exitCode -eq 0) {
+            try { $confirmed = Confirm-RemotePush $Directory $Branch }
+            catch { $lastOutput = ($lastOutput + "`n" + $_.Exception.Message).Trim() }
+        }
+        if ($confirmed) {
             return [pscustomobject]@{ Success=$true; Attempts=$attempt; Output=$lastOutput }
         }
         if (-not (Test-TransientGitPushFailure $lastOutput)) {
@@ -267,6 +272,31 @@ function Invoke-GitPushWithRetry([string]$Directory, [string]$Branch, [int]$Atte
         }
     }
     return [pscustomobject]@{ Success=$false; Attempts=$Attempts; Output=$lastOutput }
+}
+function Wait-ForGitRemotePublish([string]$Directory, [string]$Branch, [int]$PushAttempts, [int]$DelaySeconds, [string]$StopPath, [string]$AbortPath) {
+    # A completed worker may already have a durable local commit.  A temporary
+    # transport outage must not turn that into a failed development run: keep
+    # the worktree lock and wait until origin can confirm or accept the commit.
+    $waitAttempt = 0
+    while ($true) {
+        if (Test-Path -LiteralPath $abortPath) { return [pscustomobject]@{ Success=$false; Interrupted=$true; Reason='manual-abort'; Error='' } }
+        if (Test-Path -LiteralPath $stopPath) { return [pscustomobject]@{ Success=$false; Interrupted=$true; Reason='manual-stop'; Error='' } }
+        $lastError = ''
+        try {
+            if (Confirm-RemotePush $Directory $Branch) { return [pscustomobject]@{ Success=$true; Interrupted=$false; Reason=''; Error='' } }
+            Write-Warning 'Local branch is not yet confirmed on origin. Retrying the non-force push.'
+            $push = Invoke-GitPushWithRetry $Directory $Branch $PushAttempts $DelaySeconds
+            if ($push.Success) { return [pscustomobject]@{ Success=$true; Interrupted=$false; Reason=''; Error='' } }
+            $lastError = [string]$push.Output
+        } catch { $lastError = $_.Exception.Message }
+        if (-not (Test-TransientGitPushFailure $lastError)) {
+            return [pscustomobject]@{ Success=$false; Interrupted=$false; Reason=''; Error=$lastError }
+        }
+        $waitAttempt++
+        Write-Warning "Git remote is temporarily unavailable. Waiting $DelaySeconds seconds before connection check ($waitAttempt)."
+        Write-UiEvent 'network-waiting' @{ source='Git remote'; attempt=$waitAttempt; delaySeconds=$DelaySeconds }
+        Start-Sleep -Seconds $DelaySeconds
+    }
 }
 function Get-TerraRecoveryMarkerPath([string]$ProjectData) {
     return Join-Path $ProjectData 'recovery/inflight.json'
@@ -289,7 +319,7 @@ function Test-GitAncestor([string]$Directory, [string]$Ancestor, [string]$Descen
     finally { Pop-Location }
     return $exitCode -eq 0
 }
-function Recover-TerraInterruptedWork([string]$Directory, [string]$Branch, [string]$ProjectData, [int]$Attempts, [int]$DelaySeconds) {
+function Recover-TerraInterruptedWork([string]$Directory, [string]$Branch, [string]$ProjectData, [int]$Attempts, [int]$DelaySeconds, [string]$StopPath, [string]$AbortPath) {
     $markerPath = Get-TerraRecoveryMarkerPath $ProjectData
     if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { return $null }
     try { $marker = Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 10 }
@@ -319,15 +349,21 @@ function Recover-TerraInterruptedWork([string]$Directory, [string]$Branch, [stri
     if ($stagedExit -ne 1) { throw 'Interrupted Terra recovery could not inspect the staged checkpoint.' }
     Invoke-Cli 'git' @('-C',$Directory,'diff','--cached','--check') $Directory | Out-Null
     Invoke-Cli 'git' @('-C',$Directory,'commit','-m',"chore(terra): recover interrupted run $runId") $Directory | Out-Null
-    $push = Invoke-GitPushWithRetry $Directory $Branch $Attempts $DelaySeconds
-    if (-not $push.Success) { throw "Interrupted Terra recovery created a local checkpoint but could not push it after $($push.Attempts) attempt(s)." }
+    $push = Wait-ForGitRemotePublish $Directory $Branch $Attempts $DelaySeconds $StopPath $AbortPath
+    if (-not $push.Success) {
+        if ($push.Interrupted) {
+            Write-Host "Interrupted-work checkpoint is local; Git remote wait interrupted by $($push.Reason)."
+            return [pscustomobject]@{ Interrupted=$true; Commit='' }
+        }
+        throw "Interrupted Terra recovery created a local checkpoint but could not push it: $($push.Error)"
+    }
     $commit = Get-Head $Directory
     $recoveryDirectory = Split-Path -Parent $markerPath
     Save-Json (Join-Path $recoveryDirectory 'last-recovery.json') ([ordered]@{ project=$Project; interruptedRunId=$runId; recoveryCommit=$commit; recoveredAt=(Get-Date).ToString('o') })
     Clear-TerraRecoveryMarker $ProjectData
     Write-Host "Recovered interrupted Terra work in commit $commit and pushed it to origin/$Branch."
     Write-UiEvent 'recovery-finished' @{ interruptedRunId=$runId; recoveryCommit=$commit }
-    return $commit
+    return [pscustomobject]@{ Interrupted=$false; Commit=$commit }
 }
 function Get-EventErrors([string]$EventsFile) {
     $streamErrors = 0
@@ -399,10 +435,21 @@ function Test-TransientNetworkFailure([string]$EventsFile, [string]$ErrorFile) {
     } catch { }
     return $false
 }
-function Wait-ForOpenCodeRecovery([string]$Executable, [string]$Directory, $Budget, [string]$LogRoot, [int]$Attempts, [int]$DelaySeconds) {
-    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
-        Write-Warning "Transient TLS/SSL or network failure. Waiting $DelaySeconds seconds before connection check ($attempt/$Attempts)."
+function Wait-ForOpenCodeRecovery([string]$Executable, [string]$Directory, $Budget, [string]$LogRoot, [bool]$LimitsEnabled, [int]$DelaySeconds, [string]$StopPath, [string]$AbortPath) {
+    $attempt = 0
+    while ($true) {
+        if ((Test-Path -LiteralPath $abortPath) -or (Test-Path -LiteralPath $stopPath)) { return $false }
+        $attempt++
+        Write-Warning "Transient TLS/SSL or network failure. Waiting $DelaySeconds seconds before connection check ($attempt)."
+        Write-UiEvent 'network-waiting' @{ source='OpenCode'; attempt=$attempt; delaySeconds=$DelaySeconds }
         Start-Sleep -Seconds $DelaySeconds
+        if ((Test-Path -LiteralPath $abortPath) -or (Test-Path -LiteralPath $stopPath)) { return $false }
+        # Dispatcher instances intentionally do not have Terra usage polling.
+        # Their next worker attempt is the connection check after the delay.
+        if (-not $LimitsEnabled) {
+            Write-Host 'Retrying the interrupted iteration after the network wait.'
+            return $true
+        }
         try {
             [void](Get-BudgetSnapshot $Executable $Directory $Budget $LogRoot)
             Write-Host 'OpenCode connection check succeeded. Retrying the interrupted iteration.'
@@ -1045,11 +1092,9 @@ Require-PositiveNumber $cfg.logs.maxTotalMiBPerProject 'logs.maxTotalMiBPerProje
 if ($null -ne (Read-Member $cfg.logs 'reportRetainDays')) { Require-PositiveNumber $cfg.logs.reportRetainDays 'logs.reportRetainDays' | Out-Null }
 if ([int]$cfg.execution.maxConsecutiveNoProgress -lt 1) { throw 'maxConsecutiveNoProgress must be >= 1.' }
 if ($null -ne (Read-Member $cfg.execution 'maxConsecutiveDocumentationOnly') -and [int]$cfg.execution.maxConsecutiveDocumentationOnly -lt 1) { throw 'maxConsecutiveDocumentationOnly must be >= 1.' }
-$maxTransientRetries = if ($null -ne (Read-Member $cfg.execution 'maxTransientRetries')) { [int]$cfg.execution.maxTransientRetries } else { 3 }
 $transientRetryDelaySeconds = if ($null -ne (Read-Member $cfg.execution 'transientRetryDelaySeconds')) { [int]$cfg.execution.transientRetryDelaySeconds } else { 30 }
 $maxPushRetries = if ($null -ne (Read-Member $cfg.execution 'maxPushRetries')) { [int]$cfg.execution.maxPushRetries } else { 3 }
 $pushRetryDelaySeconds = if ($null -ne (Read-Member $cfg.execution 'pushRetryDelaySeconds')) { [int]$cfg.execution.pushRetryDelaySeconds } else { 30 }
-if ($maxTransientRetries -lt 1) { throw 'maxTransientRetries must be >= 1.' }
 if ($transientRetryDelaySeconds -lt 1) { throw 'transientRetryDelaySeconds must be >= 1.' }
 if ($maxPushRetries -lt 1) { throw 'maxPushRetries must be >= 1.' }
 if ($pushRetryDelaySeconds -lt 1) { throw 'pushRetryDelaySeconds must be >= 1.' }
@@ -1091,12 +1136,13 @@ try {
     $branch = (Invoke-Cli 'git' @('-C',$repo,'branch','--show-current') $repo).Trim()
     if ($branch -cne [string]$projectConfig.branch) { throw "Wrong Git branch '$branch'; expected '$($projectConfig.branch)'" }
     [void](Invoke-Cli 'git' @('-C',$repo,'remote','get-url','origin') $repo)
-    if (-not (Confirm-RemotePush $repo ([string]$projectConfig.branch))) {
-        Write-Warning 'Local branch differs from origin. Retrying the pending non-force push before starting OpenCode.'
-        $pendingPush = Invoke-GitPushWithRetry $repo ([string]$projectConfig.branch) $maxPushRetries $pushRetryDelaySeconds
-        if (-not $pendingPush.Success) {
-            throw "Local and remote branch heads differ; pending push was not accepted after $($pendingPush.Attempts) attempt(s): $($pendingPush.Output)"
+    $pendingPush = Wait-ForGitRemotePublish $repo ([string]$projectConfig.branch) $maxPushRetries $pushRetryDelaySeconds $stopPath $abortPath
+    if (-not $pendingPush.Success) {
+        if ($pendingPush.Interrupted) {
+            Write-Host "Git remote wait interrupted by $($pendingPush.Reason)."
+            return
         }
+        throw "Local and remote branch heads differ or could not be verified: $($pendingPush.Error)"
     }
     if ($requiresProjectInstructions) {
         $projectInstructions = Resolve-ProjectInstructionsFile $repo $projectConfig
@@ -1104,7 +1150,8 @@ try {
     }
     $initialGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
     if ($initialGitStatus.Trim() -ne '' -and ($Once -or $Continuous)) {
-        [void](Recover-TerraInterruptedWork $repo ([string]$projectConfig.branch) $projectData $maxPushRetries $pushRetryDelaySeconds)
+        $recovery = Recover-TerraInterruptedWork $repo ([string]$projectConfig.branch) $projectData $maxPushRetries $pushRetryDelaySeconds $stopPath $abortPath
+        if ($null -ne $recovery -and $recovery.Interrupted) { return }
         $initialGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
     }
     if ($initialGitStatus.Trim() -ne '') {
@@ -1165,7 +1212,6 @@ try {
     # Continuous run stop after its first iteration.
     $noProgress = 0
     $docsOnly = 0
-    $transientFailures = 0
     $activeChild = $null
     for ($i = 1; $i -le $maxCycles; $i++) {
         if (Test-Path -LiteralPath $stopPath) { Write-Host 'STOP detected; exiting after previous iteration.'; break }
@@ -1303,15 +1349,10 @@ try {
         catch { if (-not $termination) { $termination = "git-status-error: $($_.Exception.Message)" } }
         if ($gitStatus.Trim() -ne '' -and -not $termination) { $termination = 'uncommitted-changes-left-by-agent' }
         $pushVerified = $false
-        try {
-            $pushVerified = Confirm-RemotePush $repo ([string]$projectConfig.branch)
-            if (-not $pushVerified) {
-                Write-Warning 'Agent finished with an unpublished local branch. Retrying the non-force push.'
-                $pushRetry = Invoke-GitPushWithRetry $repo ([string]$projectConfig.branch) $maxPushRetries $pushRetryDelaySeconds
-                $pushVerified = [bool]$pushRetry.Success
-            }
-        }
-        catch { if (-not $termination) { $termination = "git-remote-verification-error: $($_.Exception.Message)" } }
+        $remotePublish = Wait-ForGitRemotePublish $repo ([string]$projectConfig.branch) $maxPushRetries $pushRetryDelaySeconds $stopPath $abortPath
+        $pushVerified = [bool]$remotePublish.Success
+        if ($remotePublish.Interrupted -and -not $termination) { $termination = [string]$remotePublish.Reason }
+        elseif (-not $pushVerified -and -not $termination) { $termination = "git-remote-verification-error: $($remotePublish.Error)" }
         if (-not $pushVerified -and -not $termination) { $termination = 'local-and-remote-branch-heads-differ' }
         if ($gitStatus.Trim() -eq '' -and $pushVerified) { Clear-TerraRecoveryMarker $projectData }
         $changedFiles = $null
@@ -1409,13 +1450,8 @@ try {
         Rotate-ProjectLogs $logsPath $cfg.logs
         Rotate-Reports $projectData $cfg.logs
         if ($transientNetworkFailure) {
-            $transientFailures++
-            if ($transientFailures -gt $maxTransientRetries) {
-                Write-Warning "Transient TLS/SSL failure retry limit ($maxTransientRetries) reached; stopping safely. See $summaryPath"
-                break
-            }
-            if ($limitsEnabled -and -not (Wait-ForOpenCodeRecovery $openCode $repo $profileBudget $logRoot $maxTransientRetries $transientRetryDelaySeconds)) {
-                Write-Warning "OpenCode did not recover after $maxTransientRetries connection checks; stopping safely. See $summaryPath"
+            if (-not (Wait-ForOpenCodeRecovery $openCode $repo $profileBudget $logRoot $limitsEnabled $transientRetryDelaySeconds $stopPath $abortPath)) {
+                Write-Host 'Network wait interrupted by Stop or Abort.'
                 break
             }
             $i--
@@ -1425,7 +1461,6 @@ try {
             Write-Warning "Stopped on error or safety condition. Reason=$termination exit=$exitCode usage=$usageError; see $summaryPath"
             break
         }
-        $transientFailures = 0
         if ($i -lt $maxCycles) { Start-Sleep -Seconds ([int]$cfg.execution.pauseBetweenIterationsSeconds) }
     }
     Write-Host "Terra Runner finished. Project logs: $logsPath"

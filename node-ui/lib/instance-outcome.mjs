@@ -24,7 +24,19 @@ function formatSafetyReason(value) {
   return reason;
 }
 
-export function instanceOutcome(instance = {}, summary = null, roadmap = {}) {
+export function runTotals(summaries = []) {
+  const taskIds = new Set(); let completedWithoutIds = 0; let iterations = 0;
+  for (const summary of summaries) {
+    if (!summary || typeof summary !== 'object') continue;
+    iterations++;
+    const ids = Array.isArray(summary.completedTaskIds) ? summary.completedTaskIds.filter(Boolean) : [];
+    if (ids.length) ids.forEach(id => taskIds.add(String(id)));
+    else completedWithoutIds += Math.max(0, Number(summary.doneAfter || 0) - Number(summary.doneBefore || 0));
+  }
+  return { iterations, completed: taskIds.size + completedWithoutIds };
+}
+
+export function instanceOutcome(instance = {}, summary = null, roadmap = {}, runSummaries = []) {
   const state = String(instance.state || '');
   if (!['finished', 'failed', 'stopped', 'aborted'].includes(state)) return null;
   const completed = Number(roadmap.completed || 0); const pending = Number(roadmap.pending || 0); const total = Number(roadmap.total || 0);
@@ -41,11 +53,14 @@ export function instanceOutcome(instance = {}, summary = null, roadmap = {}) {
   if (state === 'failed') reason = String(instance.error || reason || 'Runner failed.');
   if (state === 'stopped' || state === 'aborted') reason = formatSafetyReason(reason || (state === 'aborted' ? 'Emergency abort completed.' : 'Graceful stop completed.'));
   const taskIds = Array.isArray(summary?.completedTaskIds) ? summary.completedTaskIds.filter(Boolean) : [];
+  const run = runTotals(runSummaries);
   return {
     kind, reason,
     roadmap: roadmap.available ? `${completed}/${total} complete  |  ${pending} pending${total ? `  |  ${((completed / total) * 100).toFixed(1)}%` : ''}` : '',
     task: taskIds.join(', ') || String(summary?.plannedTaskId || ''),
     duration: summary?.elapsedSeconds == null ? '' : durationText(summary.elapsedSeconds),
-    commit: latestCommit(summary)
+    commit: latestCommit(summary),
+    runCompletedTasks: run.completed,
+    runIterations: run.iterations
   };
 }

@@ -16,7 +16,7 @@ import { developmentHeaderRows } from './lib/run-display.mjs';
 import { readRoadmapProgress } from './lib/roadmap.mjs';
 import { completedIterationText } from './lib/iteration-history.mjs';
 import { instanceOutcome } from './lib/instance-outcome.mjs';
-import { latestIterationSummary, projectDataRoot } from './lib/reports.mjs';
+import { iterationSummariesSince, latestIterationSummary, projectDataRoot } from './lib/reports.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -63,8 +63,9 @@ function renderRunHeader(settings, project, profile, command, roadmap) {
 async function pick(message, choices) { try { return await select({ message, choices: [...choices, { name: '← Back', value: null }], loop: false }); } catch (error) { if (error?.name === 'ExitPromptError') return null; throw error; } }
 async function load() { const [settings, instance] = await Promise.all([fs.readFile(configPath, 'utf8').then(JSON.parse), readInstance(configPath, instanceId)]); if (!instance) throw new Error('The dispatcher instance record no longer exists.'); const project = (settings.projects || []).find(item => item.id === instance.projectId); if (!project) throw new Error(`Project '${instance.projectId}' was removed from the configuration.`); return { settings, instance, project }; }
 async function show(settings, instance, project) {
-  const [summary, roadmap] = await Promise.all([latestIterationSummary(settings, project, configPath), readRoadmapProgress(project)]);
-  const outcome = instanceOutcome(instance, summary, roadmap);
+  const runSince = Date.parse(instance.runStartedAt || instance.createdAt || '') || 0;
+  const [summary, roadmap, runSummaries] = await Promise.all([latestIterationSummary(settings, project, configPath), readRoadmapProgress(project), iterationSummariesSince(settings, project, configPath, runSince)]);
+  const outcome = instanceOutcome(instance, summary, roadmap, runSummaries);
   globalHeader(settings);
   for (const row of developmentHeaderRows({ project, profile: instance.profile || {}, command: 'Instance result', roadmap, includeTerraLimits: false })) console.log(row);
   console.log(`  ${chalk.bold.cyan('Location')}  ${chalk.gray(project.path)}`);
@@ -73,7 +74,7 @@ async function show(settings, instance, project) {
   if (outcome) {
     const resultColor = outcome.kind === 'complete' ? chalk.green : outcome.kind === 'failed' || outcome.kind === 'aborted' ? chalk.red : chalk.yellow;
     console.log(`  Result    ${resultColor(outcome.reason)}`);
-    if (outcome.roadmap) console.log(`  Roadmap   ${outcome.kind === 'complete' ? chalk.green(outcome.roadmap) : outcome.roadmap}`);
+    if (outcome.runIterations) console.log(`  This run  ${outcome.runCompletedTasks ? chalk.green(`${outcome.runCompletedTasks} task(s) completed`) : 'no roadmap tasks completed'}  │  ${outcome.runIterations} iteration(s)`);
     if (outcome.task) console.log(`  Last task ${chalk.cyan(outcome.task)}`);
     if (outcome.duration) console.log(`  Duration  ${outcome.duration}`);
     if (outcome.commit) console.log(`  Commit    ${chalk.gray(outcome.commit)}`);
@@ -91,7 +92,8 @@ async function run(mode, limit = 1) {
     return;
   }
   if (['running', 'starting'].includes(instance.state)) { console.log(chalk.yellow('This instance already has an active runner.')); return; }
-  await clearInstanceControls(configPath, instanceId); await safeUpdate({ state: 'starting', runnerPid: null, activity: 'Preparing OpenCode' });
+  const runStartedAt = new Date().toISOString();
+  await clearInstanceControls(configPath, instanceId); await safeUpdate({ state: 'starting', runnerPid: null, activity: 'Preparing OpenCode', runStartedAt });
   const command = mode === 'continuous' ? `Run continuously${limit ? ` for up to ${limit} iteration(s)` : ''}` : 'Run one iteration';
   const roadmap = await readRoadmapProgress(project);
   const statusRow = renderRunHeader(settings, project, instance.profile || {}, command, roadmap);
@@ -127,9 +129,11 @@ async function run(mode, limit = 1) {
         const event = JSON.parse(line.slice('__TERRA_UI__'.length));
         if (event.type === 'iteration-started') { eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; iterationStarted = Date.now(); iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`; stage = `${iterationLabel} | ${event.taskId || 'next roadmap task'} | ${event.pending} tasks pending`; detail = event.taskTitle ? `Task: ${event.taskTitle}` : ''; }
         if (event.type === 'recovery-finished') { stage = 'Recovered interrupted Terra work'; detail = `Recovery commit ${event.recoveryCommit || 'created and pushed'}`; }
+        if (event.type === 'network-waiting') { stage = `Waiting for ${event.source || 'network'} connection`; detail = `Retry ${event.attempt || 1}; next check in ${event.delaySeconds || '?'}s`; }
         if (event.type === 'iteration-heartbeat') { stage = `Iteration ${event.iteration} | working`; }
         if (event.type === 'iteration-finished') { completedIterations.push(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`); stage = 'Preparing next iteration'; detail = ''; }
-        await safeUpdate({ state: 'running', activity: event.type === 'iteration-heartbeat' ? `Iteration ${event.iteration}: ${event.elapsedSeconds}s` : event.type, iteration: event.iteration ?? null });
+        const instanceActivity = event.type === 'iteration-heartbeat' ? `Iteration ${event.iteration}: ${event.elapsedSeconds}s` : event.type === 'network-waiting' ? `Waiting for ${event.source || 'network'} connection` : event.type;
+        await safeUpdate({ state: 'running', activity: instanceActivity, iteration: event.iteration ?? null });
       } catch { }
     }
   };

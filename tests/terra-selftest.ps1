@@ -231,7 +231,6 @@ try {
     # NO_ACTIONABLE_TASKS must stop after one attempt even when roadmap checkboxes remain.
     $cfg.budget.mode = 'daily'
     $cfg.execution.maxConsecutiveNoProgress = 3
-    $cfg.execution.maxTransientRetries = 2
     $cfg.execution.transientRetryDelaySeconds = 1
     $cfg.execution.pauseBetweenIterationsSeconds = 0
     $env:TERRA_MOCK_COST = '0.15'; $env:TERRA_MOCK_ALL_COST = '0.15'
