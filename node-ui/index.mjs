@@ -665,9 +665,15 @@ async function detectBranch(projectPath, fallback = '') {
 function projectInstructionsPath(project) {
   const relative = String(project.instructions || DEFAULT_PROJECT_INSTRUCTIONS).trim();
   const error = validateProjectInstructionsPath(relative); if (error) throw new Error(error);
+  return projectFilePath(project, relative, 'Instructions');
+}
+function projectFilePath(project, relative, label) {
+  const filenameValue = String(relative || '').trim();
+  if (!filenameValue) throw new Error(`${label} filename is required.`);
+  if (path.isAbsolute(filenameValue) || filenameValue.split(/[\\/]+/).some(part => part === '..')) throw new Error(`${label} must be a relative path inside the project directory.`);
   const rootPath = path.resolve(project.path);
-  const filename = path.resolve(rootPath, relative);
-  if (!filename.startsWith(`${rootPath}${path.sep}`)) throw new Error('Instructions path must stay inside the project directory.');
+  const filename = path.resolve(rootPath, filenameValue);
+  if (!filename.startsWith(`${rootPath}${path.sep}`)) throw new Error(`${label} path must stay inside the project directory.`);
   return filename;
 }
 async function launchExternalEditor(filename) {
@@ -675,21 +681,33 @@ async function launchExternalEditor(filename) {
   child.unref();
   await new Promise((resolve, reject) => { child.once('error', reject); child.once('spawn', resolve); });
 }
-async function createOrOpenProjectInstructions(project, createMissing = true) {
+async function projectInstructionsStatus(project) {
   const filename = projectInstructionsPath(project);
+  try { return { filename, exists: (await fs.stat(filename)).isFile() }; }
+  catch { return { filename, exists: false }; }
+}
+async function createOrOpenProjectInstructions(project, createMissing = true) {
+  const status = await projectInstructionsStatus(project);
   let created = false;
-  try { if (!(await fs.stat(filename)).isFile()) throw new Error(); }
-  catch {
-    if (!createMissing) return { filename, created: false, exists: false };
+  if (!status.exists) {
+    if (!createMissing) return { ...status, created: false };
+    const { filename } = status;
     await fs.mkdir(path.dirname(filename), { recursive: true });
     await fs.writeFile(filename, '# Project instructions\n', 'utf8');
     created = true;
   }
+  await launchExternalEditor(status.filename);
+  return { filename: status.filename, created, exists: true };
+}
+async function openProjectFile(project, field, fallback, label) {
+  const filename = projectFilePath(project, project[field] || fallback, label);
+  try { if (!(await fs.stat(filename)).isFile()) throw new Error('not a file'); }
+  catch { throw new Error(`${label} file was not found: ${filename}`); }
   await launchExternalEditor(filename);
-  return { filename, created, exists: true };
+  return filename;
 }
 async function ensureProjectInstructionsForLaunch(settings, project) {
-  const result = await createOrOpenProjectInstructions(project, false);
+  const result = await projectInstructionsStatus(project);
   if (result.exists) return true;
   header(settings); console.log(chalk.yellow.bold('PROJECT INSTRUCTIONS REQUIRED')); console.log(rule);
   console.log(`  Project       ${project.id}`); console.log(`  Instructions  ${project.instructions || DEFAULT_PROJECT_INSTRUCTIONS}`);
@@ -730,12 +748,24 @@ async function projectsMenu(settings) {
     if (action === 'add') { await editProject(settings, { path: '', branch: '', roadmap: '', progress: '', instructions: DEFAULT_PROJECT_INSTRUCTIONS }, true); continue; }
     const project = projects.find(item => item.id === action.slice('project:'.length)); if (!project) continue;
     const detail = await pick(`Project: ${project.id}`, [
-      { name: 'Edit project configuration', value: 'edit' }, { name: 'Open project instructions', value: 'instructions' }, { name: chalk.red('Remove project configuration'), value: 'remove' }
+      { name: 'Edit project configuration', value: 'edit' },
+      { name: 'Open project instructions', value: 'instructions' },
+      { name: 'Open roadmap', value: 'roadmap' },
+      { name: 'Open progress', value: 'progress' },
+      { name: chalk.red('Remove project configuration'), value: 'remove' }
     ]);
     if (detail === 'edit') await editProject(settings, project);
     if (detail === 'instructions') {
       try { const result = await createOrOpenProjectInstructions(project, true); console.log(chalk.green(`${result.created ? 'Created and opened' : 'Opened'} ${result.filename} in Notepad.`)); if (result.created) console.log(chalk.yellow('Save the file; the next Development worker commits it unchanged before task work.')); }
       catch (error) { console.log(chalk.red(`Could not open instructions: ${error.message}`)); }
+      await pause();
+    }
+    if (detail === 'roadmap' || detail === 'progress') {
+      const field = detail;
+      const label = detail === 'roadmap' ? 'Roadmap' : 'Progress';
+      const fallback = detail === 'roadmap' ? 'ROADMAP.md' : 'PROGRESS.md';
+      try { const filename = await openProjectFile(project, field, fallback, label); console.log(chalk.green(`Opened ${filename} in Notepad.`)); }
+      catch (error) { console.log(chalk.red(`Could not open ${label.toLowerCase()}: ${error.message}`)); }
       await pause();
     }
     if (detail === 'remove') {
