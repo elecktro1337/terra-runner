@@ -10,6 +10,7 @@ The Node UI displays a short reason and next step instead of a PowerShell stack 
 - **OpenCode was not found**: install OpenCode 2.x or correct its command path.
 - **Snapshot missing or stale**: start the run again and enter a current provider observation when prompted.
 - **Project authentication storage could not be prepared**: reconnect the selected profile through normal OpenCode authentication, then launch again. Terra will recreate the private project store automatically; do not copy tokens or database files by hand.
+- **Uncommitted or untracked files after a crash**: start One iteration or Continuous normally. If they belong to an interrupted Terra run, its matching recovery marker causes Terra to checkpoint and non-force push them automatically. If no matching marker exists, the files may be manual work; review and resolve them yourself.
 
 Use **Development → Project preflight** to check the project path, branch, roadmap, progress file, OpenCode command, provider snapshot, and working-tree cleanliness without launching an agent.
 

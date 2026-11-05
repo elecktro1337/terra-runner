@@ -6,6 +6,7 @@ Terra Runner is a local Windows orchestrator for controlled OpenCode development
 - Different projects can run in parallel with independent logs, controls and OpenCode environments.
 - Development always chooses a command, project, and run mode explicitly. Main-window runs enforce the profile limits; separate dispatcher instances deliberately do not read or enforce Terra budget/quota snapshots.
 - Every cloud project receives an automatic private OpenCode credential store through `OPENCODE_DB`; no second login or model setup is required after selecting an existing profile.
+- If Windows or a worker stops during a Terra iteration, the next Development launch automatically checkpoints and pushes that interrupted Terra work before continuing.
 - Closing the dispatcher requests a graceful Stop for every project workspace. `Development → Active instances` exposes an explicit emergency Abort.
 
 ## Start
@@ -61,6 +62,18 @@ Before every main-window run, including **Dry run**, a missing or stale provider
 - `X` requests an emergency stop of the current iteration.
 
 Starting a new UI run automatically clears stale stop requests left by a previous run.
+
+### Interrupted-run recovery
+
+Before OpenCode starts an iteration, Terra writes a local durable marker with the
+project, branch and base commit. If the process or computer stops and leaves
+that marker plus a dirty worktree, the next **One iteration** or **Continuous**
+launch verifies the branch history, creates a `chore(terra): recover interrupted
+run …` checkpoint commit, pushes it normally, then continues. The recovery is
+shown in the live status and recorded below the project data directory.
+
+Terra never performs this automatic commit without its matching marker. A dirty
+worktree without one can be manual work, so it remains blocked for review.
 
 ## Safe CLI commands
 

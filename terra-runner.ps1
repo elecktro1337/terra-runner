@@ -237,6 +237,67 @@ function Invoke-GitPushWithRetry([string]$Directory, [string]$Branch, [int]$Atte
     }
     return [pscustomobject]@{ Success=$false; Attempts=$Attempts; Output=$lastOutput }
 }
+function Get-TerraRecoveryMarkerPath([string]$ProjectData) {
+    return Join-Path $ProjectData 'recovery/inflight.json'
+}
+function Write-TerraRecoveryMarker([string]$ProjectData, [string]$RunId, [string]$Branch, [string]$BaseHead) {
+    $markerPath = Get-TerraRecoveryMarkerPath $ProjectData
+    Save-Json $markerPath ([ordered]@{
+        project = $Project; runId = $RunId; branch = $Branch; baseHead = $BaseHead
+        startedAt = (Get-Date).ToString('o')
+    })
+    return $markerPath
+}
+function Clear-TerraRecoveryMarker([string]$ProjectData) {
+    $markerPath = Get-TerraRecoveryMarkerPath $ProjectData
+    if (Test-Path -LiteralPath $markerPath) { Remove-Item -LiteralPath $markerPath -Force }
+}
+function Test-GitAncestor([string]$Directory, [string]$Ancestor, [string]$Descendant) {
+    Push-Location -LiteralPath $Directory
+    try { & git merge-base --is-ancestor $Ancestor $Descendant; $exitCode = $LASTEXITCODE }
+    finally { Pop-Location }
+    return $exitCode -eq 0
+}
+function Recover-TerraInterruptedWork([string]$Directory, [string]$Branch, [string]$ProjectData, [int]$Attempts, [int]$DelaySeconds) {
+    $markerPath = Get-TerraRecoveryMarkerPath $ProjectData
+    if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { return $null }
+    try { $marker = Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 10 }
+    catch { throw 'Interrupted Terra recovery marker is unreadable; resolve the working tree manually before development.' }
+    $runId = [string](Read-Member $marker 'runId')
+    $markerProject = [string](Read-Member $marker 'project')
+    $markerBranch = [string](Read-Member $marker 'branch')
+    $baseHead = [string](Read-Member $marker 'baseHead')
+    if ($markerProject -ne $Project -or $markerBranch -cne $Branch -or $runId -notmatch '^[A-Za-z0-9-]{8,96}$' -or $baseHead -notmatch '^[a-f0-9]{40,64}$') {
+        throw 'Interrupted Terra recovery marker does not match this project and branch; resolve the working tree manually before development.'
+    }
+    $status = Invoke-Cli 'git' @('-C',$Directory,'status','--porcelain') $Directory
+    if ([string]::IsNullOrWhiteSpace($status)) {
+        Clear-TerraRecoveryMarker $ProjectData
+        Write-Host 'Cleared a stale interrupted-run marker; the Git working tree is already clean.'
+        return $null
+    }
+    $currentHead = Get-Head $Directory
+    if (-not (Test-GitAncestor $Directory $baseHead $currentHead)) {
+        throw 'Interrupted Terra recovery cannot verify the Git base commit; resolve the working tree manually before development.'
+    }
+    Invoke-Cli 'git' @('-C',$Directory,'add','--all') $Directory | Out-Null
+    Push-Location -LiteralPath $Directory
+    try { & git diff --cached --quiet; $stagedExit = $LASTEXITCODE }
+    finally { Pop-Location }
+    if ($stagedExit -eq 0) { throw 'Interrupted Terra recovery found no staged work after a dirty Git status; resolve the working tree manually.' }
+    if ($stagedExit -ne 1) { throw 'Interrupted Terra recovery could not inspect the staged checkpoint.' }
+    Invoke-Cli 'git' @('-C',$Directory,'diff','--cached','--check') $Directory | Out-Null
+    Invoke-Cli 'git' @('-C',$Directory,'commit','-m',"chore(terra): recover interrupted run $runId") $Directory | Out-Null
+    $push = Invoke-GitPushWithRetry $Directory $Branch $Attempts $DelaySeconds
+    if (-not $push.Success) { throw "Interrupted Terra recovery created a local checkpoint but could not push it after $($push.Attempts) attempt(s)." }
+    $commit = Get-Head $Directory
+    $recoveryDirectory = Split-Path -Parent $markerPath
+    Save-Json (Join-Path $recoveryDirectory 'last-recovery.json') ([ordered]@{ project=$Project; interruptedRunId=$runId; recoveryCommit=$commit; recoveredAt=(Get-Date).ToString('o') })
+    Clear-TerraRecoveryMarker $ProjectData
+    Write-Host "Recovered interrupted Terra work in commit $commit and pushed it to origin/$Branch."
+    Write-UiEvent 'recovery-finished' @{ interruptedRunId=$runId; recoveryCommit=$commit }
+    return $commit
+}
 function Get-EventErrors([string]$EventsFile) {
     $streamErrors = 0
     $toolErrorIds = [System.Collections.Generic.HashSet[string]]::new()
@@ -394,6 +455,7 @@ function Rotate-ProjectLogs([string]$LogsDirectory, $Settings) {
         }
 }
 function Save-Json([string]$Filename, $Value) {
+    Ensure-Directory (Split-Path -Parent $Filename)
     $json = ConvertTo-Json -InputObject $Value -Depth 25
     [System.IO.File]::WriteAllText($Filename, ($json + "`n"), [System.Text.UTF8Encoding]::new($false))
 }
@@ -1004,6 +1066,10 @@ try {
         }
     }
     $initialGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
+    if ($initialGitStatus.Trim() -ne '' -and ($Once -or $Continuous)) {
+        [void](Recover-TerraInterruptedWork $repo ([string]$projectConfig.branch) $projectData $maxPushRetries $pushRetryDelaySeconds)
+        $initialGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
+    }
     if ($initialGitStatus.Trim() -ne '') {
         throw 'Git working tree has uncommitted/untracked changes. Review and resolve them before automated execution.'
     }
@@ -1087,6 +1153,7 @@ try {
         $summaryPath = $prefix + '.summary.json'
         [System.IO.File]::WriteAllText($eventsPath,'')
         [System.IO.File]::WriteAllText($stderrPath,'')
+        [void](Write-TerraRecoveryMarker $projectData $runId $branch $headBefore)
         Write-Host "Iteration $i/$maxCycles [$runId], pending tasks: $pending"
         Write-UiEvent 'iteration-started' @{ iteration=$i; total=$(if ($UnlimitedIterations) { $null } else { $maxCycles }); runId=$runId; pending=$pending; taskId=$plannedTask.Id; taskTitle=$plannedTask.Title; eventsFile=$eventsPath }
         $begin = Get-Date
@@ -1205,6 +1272,7 @@ try {
         }
         catch { if (-not $termination) { $termination = "git-remote-verification-error: $($_.Exception.Message)" } }
         if (-not $pushVerified -and -not $termination) { $termination = 'local-and-remote-branch-heads-differ' }
+        if ($gitStatus.Trim() -eq '' -and $pushVerified) { Clear-TerraRecoveryMarker $projectData }
         $changedFiles = $null
         $completedIds = @(); $iterationCommits = @()
         try {

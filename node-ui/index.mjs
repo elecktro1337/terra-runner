@@ -215,6 +215,7 @@ async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
               checkpoint = event.taskTitle ? `Task: ${event.taskTitle}` : event.taskId ? `Task: ${event.taskId}` : '';
               stage = `${iterationLabel} | ${event.taskId || 'next roadmap task'} | ${event.pending} tasks pending`;
             }
+              if (event.type === 'recovery-finished') { checkpoint = `Recovered interrupted work: ${event.recoveryCommit || 'checkpoint committed and pushed'}`; stage = 'Recovered interrupted Terra work'; }
               if (event.type === 'iteration-finished') { const completed = `${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`; completedIterations.push(completed); checkpoint = ''; stage = 'Preparing next iteration'; if (liveAttached) renderStatus(); else console.log(`  ${completed}`); }
           } catch { }
           return;

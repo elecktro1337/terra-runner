@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.2 - 2026-11-05
+
+- Added durable interrupted-run recovery markers and automatic non-force recovery commits for matching Terra-owned dirty worktrees.
+- Recovery verifies project, branch and Git ancestry, validates the staged diff, pushes the checkpoint, records its commit, and never auto-commits a dirty worktree without a valid Terra marker.
+- Added live recovery status plus offline regression coverage for marker-based checkpoint and push recovery.
+
 ## 2.3.1 - 2026-11-05
 
 - Raised configuration to schema v10 and added lazy project-managed OpenCode stores for cloud Development launches.

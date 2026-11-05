@@ -110,6 +110,23 @@ try {
     Write-Host 'PASS: readable logs, tool errors, and daily reports.' -ForegroundColor Green
     Write-Host 'PASS: one iteration, TODO update, commit, push and project log.' -ForegroundColor Green
 
+    # A durable marker permits safe automatic recovery only for an interrupted
+    # Terra run, not for arbitrary dirty worktrees.
+    $recoveryHead = (& git -C $repo rev-parse HEAD).Trim()
+    $recoveryMarker = Join-Path $tempRoot 'project-data/mock-project/recovery/inflight.json'
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $recoveryMarker))
+    [ordered]@{ project='mock-project'; runId='interrupted-0001'; branch='codex/terra'; baseHead=$recoveryHead; startedAt=(Get-Date).ToString('o') } |
+        ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $recoveryMarker -Encoding UTF8
+    [IO.File]::WriteAllText((Join-Path $repo 'RECOVERY-CHECKPOINT.md'),'interrupted Terra work')
+    $env:TERRA_MOCK_COST = '5.01'
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once
+    if (Test-Path -LiteralPath $recoveryMarker) { throw 'Interrupted Terra recovery marker was not cleared after a pushed checkpoint.' }
+    if ((& git -C $repo status --porcelain)) { throw 'Interrupted Terra recovery left the working tree dirty.' }
+    if ((& git -C $repo log -1 --pretty=%s) -notmatch '^chore\(terra\): recover interrupted run interrupted-0001$') { throw 'Interrupted Terra recovery commit message is missing.' }
+    $recoveryRemote = (& git -C $repo ls-remote --heads origin refs/heads/codex/terra) -split '\s+' | Select-Object -First 1
+    if ($recoveryRemote -ne (& git -C $repo rev-parse HEAD)) { throw 'Interrupted Terra recovery commit was not pushed.' }
+    Write-Host 'PASS: interrupted Terra work is checkpointed and pushed before a new run.' -ForegroundColor Green
+
     $env:TERRA_MOCK_COST = '5.01'
     $countBefore = @($summaries).Count
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once

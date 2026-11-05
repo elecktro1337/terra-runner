@@ -81,3 +81,13 @@ During a Node UI run, `S` or `Ctrl+C` creates a project `STOP` request and lets 
 Settings are written atomically. If active JSON is invalid, the UI offers the newest valid backup and preserves the invalid file as a timestamped `.corrupt-*` copy.
 
 `execution.maxTransientRetries` and `execution.transientRetryDelaySeconds` control TLS/SSL and transient network recovery. `execution.maxPushRetries` and `execution.pushRetryDelaySeconds` control non-force Git push retries. Failed or exhausted safety checks stop development rather than launching another agent iteration.
+
+During an active OpenCode iteration, Terra stores a non-secret recovery marker
+at `logs.root/<project-id>/recovery/inflight.json`. After an interrupted run,
+the next model launch may recover only when the marker names the same project
+and branch and its base commit is an ancestor of the current HEAD. It stages
+the remaining worktree, validates it with `git diff --cached --check`, creates
+a `chore(terra): recover interrupted run …` commit and pushes it with the
+normal non-force retry policy. `last-recovery.json` records the resulting
+commit. A clean successful iteration clears the marker. Dirty worktrees with
+no valid marker are never auto-committed.

@@ -20,6 +20,14 @@ allowing different projects to run concurrently. Budget/quota state is used
 only by main-window runs; dispatcher instances record untracked usage and do
 not reserve or inspect provider limits.
 
+Immediately before starting an OpenCode worker, the runner writes a durable,
+non-secret recovery marker containing the project, branch, base Git head and
+run ID. A later Development launch can auto-checkpoint only a matching stale
+marker: it validates ancestry, stages the interrupted work, validates the
+staged diff, commits and non-force pushes the checkpoint. This keeps a power
+loss from permanently blocking the project without treating an arbitrary dirty
+worktree as Terra-owned.
+
 Terra Runner separates presentation, execution, and persistent project evidence.
 
 ## Components

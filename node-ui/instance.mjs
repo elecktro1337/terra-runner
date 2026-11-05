@@ -126,6 +126,7 @@ async function run(mode, limit = 1) {
       try {
         const event = JSON.parse(line.slice('__TERRA_UI__'.length));
         if (event.type === 'iteration-started') { eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; iterationStarted = Date.now(); iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`; stage = `${iterationLabel} | ${event.taskId || 'next roadmap task'} | ${event.pending} tasks pending`; detail = event.taskTitle ? `Task: ${event.taskTitle}` : ''; }
+        if (event.type === 'recovery-finished') { stage = 'Recovered interrupted Terra work'; detail = `Recovery commit ${event.recoveryCommit || 'created and pushed'}`; }
         if (event.type === 'iteration-heartbeat') { stage = `Iteration ${event.iteration} | working`; }
         if (event.type === 'iteration-finished') { completedIterations.push(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`); stage = 'Preparing next iteration'; detail = ''; }
         await safeUpdate({ state: 'running', activity: event.type === 'iteration-heartbeat' ? `Iteration ${event.iteration}: ${event.elapsedSeconds}s` : event.type, iteration: event.iteration ?? null });
