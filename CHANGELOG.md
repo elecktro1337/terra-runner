@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Continuous runs now retry a narrowly classified transient provider interruption (including `provider.invalid-output` / “response ended unexpectedly”) up to three times with bounded exponential backoff. A retry requires a clean, published Git state; One iteration and all other error classes continue to stop safely.
 - Refresh the live Development header every second and after every iteration with roadmap counts, run duration, last task, and last commit; fixed dispatcher instances calculating the duration from a persisted ISO timestamp.
 - Close the dispatcher terminal window when its project-instance Node process exits instead of leaving a `cmd` prompt behind.
 - Live Development now waits for an explicit worker task-selection marker instead of labelling every iteration with the first unchecked roadmap item.

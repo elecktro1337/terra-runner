@@ -51,6 +51,15 @@ Describe 'Terra Runner safe command dispatch' {
         $source | Should Match 'function Wait-ForOpenCodeRecovery'
         $source | Should Not Match 'Transient TLS/SSL failure retry limit'
     }
+    It 'uses bounded retries only for a recognised transient provider interruption in Continuous mode' {
+        $source = Get-Content -LiteralPath $runner -Raw
+        $source | Should Match 'function Get-TransientProviderFailure'
+        $source | Should Match 'provider\.invalid-output'
+        $source | Should Match 'function Wait-ForTransientProviderRetry'
+        $source | Should Match "Write-UiEvent 'provider-retry-waiting'"
+        $source | Should Match '\$Continuous -and \$null -ne \$transientProviderFailure'
+        $source | Should Match 'transient-provider-retries-exhausted'
+    }
     It 'composes each worker prompt with committed project instructions' {
         $worker = Get-Content -LiteralPath (Join-Path $here 'terra-worker.ps1') -Raw
         $worker | Should Match '\[Parameter\(Mandatory\)\]\[string\]\$ProjectInstructionsFile'

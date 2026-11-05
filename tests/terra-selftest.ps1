@@ -287,6 +287,30 @@ try {
     if ((Get-Content -Raw -LiteralPath (Join-Path $repo 'NTD-ROADMAP.md')) -notmatch '\[x\]') { throw 'Recovered TLS retry did not complete the pending task.' }
     Write-Host 'PASS: TLS failure waits for a connection check and retries the same iteration.' -ForegroundColor Green
 
+    # A narrowly identified provider response interruption must retry the same
+    # Continuous iteration only after the failed worker left a clean, pushed
+    # repository. The fake fails once with the production event shape, then
+    # completes normally without calling a model.
+    [IO.File]::WriteAllText((Join-Path $repo 'NTD-ROADMAP.md'),"- [ ] **NTD-0150** — Provider retry task`n")
+    & git -C $repo add NTD-ROADMAP.md | Out-Null
+    & git -C $repo commit -qm 'test: add provider retry task'
+    & git -C $bare fetch -q $repo codex/terra:refs/heads/codex/terra
+    $cfg.execution.maxTransientProviderRetries = 1
+    $cfg.execution.transientProviderRetryDelaySeconds = 1
+    $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
+    $beforeProviderRetry = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
+    $env:TERRA_MOCK_PROVIDER_INVALID_OUTPUT_ONCE = '1'
+    $env:TERRA_MOCK_STATE_DIR = Join-Path $tempRoot 'mock-provider-state'
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 1
+    Remove-Item Env:TERRA_MOCK_PROVIDER_INVALID_OUTPUT_ONCE -ErrorAction SilentlyContinue
+    Remove-Item Env:TERRA_MOCK_STATE_DIR -ErrorAction SilentlyContinue
+    $afterProviderRetry = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
+    if ($afterProviderRetry.Count -ne ($beforeProviderRetry + 2)) { throw 'Transient provider interruption was not retried as the same iteration.' }
+    $providerFailureSummary = @($afterProviderRetry | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json } | Where-Object { $_.transientProviderFailure -eq 'provider.invalid-output' } | Select-Object -Last 1)
+    if ($providerFailureSummary.Count -ne 1 -or $providerFailureSummary[0].transientNetworkFailure -or $providerFailureSummary[0].transientProviderMessage -ne 'provider response interruption') { throw 'Provider interruption was not classified independently of network recovery or was not redacted.' }
+    if ((Get-Content -Raw -LiteralPath (Join-Path $repo 'NTD-ROADMAP.md')) -notmatch '\[x\]') { throw 'Provider retry did not complete the pending task.' }
+    Write-Host 'PASS: transient provider interruption retries one continuous iteration safely.' -ForegroundColor Green
+
     # An explicit project blocker must be shown and stop before an expensive retry loop.
     [IO.File]::WriteAllText((Join-Path $repo 'NTD-ROADMAP.md'),"- [ ] **NTD-0201** — Blocked task`n")
     & git -C $repo add NTD-ROADMAP.md | Out-Null
@@ -311,6 +335,7 @@ finally {
     Remove-Item Env:TERRA_MOCK_NO_ACTIONABLE -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_IMPLEMENTATION_PROGRESS -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_TLS_ONCE -ErrorAction SilentlyContinue
+    Remove-Item Env:TERRA_MOCK_PROVIDER_INVALID_OUTPUT_ONCE -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_STATE_DIR -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_BLOCKED -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $tempRoot) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }

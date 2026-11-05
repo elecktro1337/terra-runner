@@ -440,6 +440,38 @@ function Test-TransientNetworkFailure([string]$EventsFile, [string]$ErrorFile) {
     } catch { }
     return $false
 }
+function Get-TransientProviderFailure([string]$EventsFile) {
+    # A provider can cut a streamed response short while returning HTTP 200.
+    # Keep the classifier narrow: auth, prompt, tool and arbitrary provider
+    # failures must remain final safety stops.
+    if (-not (Test-Path -LiteralPath $EventsFile -PathType Leaf)) { return $null }
+    $retryableTypes = @('provider.invalid-output','provider.timeout','provider.overloaded','provider.unavailable','provider.rate-limit')
+    $retryableMessage = '(?i)\b(response ended unexpectedly|stream(?:ing)? response ended unexpectedly|provider (?:is )?(?:overloaded|unavailable)|rate limit(?:ed| exceeded)?)\b'
+    try {
+        foreach ($line in [IO.File]::ReadLines($EventsFile,[Text.UTF8Encoding]::new($false))) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try { $event = ConvertFrom-Json -InputObject $line -AsHashtable -Depth 60 } catch { continue }
+            if ([string](Read-Member $event 'type') -ne 'error') { continue }
+            $error = Read-Member $event 'error'
+            $type = [string](Read-Member $error 'type')
+            $message = [string](Read-Member $error 'message')
+            if ($retryableTypes -contains $type -or $message -match $retryableMessage) {
+                return [pscustomobject]@{ Type=$type; Message=$message }
+            }
+        }
+    } catch { }
+    return $null
+}
+function Wait-ForTransientProviderRetry($Failure, [int]$Attempt, [int]$MaximumAttempts, [int]$BaseDelaySeconds, [string]$StopPath, [string]$AbortPath) {
+    if ((Test-Path -LiteralPath $abortPath) -or (Test-Path -LiteralPath $stopPath)) { return $false }
+    $exponent = [Math]::Min([Math]::Max(0,$Attempt - 1),4)
+    $delaySeconds = [int][Math]::Min(600, [double]$BaseDelaySeconds * [Math]::Pow(2,$exponent))
+    $label = if ([string]::IsNullOrWhiteSpace([string]$Failure.Type)) { 'provider response interruption' } else { [string]$Failure.Type }
+    Write-Warning "Transient $label. Retrying the same continuous iteration after $delaySeconds seconds ($Attempt/$MaximumAttempts)."
+    Write-UiEvent 'provider-retry-waiting' @{ attempt=$Attempt; maximumAttempts=$MaximumAttempts; delaySeconds=$delaySeconds; errorType=[string]$Failure.Type }
+    Start-Sleep -Seconds $delaySeconds
+    return -not ((Test-Path -LiteralPath $abortPath) -or (Test-Path -LiteralPath $stopPath))
+}
 function Wait-ForOpenCodeRecovery([string]$Executable, [string]$Directory, $Budget, [string]$LogRoot, [bool]$LimitsEnabled, [int]$DelaySeconds, [string]$StopPath, [string]$AbortPath) {
     $attempt = 0
     while ($true) {
@@ -1131,9 +1163,13 @@ if ($null -ne (Read-Member $cfg.logs 'reportRetainDays')) { Require-PositiveNumb
 if ([int]$cfg.execution.maxConsecutiveNoProgress -lt 1) { throw 'maxConsecutiveNoProgress must be >= 1.' }
 if ($null -ne (Read-Member $cfg.execution 'maxConsecutiveDocumentationOnly') -and [int]$cfg.execution.maxConsecutiveDocumentationOnly -lt 1) { throw 'maxConsecutiveDocumentationOnly must be >= 1.' }
 $transientRetryDelaySeconds = if ($null -ne (Read-Member $cfg.execution 'transientRetryDelaySeconds')) { [int]$cfg.execution.transientRetryDelaySeconds } else { 30 }
+$maxTransientProviderRetries = if ($null -ne (Read-Member $cfg.execution 'maxTransientProviderRetries')) { [int]$cfg.execution.maxTransientProviderRetries } else { 3 }
+$transientProviderRetryDelaySeconds = if ($null -ne (Read-Member $cfg.execution 'transientProviderRetryDelaySeconds')) { [int]$cfg.execution.transientProviderRetryDelaySeconds } else { 30 }
 $maxPushRetries = if ($null -ne (Read-Member $cfg.execution 'maxPushRetries')) { [int]$cfg.execution.maxPushRetries } else { 3 }
 $pushRetryDelaySeconds = if ($null -ne (Read-Member $cfg.execution 'pushRetryDelaySeconds')) { [int]$cfg.execution.pushRetryDelaySeconds } else { 30 }
 if ($transientRetryDelaySeconds -lt 1) { throw 'transientRetryDelaySeconds must be >= 1.' }
+if ($maxTransientProviderRetries -lt 0) { throw 'maxTransientProviderRetries must be >= 0.' }
+if ($transientProviderRetryDelaySeconds -lt 1) { throw 'transientProviderRetryDelaySeconds must be >= 1.' }
 if ($maxPushRetries -lt 1) { throw 'maxPushRetries must be >= 1.' }
 if ($pushRetryDelaySeconds -lt 1) { throw 'pushRetryDelaySeconds must be >= 1.' }
 $maxCycles = if ($UnlimitedIterations) { [int]::MaxValue } elseif ($MaxIterations -gt 0) { $MaxIterations } else { [int]$cfg.execution.maxIterationsPerRun }
@@ -1255,6 +1291,7 @@ try {
     # Continuous run stop after its first iteration.
     $noProgress = 0
     $docsOnly = 0
+    $transientProviderRetryCount = 0
     $activeChild = $null
     for ($i = 1; $i -le $maxCycles; $i++) {
         if (Test-Path -LiteralPath $stopPath) { Write-Host 'STOP detected; exiting after previous iteration.'; break }
@@ -1371,6 +1408,7 @@ try {
             if (-not $termination) { $termination = "invalid-event-output: $($_.Exception.Message)" }
         }
         $transientNetworkFailure = Test-TransientNetworkFailure $eventsPath $stderrPath
+        $transientProviderFailure = if ($transientNetworkFailure) { $null } else { Get-TransientProviderFailure $eventsPath }
         if ($transientNetworkFailure) { $termination = 'transient-tls-or-ssl-failure' }
         if ($eventErrors -gt 0 -and -not $termination) { $termination = "opencode-reported-$eventErrors-errors" }
         $maxToolErrors = if ($null -ne (Read-Member $cfg.execution 'maxToolErrorsPerIteration')) { [int]$cfg.execution.maxToolErrorsPerIteration } else { 15 }
@@ -1443,6 +1481,14 @@ try {
         elseif (-not $termination -and $docsOnly -ge $docsLimit) {
             $termination = "documentation-only-progress: $docsOnly consecutive iteration(s) changed no code or tests"
         }
+        # This is evaluated only after Git verification. A response interruption
+        # is retryable solely when the worker left a clean, published checkpoint.
+        $providerRetryIsSafe = $Continuous -and $null -ne $transientProviderFailure -and $exitCode -ne 0 -and
+            $termination -eq "opencode-reported-$eventErrors-errors" -and [string]::IsNullOrWhiteSpace($usageError) -and
+            $gitStatus.Trim() -eq '' -and $pushVerified
+        if ($providerRetryIsSafe -and $transientProviderRetryCount -ge $maxTransientProviderRetries) {
+            $termination = "transient-provider-retries-exhausted-${maxTransientProviderRetries}: $([string]$transientProviderFailure.Type)"
+        }
         $summary = [ordered]@{
             project = $Project; id = $runId; started = $begin.ToString('o'); ended = $ended.ToString('o')
             elapsedSeconds = [Math]::Round(($ended-$begin).TotalSeconds,1)
@@ -1494,6 +1540,9 @@ try {
             consecutiveDocumentationOnly = $docsOnly
             consecutiveNoProgress = $noProgress
             transientNetworkFailure = $transientNetworkFailure
+            transientProviderFailure = $(if ($null -ne $transientProviderFailure) { [string]$transientProviderFailure.Type } else { '' })
+            transientProviderMessage = $(if ($null -ne $transientProviderFailure) { 'provider response interruption' } else { '' })
+            transientProviderRetryAttempt = $transientProviderRetryCount
             usageError = $usageError
             eventsFile = [IO.Path]::GetFileName($eventsPath)
             readableEventsFile = [IO.Path]::GetFileName($readablePath)
@@ -1515,6 +1564,16 @@ try {
             $i--
             continue
         }
+        if ($providerRetryIsSafe -and $transientProviderRetryCount -lt $maxTransientProviderRetries) {
+            $transientProviderRetryCount++
+            if (-not (Wait-ForTransientProviderRetry $transientProviderFailure $transientProviderRetryCount $maxTransientProviderRetries $transientProviderRetryDelaySeconds $stopPath $abortPath)) {
+                Write-Host 'Provider retry wait interrupted by Stop or Abort.'
+                break
+            }
+            $i--
+            continue
+        }
+        if ($null -eq $transientProviderFailure) { $transientProviderRetryCount = 0 }
         if ($termination -or $exitCode -ne 0 -or $usageError) {
             Write-Warning "Stopped on error or safety condition. Reason=$termination exit=$exitCode usage=$usageError; see $summaryPath"
             break

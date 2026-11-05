@@ -45,6 +45,8 @@
     "maxConsecutiveNoProgress": 2,
     "maxConsecutiveDocumentationOnly": 2,
     "maxToolErrorsPerIteration": 15,
+    "maxTransientProviderRetries": 3,
+    "transientProviderRetryDelaySeconds": 1,
     "pauseBetweenIterationsSeconds": 0,
     "maxRawLogMiB": 1
   },

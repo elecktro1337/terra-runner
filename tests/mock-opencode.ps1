@@ -26,6 +26,16 @@ if ($cmd -eq 'stats') {
 }
 if ($cmd -eq 'run') {
     if ($Rest -contains '--help') { 'Run options: --agent --format --auto --model'; exit 0 }
+    if ($env:TERRA_MOCK_PROVIDER_INVALID_OUTPUT_ONCE -eq '1') {
+        if ([string]::IsNullOrWhiteSpace($env:TERRA_MOCK_STATE_DIR)) { throw 'TERRA_MOCK_STATE_DIR is required for provider interruption simulation.' }
+        [void][IO.Directory]::CreateDirectory($env:TERRA_MOCK_STATE_DIR)
+        $marker = Join-Path $env:TERRA_MOCK_STATE_DIR 'provider-invalid-output-once.marker'
+        if (-not (Test-Path -LiteralPath $marker)) {
+            [IO.File]::WriteAllText($marker,'failed once')
+            '{"type":"error","error":{"type":"provider.invalid-output","message":"The provider response ended unexpectedly.","status":200}}'
+            exit 1
+        }
+    }
     if ($env:TERRA_MOCK_TLS_ONCE -eq '1') {
         if ([string]::IsNullOrWhiteSpace($env:TERRA_MOCK_STATE_DIR)) { throw 'TERRA_MOCK_STATE_DIR is required for TLS simulation.' }
         [void][IO.Directory]::CreateDirectory($env:TERRA_MOCK_STATE_DIR)
