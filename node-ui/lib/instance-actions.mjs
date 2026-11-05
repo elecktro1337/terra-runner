@@ -18,3 +18,19 @@ export function instanceActionPlan(instance = {}, { canFinalize = false } = {}) 
   actions.push({ name: 'Refresh', value: 'refresh' });
   return actions;
 }
+
+export function projectWindowActionPlan(instance = {}) {
+  const actions = [
+    { name: 'Run one development iteration', value: 'once' },
+    { name: 'Run continuously', value: 'continuous' },
+    { name: 'Dry run', value: 'preflight' }
+  ];
+  if (!TERMINAL_STATES.has(String(instance.state || ''))) {
+    actions.push(
+      { name: 'Request graceful stop', value: 'stop' },
+      { name: 'Emergency abort', value: 'abort', destructive: true }
+    );
+  }
+  actions.push({ name: 'Close project window', value: 'close' });
+  return actions;
+}

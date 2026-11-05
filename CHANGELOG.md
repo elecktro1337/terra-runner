@@ -12,6 +12,7 @@
 - Fixed Development opening existing project instructions on every launch. **Projects** now has explicit actions to open instructions, roadmap, and progress files.
 - Iteration history now pairs a completed or worker-selected task ID with that task's own roadmap title, instead of reusing the first unchecked item's title when an external blocker caused a later task to be selected.
 - The selected task now appears in the compact live iteration status itself; the UI no longer reserves a separate `Task:` row during normal execution.
+- A completed project-instance window now hides Stop and Abort controls and preserves its terminal result when the window is closed.
 
 ## 2.4.0 - 2026-11-05
 

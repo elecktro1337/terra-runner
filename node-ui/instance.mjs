@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
 import figlet from 'figlet';
-import { clearInstanceControls, instanceRunnerFailure, readCoordinatorHeartbeat, readInstance, requestInstanceControl, updateInstance } from './lib/runtime.mjs';
+import { clearInstanceControls, instanceRunnerFailure, isTerminalInstance, readCoordinatorHeartbeat, readInstance, requestInstanceControl, updateInstance } from './lib/runtime.mjs';
 import { activeProxyRoute } from './lib/proxy.mjs';
 import { LiveFooter, LiveHeaderBlock, LiveStatusBlock } from './lib/live-footer.mjs';
 import { developmentHeaderRows, elapsedSecondsSince } from './lib/run-display.mjs';
@@ -18,6 +18,7 @@ import { completedIterationText } from './lib/iteration-history.mjs';
 import { instanceOutcome, instanceReportRows } from './lib/instance-outcome.mjs';
 import { iterationSummariesSince, latestIterationSummary, projectDataRoot } from './lib/reports.mjs';
 import { selectedRoadmapTaskFromEvent } from './lib/task-selection.mjs';
+import { projectWindowActionPlan } from './lib/instance-actions.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -175,11 +176,8 @@ async function main() {
   }
   while (true) {
     const { settings, instance, project } = await load(); await show(settings, instance, project);
-    const action = await pick('Project instance', [
-      { name: 'Run one development iteration', value: 'once' }, { name: 'Run continuously', value: 'continuous' }, { name: 'Dry run', value: 'preflight' },
-      { name: 'Request graceful stop', value: 'stop' }, { name: chalk.red('Emergency abort'), value: 'abort' }, { name: 'Close project window', value: 'close' }
-    ]);
-    if (!action || action === 'close') { if (['running', 'starting', 'stopping', 'aborting'].includes(instance.state)) { console.log(chalk.yellow('Request Stop or Abort before closing this active project window.')); await input({ message: 'Press Enter to continue' }); continue; } await safeUpdate({ state: 'stopped', activity: 'Project window closed' }); return; }
+    const action = await pick('Project instance', projectWindowActionPlan(instance).map(item => ({ ...item, name: item.destructive ? chalk.red(item.name) : item.name })));
+    if (!action || action === 'close') { if (['running', 'starting', 'stopping', 'aborting'].includes(instance.state)) { console.log(chalk.yellow('Request Stop or Abort before closing this active project window.')); await input({ message: 'Press Enter to continue' }); continue; } if (!isTerminalInstance(instance)) await safeUpdate({ state: 'stopped', activity: 'Project window closed' }); return; }
     if (action === 'once') await run('once');
     if (action === 'continuous') { const raw = String(await input({ message: 'Iterations (0 = until a safety stop)', default: '0' })).trim(); const limit = /^\d+$/.test(raw) ? Number(raw) : 0; await run('continuous', limit); }
     if (action === 'preflight') await preflight(); if (action === 'stop') await request('STOP'); if (action === 'abort') await request('ABORT');
