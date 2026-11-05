@@ -9,6 +9,7 @@ The Node UI displays a short reason and next step instead of a PowerShell stack 
 - **Local and remote branch heads differ**: review the branch and complete the normal non-force push or pull.
 - **OpenCode was not found**: install OpenCode 2.x or correct its command path.
 - **Snapshot missing or stale**: start the run again and enter a current provider observation when prompted.
+- **Project authentication storage could not be prepared**: reconnect the selected profile through normal OpenCode authentication, then launch again. Terra will recreate the private project store automatically; do not copy tokens or database files by hand.
 
 Use **Development → Project preflight** to check the project path, branch, roadmap, progress file, OpenCode command, provider snapshot, and working-tree cleanliness without launching an agent.
 

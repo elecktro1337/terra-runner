@@ -43,9 +43,9 @@ Describe 'Terra Runner safe command dispatch' {
         & $runner -Project safe-project -Config $script:config
         (Test-Path -LiteralPath $script:calls) | Should Be $false
     }
-    It 'requires an explicit profile for schema v9 development commands' {
+    It 'requires an explicit profile for schema v10 development commands' {
         $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable
-        $settings.schemaVersion = 9; $settings.Remove('model'); $settings.Remove('budget')
+        $settings.schemaVersion = 10; $settings.Remove('model'); $settings.Remove('budget')
         $settings['openCode'] = [ordered]@{ accounts=@(); profiles=@() }
         $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
         $threw = $false; $message = ''
@@ -53,9 +53,9 @@ Describe 'Terra Runner safe command dispatch' {
         $threw | Should Be $true; $message | Should Match 'requires -ProfileId'
         (Test-Path -LiteralPath $script:calls) | Should Be $false
     }
-    It 'uses an explicit schema v9 profile for Status without starting OpenCode' {
+    It 'uses an explicit schema v10 profile for Status without starting OpenCode' {
         $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable
-        $settings.schemaVersion = 9; $settings.Remove('model'); $settings.Remove('budget')
+        $settings.schemaVersion = 10; $settings.Remove('model'); $settings.Remove('budget')
         $settings['openCode'] = [ordered]@{ accounts=@(); profiles=@([ordered]@{
             id='local-profile'; model='local/mock'; provider='local'; credentialId=''; credentialLabel=''
             policy='local'; authStoreId=''; reasoningVariant=''; showThinking=$false
@@ -63,6 +63,37 @@ Describe 'Terra Runner safe command dispatch' {
         }) }
         $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
         & $runner -Project safe-project -Config $script:config -Status -ProfileId local-profile
+        (Test-Path -LiteralPath $script:calls) | Should Be $false
+    }
+    It 'validates a main-window project auth store before any OpenCode command' {
+        $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable
+        $settings.schemaVersion = 10; $settings.Remove('model'); $settings.Remove('budget')
+        $settings['openCode'] = [ordered]@{ accounts=@(); profiles=@([ordered]@{
+            id='local-profile'; model='local/mock'; provider='local'; credentialId=''; credentialLabel=''
+            policy='local'; authStoreId=''; reasoningVariant=''; showThinking=$false
+            limitPolicy=[ordered]@{ mode='critical' }; usageSource=[ordered]@{ kind='none' }; runControls=[ordered]@{ maxIterations=0 }
+        }) }
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
+        $threw = $false; $message = ''
+        try { & $runner -Project safe-project -Config $script:config -Status -ProfileId local-profile -AuthStoreId project-auth-test } catch { $threw = $true; $message = $_.Exception.Message }
+        $threw | Should Be $true; $message | Should Match 'not initialized'
+        (Test-Path -LiteralPath $script:calls) | Should Be $false
+        $db = Join-Path $script:root 'opencode-stores/project-auth-test/opencode.db'; [void][IO.Directory]::CreateDirectory((Split-Path -Parent $db)); [IO.File]::WriteAllText($db,'mock')
+        & $runner -Project safe-project -Config $script:config -Status -ProfileId local-profile -AuthStoreId project-auth-test
+        (Test-Path -LiteralPath $script:calls) | Should Be $false
+    }
+    It 'rejects unsafe project auth store IDs before OpenCode starts' {
+        $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable
+        $settings.schemaVersion = 10; $settings.Remove('model'); $settings.Remove('budget')
+        $settings['openCode'] = [ordered]@{ accounts=@(); profiles=@([ordered]@{
+            id='local-profile'; model='local/mock'; provider='local'; credentialId=''; credentialLabel=''
+            policy='local'; authStoreId=''; reasoningVariant=''; showThinking=$false
+            limitPolicy=[ordered]@{ mode='critical' }; usageSource=[ordered]@{ kind='none' }; runControls=[ordered]@{ maxIterations=0 }
+        }) }
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
+        $threw = $false; $message = ''
+        try { & $runner -Project safe-project -Config $script:config -Status -ProfileId local-profile -AuthStoreId '../escape' } catch { $threw = $true; $message = $_.Exception.Message }
+        $threw | Should Be $true; $message | Should Match 'Unsafe OpenCode auth store ID'
         (Test-Path -LiteralPath $script:calls) | Should Be $false
     }
     It 'creates and clears only the selected project control files' {

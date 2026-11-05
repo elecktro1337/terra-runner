@@ -18,6 +18,7 @@ import { LiveFooter, LiveStatusBlock } from './lib/live-footer.mjs';
 import { developmentHeaderRows } from './lib/run-display.mjs';
 import { readRoadmapProgress } from './lib/roadmap.mjs';
 import { instanceTerminalLauncher } from './lib/instance-launcher.mjs';
+import { ensureProjectAuthStore, isProjectManagedStore, removeProjectAuthStore } from './lib/project-auth-stores.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -246,15 +247,16 @@ async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
   }
 }
 async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [] }; settings.openCode.accounts ||= []; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the setup wizard once or pass --config <file>. ${error.message}`); } }
-async function save(settings) { settings.schemaVersion = 9; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
+async function save(settings) { settings.schemaVersion = 10; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
 function parseModels(text) { return [...new Set(text.split(/\r?\n/).map(v => v.trim()).filter(v => /^[a-z0-9_.-]+\/.+/i.test(v)))]; }
 function storeEnvironment(storeId) { return storeId && storeId !== 'legacy-shared' ? { OPENCODE_DB: authStorePath(configPath, storeId) } : null; }
 function authStore(settings, id) { return (settings.openCode?.stores || []).find(store => store.id === id) || null; }
+function parseAccounts(text) { const providers = JSON.parse(text); const accounts = []; for (const provider of providers) for (const credential of provider.connections || []) accounts.push({ id: `${provider.id}:${credential.id}`, provider: provider.id, credentialId: credential.id, label: credential.label || provider.name || provider.id, authMethod: credential.method || '', usageKind: credential.method === 'oauth' ? 'oauth' : 'balance' }); return accounts; }
+async function readOpenCodeAccounts(executable, env = null) { return parseAccounts(await execute(executable, ['auth', 'list', '--format', 'json'], root, false, env)); }
 async function refreshOpenCode(settings, storeId = 'legacy-shared') {
   const spinner = ora('Reading OpenCode accounts and models…').start();
   try {
-    const executable = settings.openCodeCommand || 'opencode'; const env = storeEnvironment(storeId); const raw = await execute(executable, ['auth', 'list', '--format', 'json'], root, false, env); const providers = JSON.parse(raw); const accounts = [];
-    for (const provider of providers) for (const credential of provider.connections || []) accounts.push({ id: `${provider.id}:${credential.id}`, provider: provider.id, credentialId: credential.id, label: credential.label || provider.name || provider.id, authMethod: credential.method || '', usageKind: credential.method === 'oauth' ? 'oauth' : 'balance' });
+    const executable = settings.openCodeCommand || 'opencode'; const env = storeEnvironment(storeId); const accounts = await readOpenCodeAccounts(executable, env);
     const models = parseModels(await execute(executable, ['models'], root, false, env)); if (storeId === 'legacy-shared') settings.openCode.accounts = [...accounts, ...settings.openCode.accounts.filter(account => account.authMethod === 'local')];
     spinner.succeed(`OpenCode refreshed: ${accounts.length} account(s), ${models.length} model(s).`); return { accounts, models };
   } catch (error) { spinner.fail('OpenCode refresh failed.'); throw error; }
@@ -434,7 +436,7 @@ async function configureUsageSource(settings, profile) {
   await save(settings); console.log(chalk.green('Usage data source saved.')); return pause();
 }
 async function configureReasoning(settings, profile) { const variant = await pick('Reasoning level', [{ name: 'Provider default', value: '' }, ...['minimal', 'low', 'medium', 'high', 'xhigh'].map(value => ({ name: value, value }))]); if (variant === null) return; profile.reasoningVariant = variant; profile.showThinking = await yesNo('Show OpenCode thinking blocks during development?'); await save(settings); }
-async function pickAuthStore(settings, current = 'legacy-shared') { return pick('OpenCode authentication storage', (settings.openCode.stores || []).map(store => ({ name: `${store.id === current ? '● ' : ''}${store.name}${store.kind === 'legacy-shared' ? chalk.yellow('  legacy / single-project') : ''}`, value: store.id }))); }
+async function pickAuthStore(settings, current = 'legacy-shared') { return pick('OpenCode authentication storage', (settings.openCode.stores || []).filter(store => !isProjectManagedStore(store)).map(store => ({ name: `${store.id === current ? '● ' : ''}${store.name}${store.kind === 'legacy-shared' ? chalk.yellow('  legacy / shared source') : ''}`, value: store.id }))); }
 async function configureType(settings, profile) {
   const policy = await pick('Profile type', [{ name: 'API key — local spending limits', value: 'api' }, { name: 'OAuth — provider-managed usage', value: 'oauth-managed' }, { name: 'Local model — no limits', value: 'local' }]); if (!policy) return;
   if (policy === 'local') { profile.policy = 'local'; profile.credentialId = ''; profile.credentialLabel = 'No credential (local inference)'; }
@@ -478,22 +480,28 @@ async function profilesMenu(settings) {
 async function authStoresMenu(settings) {
   while (true) {
     header(settings); console.log(chalk.bold('OPENCODE AUTHENTICATION STORAGES')); console.log(chalk.gray('Credentials remain in OpenCode databases, never in Terra configuration.'));
-    const stores = settings.openCode.stores || [];
+    const allStores = settings.openCode.stores || [];
+    const managedCount = allStores.filter(isProjectManagedStore).length;
+    if (managedCount) {
+      console.log(chalk.gray(`  ${managedCount} project-managed storage(s) are prepared automatically at launch.`));
+      for (const store of allStores.filter(isProjectManagedStore)) console.log(chalk.gray(`  • ${store.projectId}  ${store.id}  (automatic, read-only)`));
+    }
+    const stores = allStores.filter(store => !isProjectManagedStore(store));
     const choice = await pick('Open or create storage', [...stores.map(store => ({ name: `${store.name}  ${chalk.gray(`[${store.id}]${store.kind === 'legacy-shared' ? ' legacy / shared' : ''}`)}`, value: store.id })), { name: chalk.cyan('+ Create isolated storage'), value: '__create' }]);
     if (!choice) return;
     if (choice === '__create') {
       const id = String(await input({ message: 'Storage ID (letters, digits, dot, underscore, hyphen)' })).trim(); const name = String(await input({ message: 'Display name', default: id })).trim();
-      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(id) || stores.some(store => store.id === id)) { console.log(chalk.red('Storage ID is invalid or already exists.')); await pause(); continue; }
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(id) || allStores.some(store => store.id === id)) { console.log(chalk.red('Storage ID is invalid or already exists.')); await pause(); continue; }
       settings.openCode.stores.push({ id, name: name || id, kind: 'isolated' }); await fs.mkdir(path.dirname(authStorePath(configPath, id)), { recursive: true }); await save(settings); console.log(chalk.green(`Storage '${name || id}' created. Use Authenticate before assigning it to a profile.`)); await pause(); continue;
     }
-    const store = authStore(settings, choice); if (!store) continue;
+    const store = authStore(settings, choice); if (!store || isProjectManagedStore(store)) continue;
     const action = await pick(`Storage: ${store.name}`, [
       { name: 'Authenticate / add OpenCode account', value: 'login' }, { name: 'Refresh accounts and models', value: 'refresh' },
       ...(store.kind === 'legacy-shared' ? [] : [{ name: chalk.yellow('Unlink from Terra configuration (credentials stay on disk)'), value: 'unlink' }])
     ]);
     if (action === 'login') { try { if (store.kind !== 'legacy-shared') await fs.mkdir(path.dirname(authStorePath(configPath, store.id)), { recursive: true }); await execute(settings.openCodeCommand || 'opencode', ['auth', 'login'], root, true, storeEnvironment(store.id)); } catch (error) { console.log(chalk.red(error.message)); } await pause(); }
     if (action === 'refresh') { try { await refreshOpenCode(settings, store.id); console.log(chalk.green('Storage refreshed.')); } catch (error) { console.log(chalk.red(error.message)); } await pause(); }
-    if (action === 'unlink' && await yesNo(`Unlink '${store.name}'? Existing profiles using it must be reassigned first.`)) { if ((settings.openCode.profiles || []).some(profile => profile.authStoreId === store.id)) { console.log(chalk.yellow('Reassign or remove the profiles using this storage first.')); await pause(); } else { settings.openCode.stores = stores.filter(item => item.id !== store.id); await save(settings); } }
+    if (action === 'unlink' && await yesNo(`Unlink '${store.name}'? Existing profiles using it must be reassigned first.`)) { if ((settings.openCode.profiles || []).some(profile => profile.authStoreId === store.id)) { console.log(chalk.yellow('Reassign or remove the profiles using it first.')); await pause(); } else { settings.openCode.stores = allStores.filter(item => item.id !== store.id); await save(settings); } }
   }
 }
 async function chooseRunIterationLimit() {
@@ -529,12 +537,26 @@ async function chooseDevelopmentLaunch(settings, command) {
   }
 }
 async function chooseDevelopmentTarget() { return pick('Run mode', [{ name: 'Main window — limits and live control', value: 'main' }, { name: 'Dispatcher instance — separate terminal, no Terra limits', value: 'instance' }]); }
+async function prepareProjectProfile(settings, project, profile) {
+  if (profile.policy === 'local') return { ...profile, authStoreId: '' };
+  const spinner = ora(`Preparing private OpenCode storage for '${project.id}'…`).start();
+  try {
+    const executable = await resolveCommand(settings.openCodeCommand || 'opencode');
+    const { storeId } = await ensureProjectAuthStore({ settings, project, profile, configPath, executable, cwd: root, listAccounts: env => readOpenCodeAccounts(executable, env) });
+    await save(settings); spinner.succeed(`Project authentication storage is ready for '${project.id}'.`);
+    return { ...profile, authStoreId: storeId };
+  } catch {
+    spinner.fail(`Project authentication storage could not be prepared for '${project.id}'.`);
+    throw new Error('Terra could not prepare the project authentication store. Reconnect the selected OpenCode profile and try again.');
+  }
+}
 async function startDispatcherInstance(settings, project, profile, launch) {
   const running = await listInstances(configPath);
   if (running.some(instance => instance.projectId === project.id && !isTerminalInstance(instance))) { console.log(chalk.yellow(`Project '${project.id}' already has an active workspace.`)); return pause(); }
-  if (profile.policy !== 'local' && profile.authStoreId === 'legacy-shared' && running.some(instance => !isTerminalInstance(instance) && instance.profile?.policy !== 'local')) { console.log(chalk.yellow('The legacy shared OpenCode storage is global. Create an isolated authentication storage before running multiple cloud projects.')); return pause(); }
-  if (profile.policy !== 'local' && profile.authStoreId !== 'legacy-shared') { try { await fs.access(authStorePath(configPath, profile.authStoreId)); } catch { console.log(chalk.yellow(`Authentication storage '${profile.authStoreId}' is not initialized. Open System → OpenCode authentication storages and sign in.`)); return pause(); } }
-  const route = activeProxyRoute(settings); const instance = await createInstance(configPath, project, profile, route, coordinatorId, launch);
+  let effectiveProfile;
+  try { effectiveProfile = await prepareProjectProfile(settings, project, profile); }
+  catch (error) { console.log(chalk.red(error.message)); return pause(); }
+  const route = activeProxyRoute(settings); const instance = await createInstance(configPath, project, effectiveProfile, route, coordinatorId, launch);
   await updateInstance(configPath, instance.id, { state: 'launching', activity: 'Opening project terminal' });
   const launcherSpec = instanceTerminalLauncher({ comSpec: process.env.ComSpec || 'cmd.exe', title: `Terra ${project.id}`, nodePath: process.execPath, instancePath: path.join(root, 'node-ui', 'instance.mjs'), configPath, instanceId: instance.id });
   const launcher = spawn(launcherSpec.command, launcherSpec.args, { cwd: root, detached: true, stdio: 'ignore', windowsHide: false, env: { ...process.env, ...launcherSpec.env } });
@@ -550,10 +572,14 @@ async function startDispatcherInstance(settings, project, profile, launch) {
 async function runInMainWindow(settings, command, project, profile, maxIterations) {
   const snapshotRelevant = profile.policy !== 'local' && profile.limitPolicy?.mode !== 'unlimited';
   if (snapshotRelevant) { let freshness = snapshotFreshness(profile); if (!freshness.ok) { if (!(await refreshSnapshotBeforeRun(settings, profile, freshness))) return; freshness = snapshotFreshness(profile); if (!freshness.ok) { console.log(chalk.red(`Snapshot is still not ready: ${freshness.detail}`)); return pause(); } } }
-  const args = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-ProfileId', profile.id, '-Config', configPath];
-  if (command === 'dry-run') args.push('-DryRun'); else { args.push('-UiEvents', '-ClearControlFlags', command === 'continuous' ? '-Continuous' : '-Once'); if (command === 'continuous') args.push(maxIterations > 0 ? '-MaxIterations' : '-UnlimitedIterations', ...(maxIterations > 0 ? [String(maxIterations)] : [])); }
   const label = command === 'dry-run' ? 'Run a dry run' : command === 'continuous' ? `Run continuously${maxIterations ? ` for up to ${maxIterations} iteration(s)` : ''}` : 'Run one iteration';
   if (!(await yesNo(`${label} for '${project.id}' in the main window?`))) return;
+  let effectiveProfile;
+  try { effectiveProfile = await prepareProjectProfile(settings, project, profile); }
+  catch (error) { console.log(chalk.red(error.message)); return pause(); }
+  const args = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-ProfileId', profile.id, '-Config', configPath];
+  if (effectiveProfile.authStoreId) args.push('-AuthStoreId', effectiveProfile.authStoreId);
+  if (command === 'dry-run') args.push('-DryRun'); else { args.push('-UiEvents', '-ClearControlFlags', command === 'continuous' ? '-Continuous' : '-Once'); if (command === 'continuous') args.push(maxIterations > 0 ? '-MaxIterations' : '-UnlimitedIterations', ...(maxIterations > 0 ? [String(maxIterations)] : [])); }
   const roadmap = await readRoadmapProgress(project);
   const statusRow = renderDevelopmentHeader(project, profile, label, roadmap);
   await runWithTui(args, settings, project, command, statusRow); return pause();
@@ -640,8 +666,10 @@ async function projectsMenu(settings) {
     if (detail === 'edit') await editProject(settings, project);
     if (detail === 'remove') {
       if (projects.length === 1) { console.log(chalk.yellow('Keep at least one project configured.')); await pause(); continue; }
-      if (await yesNo(`Remove only the '${project.id}' project configuration? Its files, Git repository, logs, and reports will remain untouched.`)) {
-        settings.projects = projects.filter(item => item.id !== project.id); normalizeProjects(settings); await save(settings); console.log(chalk.green('Project configuration removed.')); await pause();
+      const active = (await listInstances(configPath)).some(instance => instance.projectId === project.id && !isTerminalInstance(instance));
+      if (active) { console.log(chalk.yellow(`Project '${project.id}' has an active instance. Stop it before removing the project.`)); await pause(); continue; }
+      if (await yesNo(`Remove '${project.id}' and its managed OpenCode credential DB? Its repository, logs, and reports will remain untouched.`)) {
+        await removeProjectAuthStore(settings, project, configPath); settings.projects = projects.filter(item => item.id !== project.id); normalizeProjects(settings); await save(settings); console.log(chalk.green('Project configuration and managed authentication store removed.')); await pause();
       }
     }
   }

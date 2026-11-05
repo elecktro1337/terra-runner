@@ -5,7 +5,7 @@ Terra Runner is a local Windows orchestrator for controlled OpenCode development
 - A project has one active workspace, preventing concurrent edits to the same Git worktree.
 - Different projects can run in parallel with independent logs, controls and OpenCode environments.
 - Development always chooses a command, project, and run mode explicitly. Main-window runs enforce the profile limits; separate dispatcher instances deliberately do not read or enforce Terra budget/quota snapshots.
-- Isolated OpenCode credential stores use `OPENCODE_DB`; the legacy shared store remains available only for safe single-cloud-workspace migration.
+- Every cloud project receives an automatic private OpenCode credential store through `OPENCODE_DB`; no second login or model setup is required after selecting an existing profile.
 - Closing the dispatcher requests a graceful Stop for every project workspace. `Development → Active instances` exposes an explicit emergency Abort.
 
 ## Start
@@ -74,7 +74,7 @@ pwsh -File .\terra-runner.ps1 -Project my-project -ProfileId my-profile -Status
 pwsh -File .\terra-runner.ps1 -Project my-project -Report
 ```
 
-In schema v9, model execution and `-Status` require `-ProfileId`; `-Report`, proxy commands and controls do not. `-Status`, `-Report`, preflight, configuration actions, cancelled menus, and an invocation without an execution command never launch `opencode run`.
+In schema v10, model execution and `-Status` require `-ProfileId`; `-Report`, proxy commands and controls do not. `-Status`, `-Report`, preflight, configuration actions, cancelled menus, and an invocation without an execution command never launch `opencode run`.
 
 ## Tests
 
@@ -87,12 +87,15 @@ The test suites use local mocks and temporary repositories. They make no paid Op
 
 ## Upgrade to 2.3
 
-On first dispatcher start, configuration is migrated to schema v9. Existing
+On first dispatcher start, configuration is migrated to schema v10. Existing
 legacy model, account, reasoning and budget values are preserved in profiles;
 global profile/account selections and project default profiles are removed.
-Create an isolated authentication storage,
-sign in through the dispatcher, then assign it to each cloud profile before
-running multiple cloud projects in parallel.
+The first Development launch of a cloud profile creates that project's private
+store and streams only that provider's current OpenCode credential into it.
+It does not copy credentials during migration and does not require another
+login or model selection. Terra never writes the export to configuration,
+arguments, logs, or a temporary secret file. Reconnect the source profile in
+Models & accounts only if that normal OpenCode credential has been removed.
 
 Start Terra Runner once through the launcher. Existing configuration is migrated in place and legacy profile values are preserved. Review each cloud profile, set a fresh provider snapshot, and optionally enable the local OpenCode cost estimate for USD API snapshots. No project repository or OpenCode credential is modified by migration.
 

@@ -7,10 +7,11 @@ import { authStorePath, canFinalizeStalledInstance, clearInstanceControls, clear
 
 async function fixture() { return fs.mkdtemp(path.join(os.tmpdir(), 'terra-runtime-')); }
 
-test('v9 runtime migration assigns legacy auth storage and removes project profile defaults', () => {
-  const settings = { openCode: { profiles: [{ id: 'p1', policy: 'api', usageSource: { reserve: 2 }, parallelReservation: 2 }] }, projects: [{ id: 'one', defaultProfileId: 'p1' }] };
+test('v9 to v10 runtime migration assigns legacy auth storage without eagerly creating project stores', () => {
+  const settings = { schemaVersion: 9, openCode: { profiles: [{ id: 'p1', policy: 'api', usageSource: { reserve: 2 }, parallelReservation: 2 }] }, projects: [{ id: 'one', defaultProfileId: 'p1' }] };
   normalizeRuntime(settings);
   assert.equal(settings.openCode.stores[0].id, 'legacy-shared');
+  assert.equal(settings.openCode.stores.filter(store => store.kind === 'project-managed').length, 0);
   assert.equal(settings.openCode.profiles[0].authStoreId, 'legacy-shared');
   assert.equal(settings.openCode.profiles[0].parallelReservation, undefined);
   assert.equal(settings.projects[0].defaultProfileId, undefined);

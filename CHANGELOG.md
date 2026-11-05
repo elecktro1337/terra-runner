@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.1 - 2026-11-05
+
+- Raised configuration to schema v10 and added lazy project-managed OpenCode stores for cloud Development launches.
+- Automatically synchronizes only the selected provider from a profile source into its project store with a streaming OpenCode export/import pipeline; credentials never enter Terra configuration, logs, command arguments, or temporary secret files.
+- Uses the effective project store for both main-window runs and frozen dispatcher instances, allowing concurrent projects to use one source account without the legacy shared-store block.
+- Made managed stores diagnostic read-only in System and remove a project's managed DB and bootstrap lock when its inactive configuration is deleted.
+- Added Node and PowerShell regression coverage for v10 migration, streaming bootstrap isolation, store cleanup, and runner store validation.
+
 ## 2.3.0 - 2026-11-05
 
 - Removed global active profile/account state and project default profiles; every Development launch now explicitly selects a profile.

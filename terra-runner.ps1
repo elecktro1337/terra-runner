@@ -38,6 +38,7 @@ param(
     [switch]$UiEvents,
     [string]$InstanceId = '',
     [string]$ProfileId = '',
+    [string]$AuthStoreId = '',
     [switch]$UnlimitedIterations,
     [switch]$SkipProviderSnapshotGuard,
     [ValidateRange(0, 1000)][int]$MaxIterations = 0
@@ -804,7 +805,7 @@ function Rotate-Reports([string]$DataDirectory, $Settings) {
 }
 
 $cfg = Get-Content -LiteralPath $Config -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 40
-if ([int]$cfg.schemaVersion -notin @(1,2,3,4,5,6,7,8,9)) { throw 'Unsupported terra-config.json schemaVersion.' }
+if ([int]$cfg.schemaVersion -notin @(1,2,3,4,5,6,7,8,9,10)) { throw 'Unsupported terra-config.json schemaVersion.' }
 $projectConfig = @($cfg.projects | Where-Object { $_.id -eq $Project })
 if ($projectConfig.Count -ne 1) { throw "Expected exactly one project with id '$Project'." }
 $projectConfig = $projectConfig[0]
@@ -823,7 +824,10 @@ $instance = $null
 $limitsEnabled = -not [bool]$InstanceId
 $requiresExplicitProfile = -not $InstanceId -and ($Once -or $Continuous -or $DryRun -or $Status -or $hasSetBalance)
 if ([int]$cfg.schemaVersion -ge 9 -and $requiresExplicitProfile -and [string]::IsNullOrWhiteSpace($ProfileId)) {
-    throw "schema v9 requires -ProfileId for this command. Select a profile in Terra Runner or pass -ProfileId <profile-id>."
+    throw "schema v9+ requires -ProfileId for this command. Select a profile in Terra Runner or pass -ProfileId <profile-id>."
+}
+if ($InstanceId -and -not [string]::IsNullOrWhiteSpace($AuthStoreId)) {
+    throw '-AuthStoreId is only accepted for a main-window profile launch. Dispatcher instances use their immutable authentication-store snapshot.'
 }
 if ($InstanceId -or $ProfileId) {
     if ($InstanceId -and $InstanceId -notmatch '^[a-fA-F0-9-]{36}$') { throw 'Unsafe instance ID.' }
@@ -850,12 +854,12 @@ if ($InstanceId -or $ProfileId) {
     if ($policy -eq 'api' -and $null -ne (Read-Member $profile 'limits')) { $cfg.budget = Read-Member $profile 'limits' }
     $route = Read-Member $instance 'proxyRoute'
     if ($null -ne $route) { $cfg.proxy = [ordered]@{ activeRouteId=[string](Read-Member $route 'id'); routes=@($route) } }
-    $storeId = [string](Read-Member $profile 'authStoreId')
+    $storeId = if ($InstanceId -or [string]::IsNullOrWhiteSpace($AuthStoreId)) { [string](Read-Member $profile 'authStoreId') } else { $AuthStoreId }
     if ($storeId -and $storeId -ne 'legacy-shared') {
         if ($storeId -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$') { throw 'Unsafe OpenCode auth store ID.' }
         $storeDb = Join-Path (Join-Path (Join-Path (Split-Path -Parent $Config) 'opencode-stores') $storeId) 'opencode.db'
         if (-not ($Stop -or $Abort -or $ClearStop -or $ClearControlFlags)) {
-            if (-not (Test-Path -LiteralPath $storeDb -PathType Leaf)) { throw "OpenCode auth store '$storeId' is not initialized. Open it in the dispatcher and sign in first." }
+            if (-not (Test-Path -LiteralPath $storeDb -PathType Leaf)) { throw "OpenCode auth store '$storeId' is not initialized. Reconnect the selected profile in Terra Runner and try again." }
             $env:OPENCODE_DB = $storeDb
         }
     }

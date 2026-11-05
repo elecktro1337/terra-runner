@@ -2,9 +2,9 @@
 
 Terra Runner 2.3 stores normal configuration and runtime state in `%LOCALAPPDATA%\TerraRunner`. Use `-Portable` to keep state beside the installation.
 
-## Dispatcher runtime and isolated OpenCode storage
+## Dispatcher runtime and automatic OpenCode storage
 
-Schema v9 includes `openCode.stores[]` with
+Schema v10 includes `openCode.stores[]` with
 `profiles[].authStoreId`. Runtime instance records, heartbeats and addressable
 controls live next to the configuration under `runtime/`; they contain no
 provider secrets or Terra budget/quota values.
@@ -13,12 +13,26 @@ Finished, failed, stopped, aborted, and orphaned instance manifests are disposab
 
 There is no global selected project or profile. Legacy `activeProjectId`, active profile/account fields, global model/budget/reasoning values and `projects[].defaultProfileId` are removed on save; Development explicitly selects a project and profile for each launch.
 
-An isolated store's OpenCode SQLite database is kept under
-`opencode-stores/<store-id>/opencode.db` and is selected only through the
-process environment variable `OPENCODE_DB`. Terra never serializes its tokens
-or passwords into `terra-config.json`. Existing profiles migrate to the
-`legacy-shared` store and should be reassigned after authenticating a new
-isolated store.
+Cloud profiles remain global non-secret templates and retain their source
+`authStoreId`. At the first Development launch for a project, Terra creates a
+stable project-managed store under `opencode-stores/<project-store-id>/opencode.db`.
+Before every later cloud launch it refreshes just the selected provider from
+the profile source by piping `opencode auth export <provider>` directly into
+`opencode auth import`. The export is never buffered by Terra, added to an
+argument, configuration, log, error message, or temporary secret file.
+
+The target DB is selected only for the runner and its worker through
+`OPENCODE_DB`. Project-managed stores are diagnostic read-only entries in
+System: they cannot be selected for login, linked to a profile, or manually
+edited. Local profiles do not create a managed store. Existing profiles remain
+on `legacy-shared` after migration; the first cloud launch performs the copy
+without a manual re-login. If the source credential no longer exists, reconnect
+that profile through normal OpenCode authentication and launch again.
+
+Removing an inactive project configuration also permanently removes only that
+project's managed DB and bootstrap lock. Project removal is refused while an
+instance is active. Repositories, logs, reports, source profile stores, and
+other projects' managed stores are not removed.
 
 ## Projects
 

@@ -9,7 +9,11 @@ runner directly; dispatcher-instance mode writes an immutable command snapshot
 and starts `node-ui/instance.mjs` in a separate terminal.
 
 An instance uses its frozen profile, proxy route and OpenCode authentication
-store. Isolated stores are set through `OPENCODE_DB`; workers use
+store. For a cloud launch, the dispatcher lazily creates a project-managed
+store and streams only the chosen provider from the profile source directly
+from `opencode auth export` stdout to `opencode auth import` stdin. The secret
+payload is not buffered, serialized, logged, or passed as an argument. The
+effective store ID is frozen in the instance snapshot. Isolated stores are set through `OPENCODE_DB`; workers use
 `opencode run --standalone`, leaving Windows settings and OpenCode's shared
 service unchanged. A project-scoped runner lock protects a Git worktree while
 allowing different projects to run concurrently. Budget/quota state is used
@@ -42,7 +46,7 @@ Terra Runner separates presentation, execution, and persistent project evidence.
 
 Application installation contains scripts, templates, and the Node UI. Application configuration and state live under `%LOCALAPPDATA%\TerraRunner` unless portable mode is selected. Each project receives a separate data directory, so projects with identical display names cannot mix logs or financial state.
 
-OpenCode credentials remain owned by OpenCode. Terra Runner stores only account IDs, labels, profile policy, and user-entered provider observations. A local OpenCode cost estimate is stored separately from the provider snapshot and is always labelled as an estimate.
+OpenCode credentials remain owned by OpenCode. Terra Runner stores only account IDs, labels, profile policy, managed-store metadata, and user-entered provider observations. A local OpenCode cost estimate is stored separately from the provider snapshot and is always labelled as an estimate. A project-managed DB is deleted immediately when its inactive project configuration is removed; its source profile DB remains untouched.
 
 Terminal instance records are runtime metadata, not historical evidence. `Development → Active instances` can remove one terminal record or clear all terminal records; it never removes an active, starting, stopping, or aborting instance. Logs, reports, and project control state remain separate and are not removed by this action.
 
