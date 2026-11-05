@@ -36,7 +36,7 @@ other projects' managed stores are not removed.
 
 ## Projects
 
-Each project has a stable ID, absolute path, expected Git branch, roadmap filename, progress filename, and an `instructions` filename. `instructions` defaults to `PROJECT-INSTRUCTIONS.md`, is relative to the project root, and cannot escape it. The file must exist before Dry run, One iteration, or Continuous can start. It may be new, staged, or modified only when it is the sole local Git change: the worker stages and commits exactly that existing file in its own documentation commit before task work. Use **Projects → Open project instructions** to create the empty file and open it in Notepad. The worker rereads instructions before each new iteration, so a newly committed update applies to the next iteration.
+Each project has a stable ID, absolute path, expected Git branch, roadmap filename, progress filename, and an `instructions` filename. `instructions` defaults to `PROJECT-INSTRUCTIONS.md`, is relative to the project root, and cannot escape it. The file must exist before Dry run, One iteration, or Continuous can start. It may be new, staged, or modified only when it is the sole local Git change: the worker stages and commits exactly that existing file in its own documentation commit before task work. **Projects** has separate explicit actions for **Open project instructions**, **Open roadmap**, and **Open progress**. Opening an existing file is always user-initiated; Development only offers to create and open instructions when the file is missing. The worker rereads instructions before each new iteration, so a newly committed update applies to the next iteration.
 
 `taskIdPattern` is optional. Without it, every Markdown checkbox is a roadmap task. When it is absent, Terra Runner still recognises conventional IDs such as `NTD-0109` in newly completed roadmap entries.
 
@@ -56,7 +56,7 @@ A snapshot is a user-reported provider observation. It contains a unit (`usd` or
 
 For profiles using a snapshot guard, a main-window run, including dry run, fails closed when the snapshot is missing or stale. The UI asks for a fresh value immediately before that run rather than requiring manual JSON editing. Dispatcher instances do not read, write, or validate Terra budget or quota state.
 
-For a continuous run only, the user may disable the provider snapshot guard. This temporary override bypasses provider snapshot freshness and threshold checks; it does not bypass Git, timeout, no-progress, error, or manual stop safeguards.
+For a continuous run, the Node UI always applies the selected profile's snapshot policy. The direct PowerShell CLI additionally exposes the explicit `-SkipProviderSnapshotGuard` switch for an intentional temporary override. It bypasses provider snapshot freshness and threshold checks only; it does not bypass Git, timeout, no-progress, error, or manual-stop safeguards.
 
 ## Optional local OpenCode cost estimate
 

@@ -48,7 +48,7 @@ Terra Runner separates presentation, execution, and persistent project evidence.
 4. The runner emits compact `__TERRA_UI__` telemetry records only when requested by the Node UI.
 5. Node reads safe tool-event metadata from the raw JSONL stream to render activity and verification counts. It does not render model reasoning content.
 6. The runner writes immutable per-iteration JSON summaries and raw/readable event logs under the stable project ID.
-7. Node renders the selected run context and a bounded journal of completed iterations below the header, pins only Stop/Abort controls to the terminal bottom, and aggregates new summaries at completion.
+7. Node refreshes the active header once per second with roadmap counts, total run duration, last completed task, and last commit. It renders a bounded journal of completed iterations below the changing status, pins only Stop/Abort controls to the terminal bottom, and aggregates new summaries at completion.
 
 ## State boundaries
 
@@ -56,7 +56,7 @@ Application installation contains scripts, templates, and the Node UI. Applicati
 
 OpenCode credentials remain owned by OpenCode. Terra Runner stores only account IDs, labels, profile policy, managed-store metadata, and user-entered provider observations. A local OpenCode cost estimate is stored separately from the provider snapshot and is always labelled as an estimate. A project-managed DB is deleted immediately when its inactive project configuration is removed; its source profile DB remains untouched.
 
-Terminal instance records are runtime metadata, not historical evidence. `Development → Active instances` can remove one terminal record or clear all terminal records; it never removes an active, starting, stopping, or aborting instance. Logs, reports, and project control state remain separate and are not removed by this action.
+Terminal instance records are runtime metadata, not historical evidence. Selecting a terminal record in `Development → Active instances` derives the same final report as its project window from the per-project summaries, roadmap and instance manifest. Terminal records expose removal only; active records expose Stop/Abort, and stalled finalization only when its process is absent. Removing one record or clearing all terminal records never removes an active, starting, stopping, or aborting instance. Logs, reports, and project control state remain separate and are not removed by this action.
 
 ## Safety boundaries
 

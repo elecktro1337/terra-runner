@@ -4,15 +4,16 @@
 
 The Node UI displays a short reason and next step instead of a PowerShell stack trace.
 
-- **Uncommitted or untracked files**: commit, stash, or remove the project changes. Automated development starts only from a clean working tree.
+- **Uncommitted or untracked files**: commit, stash, or remove the project changes. Automated development starts only from a clean working tree, except for `PROJECT-INSTRUCTIONS.md` when it is the sole local change: the worker commits that unchanged file before task work.
 - **Wrong Git branch**: switch to the branch configured for the selected project.
 - **Local and remote branch heads differ**: review the branch and complete the normal non-force push or pull.
 - **OpenCode was not found**: install OpenCode 2.x or correct its command path.
 - **Snapshot missing or stale**: start the run again and enter a current provider observation when prompted.
 - **Project authentication storage could not be prepared**: reconnect the selected profile through normal OpenCode authentication, then launch again. Terra will recreate the private project store automatically; do not copy tokens or database files by hand.
+- **Project instructions file is required**: use **Projects → Open project instructions**. Terra can create its empty template when missing. Save it and start Development again; an existing instructions file is not opened automatically when a run starts.
 - **Uncommitted or untracked files after a crash**: start One iteration or Continuous normally. If they belong to an interrupted Terra run, its matching recovery marker causes Terra to checkpoint and non-force push them automatically. If no matching marker exists, the files may be manual work; review and resolve them yourself.
 
-Use **Development → Project preflight** to check the project path, branch, roadmap, progress file, OpenCode command, provider snapshot, and working-tree cleanliness without launching an agent.
+Use **Development → Dry run** to check the project path, branch, roadmap, progress file, instructions, OpenCode command, provider snapshot, and working-tree cleanliness without launching an agent.
 
 ## A previous stop blocks a new run
 
@@ -33,6 +34,10 @@ Install OpenCode 2.x, ensure `opencode` is available on `PATH`, then run preflig
 ## Terminal display or hotkeys look wrong
 
 Use Windows Terminal or a current PhpStorm terminal with Node.js 20+ and PowerShell 7. The Node UI uses ANSI rendering where supported. If terminal input does not support raw key handling, use the runner control commands instead.
+
+## A dispatcher instance seems to have ended
+
+Open **Development → Active instances** and select the terminal record. Terra shows the same result report as the project window, including the reason, tasks completed during that launch, iteration count, last task, duration, commit, and log location. A terminal record no longer has a runner process, so it deliberately offers only removal, refresh, and Back. Stop, Abort, and stalled finalization are reserved for actionable active records.
 
 ## Configuration is invalid
 

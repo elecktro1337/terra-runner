@@ -2,16 +2,18 @@
 
 ## Unreleased
 
-- Refresh the live Development header with roadmap counts, run duration, last task, and last commit after every iteration.
+- Refresh the live Development header every second and after every iteration with roadmap counts, run duration, last task, and last commit; fixed dispatcher instances calculating the duration from a persisted ISO timestamp.
 - Close the dispatcher terminal window when its project-instance Node process exits instead of leaving a `cmd` prompt behind.
 - Live Development now waits for an explicit worker task-selection marker instead of labelling every iteration with the first unchecked roadmap item.
 - Permit a new or edited project-instructions file as the sole local Git change; the worker commits that unchanged file separately before task work.
 - Fixed project-instance results: the roadmap is shown once, and the result now includes completed tasks and iteration count for the current launch.
 - Temporary OpenCode and Git TLS/network failures now keep the instance waiting for reconnection instead of ending the development run; Stop and Abort remain available during the wait.
+- Completed instance records now show the same final report as their project window in **Development → Active instances**. Terminal records no longer display disabled Stop, Abort, or stalled-finalization actions.
+- Fixed Development opening existing project instructions on every launch. **Projects** now has explicit actions to open instructions, roadmap, and progress files.
 
 ## 2.4.0 - 2026-11-05
 
-- Added mandatory per-project `PROJECT-INSTRUCTIONS.md` files, tracked and clean in Git, with safe paths, UI creation/opening, and per-iteration worker prompt composition.
+- Added mandatory per-project `PROJECT-INSTRUCTIONS.md` files with safe paths, explicit UI creation/opening, and per-iteration worker prompt composition. A new, staged, or modified instructions file is accepted when it is the sole local change and is committed unchanged before task work.
 
 ## 2.3.6 - 2026-11-05
 
