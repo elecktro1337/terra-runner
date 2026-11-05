@@ -15,7 +15,7 @@ import { LiveFooter, LiveHeaderBlock, LiveStatusBlock } from './lib/live-footer.
 import { developmentHeaderRows } from './lib/run-display.mjs';
 import { readRoadmapProgress } from './lib/roadmap.mjs';
 import { completedIterationText } from './lib/iteration-history.mjs';
-import { instanceOutcome } from './lib/instance-outcome.mjs';
+import { instanceOutcome, instanceReportRows } from './lib/instance-outcome.mjs';
 import { iterationSummariesSince, latestIterationSummary, projectDataRoot } from './lib/reports.mjs';
 import { selectedRoadmapTaskFromEvent } from './lib/task-selection.mjs';
 
@@ -71,18 +71,7 @@ async function show(settings, instance, project) {
   const outcome = instanceOutcome(instance, summary, roadmap, runSummaries);
   globalHeader(settings);
   for (const row of developmentHeaderRows({ project, profile: instance.profile || {}, command: 'Instance result', roadmap, includeTerraLimits: false })) console.log(row);
-  console.log(`  ${chalk.bold.cyan('Location')}  ${chalk.gray(project.path)}`);
-  console.log(`  State     ${instance.state}${instance.activity ? chalk.gray(` — ${instance.activity}`) : ''}`);
-  console.log(`  Started   ${instance.createdAt}`);
-  if (outcome) {
-    const resultColor = outcome.kind === 'complete' ? chalk.green : outcome.kind === 'failed' || outcome.kind === 'aborted' ? chalk.red : chalk.yellow;
-    console.log(`  Result    ${resultColor(outcome.reason)}`);
-    if (outcome.runIterations) console.log(`  This run  ${outcome.runCompletedTasks ? chalk.green(`${outcome.runCompletedTasks} task(s) completed`) : 'no roadmap tasks completed'}  │  ${outcome.runIterations} iteration(s)`);
-    if (outcome.task) console.log(`  Last task ${chalk.cyan(outcome.task)}`);
-    if (outcome.duration) console.log(`  Duration  ${outcome.duration}`);
-    if (outcome.commit) console.log(`  Commit    ${chalk.gray(outcome.commit)}`);
-    console.log(`  Logs      ${chalk.gray(projectDataRoot(settings, project, configPath))}`);
-  }
+  for (const row of instanceReportRows({ instance, project, outcome, logsPath: projectDataRoot(settings, project, configPath), chalk })) console.log(row);
   console.log(rule);
 }
 async function safeUpdate(patch) { return updateInstance(configPath, instanceId, patch); }

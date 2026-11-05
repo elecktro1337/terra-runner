@@ -22,6 +22,8 @@ import { instanceTerminalLauncher } from './lib/instance-launcher.mjs';
 import { ensureProjectAuthStore, isProjectManagedStore, removeProjectAuthStore } from './lib/project-auth-stores.mjs';
 import { completedIterationText } from './lib/iteration-history.mjs';
 import { instanceActivityText } from './lib/instance-display.mjs';
+import { instanceActionPlan } from './lib/instance-actions.mjs';
+import { instanceOutcome, instanceReportRows } from './lib/instance-outcome.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -620,7 +622,6 @@ async function instancesMenu(settings) {
     const instances = await listInstances(configPath); header(settings); console.log(chalk.bold('ACTIVE AND RECENT PROJECT INSTANCES')); console.log(rule);
     if (!instances.length) console.log(chalk.gray('  No project windows have been opened yet.'));
     const terminalCount = instances.filter(isTerminalInstance).length;
-    console.log(chalk.gray('  Controls: select an active instance for Stop/Abort; completed records can be removed safely.'));
     const choices = instances.map(instance => ({ name: `${isTerminalInstance(instance) ? chalk.gray('○') : chalk.green('●')} ${instance.projectId}  ${chalk.cyan(instance.profile?.model || '')}  ${isTerminalInstance(instance) ? chalk.gray(instance.state) : chalk.yellow(instance.state)}${instance.activity ? chalk.gray(` — ${instanceActivityText(instance.activity)}`) : ''}`, value: instance.id }));
     if (terminalCount) choices.push({ name: chalk.yellow(`Clear ${terminalCount} completed / failed record(s)`), value: 'clear-terminal' });
     choices.push({ name: 'Refresh', value: 'refresh' });
@@ -628,14 +629,27 @@ async function instancesMenu(settings) {
     if (!choice) return;
     if (choice === 'clear-terminal') { if (await yesNo(`Remove ${terminalCount} completed, failed, stopped, aborted, or orphaned instance record(s)?`)) { const removed = await clearTerminalInstances(configPath); console.log(chalk.green(`Removed ${removed} terminal instance record(s).`)); await pause(); } continue; }
     const instance = instances.find(item => item.id === choice); if (!instance) continue;
-    const action = await pick(`Instance: ${instance.projectId}`, [
-      { name: 'Request graceful stop', value: 'stop', disabled: isTerminalInstance(instance) }, { name: chalk.red('Emergency abort'), value: 'abort', disabled: isTerminalInstance(instance) },
-      { name: chalk.yellow(instance.state === 'aborting' ? 'Finalize stalled abort' : 'Finalize stalled instance'), value: 'finalize', disabled: !canFinalizeStalledInstance(instance) }, { name: chalk.yellow('Remove this completed record'), value: 'remove', disabled: !isTerminalInstance(instance) }, { name: 'Refresh', value: 'refresh' }
-    ]);
+    if (isTerminalInstance(instance)) await showInstanceCompletionReport(settings, instance);
+    const action = await pick(`Instance: ${instance.projectId}`, instanceActionPlan(instance, { canFinalize: canFinalizeStalledInstance(instance) }).map(item => ({ ...item, name: item.destructive ? chalk.red(item.name) : item.attention || item.value === 'remove' ? chalk.yellow(item.name) : item.name })));
     if (action === 'stop' || action === 'abort') { const kind = action === 'abort' ? 'ABORT' : 'STOP'; await requestInstanceControl(configPath, instance.id, kind); await updateInstance(configPath, instance.id, { state: action === 'abort' ? 'aborting' : 'stopping', activity: action === 'abort' ? 'Emergency abort requested by dispatcher' : 'Graceful stop requested by dispatcher' }); }
     if (action === 'finalize') { const aborted = instance.state === 'aborting'; await updateInstance(configPath, instance.id, { state: aborted ? 'aborted' : 'failed', runnerPid: null, activity: '', stopReason: aborted ? 'Emergency abort finalized: no runner process is active.' : 'Stalled launch finalized: no runner process is active.' }); }
     if (action === 'remove') { if (await yesNo(`Remove completed instance '${instance.projectId}' from the local list?`)) await deleteTerminalInstance(configPath, instance.id); }
   }
+}
+async function showInstanceCompletionReport(settings, instance) {
+  const project = (settings.projects || []).find(item => item.id === instance.projectId);
+  if (!project) return;
+  const runSince = Date.parse(instance.runStartedAt || instance.createdAt || '') || 0;
+  const [summary, roadmap, runSummaries] = await Promise.all([
+    latestIterationSummary(settings, project, configPath),
+    readRoadmapProgress(project),
+    iterationSummariesSince(settings, project, configPath, runSince)
+  ]);
+  const outcome = instanceOutcome(instance, summary, roadmap, runSummaries);
+  header(settings); console.log(chalk.bold('PROJECT INSTANCE REPORT')); console.log(rule);
+  for (const row of developmentHeaderRows({ project, profile: instance.profile || {}, command: 'Instance result', roadmap, includeTerraLimits: false })) console.log(row);
+  for (const row of instanceReportRows({ instance, project, outcome, logsPath: projectDataRoot(settings, project, configPath), chalk })) console.log(row);
+  console.log(rule);
 }
 async function stopAllInstances() {
   const instances = await listInstances(configPath); const active = instances.filter(instance => !isTerminalInstance(instance));

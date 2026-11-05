@@ -64,3 +64,20 @@ export function instanceOutcome(instance = {}, summary = null, roadmap = {}, run
     runIterations: run.iterations
   };
 }
+
+export function instanceReportRows({ instance = {}, project = {}, outcome = null, logsPath = '', chalk }) {
+  const rows = [
+    `  ${chalk.bold.cyan('Location')}  ${chalk.gray(project.path || '')}`,
+    `  State     ${instance.state || 'unknown'}${instance.activity ? chalk.gray(` — ${instance.activity}`) : ''}`,
+    `  Started   ${instance.createdAt || 'unknown'}`
+  ];
+  if (!outcome) return rows;
+  const resultColor = outcome.kind === 'complete' ? chalk.green : outcome.kind === 'failed' || outcome.kind === 'aborted' ? chalk.red : chalk.yellow;
+  rows.push(`  Result    ${resultColor(outcome.reason)}`);
+  if (outcome.runIterations) rows.push(`  This run  ${outcome.runCompletedTasks ? chalk.green(`${outcome.runCompletedTasks} task(s) completed`) : 'no roadmap tasks completed'}  │  ${outcome.runIterations} iteration(s)`);
+  if (outcome.task) rows.push(`  Last task ${chalk.cyan(outcome.task)}`);
+  if (outcome.duration) rows.push(`  Duration  ${outcome.duration}`);
+  if (outcome.commit) rows.push(`  Commit    ${chalk.gray(outcome.commit)}`);
+  if (logsPath) rows.push(`  Logs      ${chalk.gray(logsPath)}`);
+  return rows;
+}
