@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { clearInstanceControls, readCoordinatorHeartbeat, readInstance, requestInstanceControl, updateInstance } from './lib/runtime.mjs';
+import { clearInstanceControls, instanceRunnerFailure, readCoordinatorHeartbeat, readInstance, requestInstanceControl, updateInstance } from './lib/runtime.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -46,7 +46,7 @@ async function run(mode, limit = 1) {
   if (mode === 'continuous') runnerArgs.push(limit > 0 ? '-MaxIterations' : '-UnlimitedIterations', String(limit || ''));
   const child = spawn('pwsh.exe', runnerArgs.filter(Boolean), { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: false });
   await safeUpdate({ state: 'running', runnerPid: child.pid, activity: 'OpenCode runner is active' });
-  let buffer = '';
+  let buffer = ''; let stderr = '';
   const consume = async chunk => {
     const text = String(chunk); buffer += text;
     const lines = buffer.split(/\r?\n/); buffer = lines.pop() || '';
@@ -55,12 +55,13 @@ async function run(mode, limit = 1) {
       try { const event = JSON.parse(line.slice('__TERRA_UI__'.length)); await safeUpdate({ state: 'running', activity: event.type === 'iteration-heartbeat' ? `Iteration ${event.iteration}: ${event.elapsedSeconds}s` : event.type, iteration: event.iteration ?? null }); } catch { }
     }
   };
-  child.stdout.on('data', data => void consume(data)); child.stderr.on('data', data => process.stderr.write(data));
+  child.stdout.on('data', data => void consume(data)); child.stderr.on('data', data => { const text = String(data); stderr += text; process.stderr.write(text); });
   const keyHandler = data => { const key = String(data).toLowerCase(); if (key === 's' || key === '\u0003') void request('STOP'); if (key === 'x') void request('ABORT'); };
   if (process.stdin.isTTY) { process.stdin.setRawMode?.(true); process.stdin.resume(); process.stdin.on('data', keyHandler); }
   await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }).then(async code => {
     const current = await readInstance(configPath, instanceId); const aborted = current?.state === 'aborting'; const stopped = current?.state === 'stopping';
-    await safeUpdate({ state: aborted ? 'aborted' : stopped ? 'stopped' : code === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? 'Graceful stop completed.' : code === 0 ? '' : `runner exit ${code}` });
+    const failed = !aborted && !stopped && code !== 0;
+    await safeUpdate({ state: aborted ? 'aborted' : stopped ? 'stopped' : code === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', error: failed ? instanceRunnerFailure(stderr, code) : '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? 'Graceful stop completed.' : code === 0 ? '' : `runner exit ${code}` });
   }).catch(async error => { await safeUpdate({ state: 'failed', runnerPid: null, error: error.message, activity: '' }); });
   if (process.stdin.isTTY) { process.stdin.off('data', keyHandler); process.stdin.setRawMode?.(false); }
 }

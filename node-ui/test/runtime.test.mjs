@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { authStorePath, canFinalizeStalledInstance, clearInstanceControls, createInstance, instanceControlPath, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance } from '../lib/runtime.mjs';
+import { authStorePath, canFinalizeStalledInstance, clearInstanceControls, createInstance, instanceControlPath, instanceRunnerFailure, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance } from '../lib/runtime.mjs';
 
 async function fixture() { return fs.mkdtemp(path.join(os.tmpdir(), 'terra-runtime-')); }
 
@@ -37,4 +37,10 @@ test('only an active state without a live runner can be finalized as stalled', (
   assert.equal(canFinalizeStalledInstance({ state: 'launching', runnerPid: 0 }), true);
   assert.equal(canFinalizeStalledInstance({ state: 'running', runnerPid: null }), false);
   assert.equal(canFinalizeStalledInstance({ state: 'aborting', runnerPid: process.pid }), false);
+});
+
+test('redacts runner stderr into a safe actionable instance failure', () => {
+  assert.match(instanceRunnerFailure('Exception: Git working tree has uncommitted/untracked changes.', 1), /Commit, stash, or remove/);
+  assert.match(instanceRunnerFailure('opaque provider output api_key=secret', 1), /Runner exited with code 1/);
+  assert.doesNotMatch(instanceRunnerFailure('opaque provider output api_key=secret', 1), /secret/);
 });

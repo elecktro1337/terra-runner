@@ -26,6 +26,14 @@ export function isProcessAlive(pid) {
 export function canFinalizeStalledInstance(instance) {
   return RECOVERABLE.has(String(instance?.state || '')) && !isProcessAlive(instance?.runnerPid);
 }
+export function instanceRunnerFailure(stderr, code) {
+  const text = String(stderr || '');
+  if (/Git working tree has uncommitted\/untracked changes/i.test(text)) return 'Git working tree has uncommitted or untracked changes. Commit, stash, or remove them before development.';
+  if (/does not match configured branch/i.test(text)) return 'The project is not on its configured Git branch.';
+  if (/OpenCode auth store .* is not initialized/i.test(text)) return 'The selected OpenCode authentication store is not initialized.';
+  if (/requires -ProfileId|Expected exactly one profile/i.test(text)) return 'The selected profile is unavailable in the current configuration.';
+  return `Runner exited with code ${code}. Review the terminal output for details.`;
+}
 export function sanitizeProfile(profile) {
   const source = profile || {};
   // Instance records are runtime coordination data, not a second configuration
