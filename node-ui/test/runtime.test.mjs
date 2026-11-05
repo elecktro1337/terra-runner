@@ -7,7 +7,7 @@ import { authStorePath, clearInstanceControls, createInstance, instanceControlPa
 
 async function fixture() { return fs.mkdtemp(path.join(os.tmpdir(), 'terra-runtime-')); }
 
-test('v7 runtime migration assigns legacy auth storage, default project profile, and removes reservations', () => {
+test('v8 runtime migration assigns legacy auth storage, default project profile, and removes reservations', () => {
   const settings = { openCode: { activeProfileId: 'p1', profiles: [{ id: 'p1', policy: 'api', usageSource: { reserve: 2 }, parallelReservation: 2 }] }, projects: [{ id: 'one' }] };
   normalizeRuntime(settings);
   assert.equal(settings.openCode.stores[0].id, 'legacy-shared');

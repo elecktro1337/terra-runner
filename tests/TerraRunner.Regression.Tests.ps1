@@ -35,6 +35,10 @@ Describe 'Terra Runner safe command dispatch' {
         & $runner -Project safe-project -Config $script:config -Report
         (Test-Path -LiteralPath $script:calls) | Should Be $false
     }
+    It 'does not start an agent for ProxyTest' {
+        & $runner -Project safe-project -Config $script:config -ProxyTest
+        (Test-Path -LiteralPath $script:calls) | Should Be $false
+    }
     It 'does not start an agent when no execution command is selected' {
         & $runner -Project safe-project -Config $script:config
         (Test-Path -LiteralPath $script:calls) | Should Be $false
@@ -66,7 +70,7 @@ Describe 'Terra Runner safe command dispatch' {
         $instance = [ordered]@{ id=$id; projectId='safe-project'; profile=[ordered]@{ id='profile'; model='local/mock'; provider='local'; policy='local'; authStoreId=''; reasoningVariant=''; showThinking=$false }; launch=[ordered]@{ command='idle'; maxIterations=0 }; state='idle' }
         $instance | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $runtime "$id.json") -Encoding utf8
         $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable
-        $settings.schemaVersion = 7; $settings.budget.dailyUsd = 0
+        $settings.schemaVersion = 8; $settings.budget.dailyUsd = 0
         $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
         $threw = $false
         try { & $runner -Project safe-project -Config $script:config -InstanceId $id -Status } catch { $threw = $true }

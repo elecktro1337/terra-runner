@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.2.0 - 2026-11-05
+
+- Removed the hidden global selected project; Development now owns project selection and Reports shows all projects.
+- Made stale/missing provider snapshot prompts consistent for main-window dry runs.
+- Moved proxy testing to Development and made System diagnostics global.
+- Replaced the scrolling live control hint with a fixed status/control terminal footer.
+
 ## 2.1.0 - 2026-11-05
 
 - Restored one unified Development flow: command, project, then main-window or dispatcher-instance mode.

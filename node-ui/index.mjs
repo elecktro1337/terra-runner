@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -11,10 +10,11 @@ import chalk from 'chalk';
 import figlet from 'figlet';
 import ora from 'ora';
 import { activeProfile, applyProfile, isLocalModel, migrateProfiles, profileFrom } from './lib/profiles.mjs';
-import { activeProject, normalizeProjects, validateProjectId } from './lib/projects.mjs';
+import { normalizeProjects, validateProjectId } from './lib/projects.mjs';
 import { dailyReports, latestIterationSummary, iterationSummariesSince, projectDataRoot } from './lib/reports.mjs';
 import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, redactedRoute, validateProxyRoute } from './lib/proxy.mjs';
 import { authStorePath, cleanupLegacyReservations, createInstance, isTerminalInstance, listInstances, normalizeRuntime, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
+import { LiveFooter } from './lib/live-footer.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -160,12 +160,20 @@ function showRunnerFailure(output) {
 async function runWithTui(runnerArgs, settings, project, mode) {
   const executable = await resolveCommand('pwsh.exe');
   const previousSummaryId = (await latestIterationSummary(settings, project, configPath))?.id || '';
-  const started = Date.now(); let iterationStarted = started; let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration';
+  const started = Date.now(); let iterationStarted = started; let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing continuous development' : mode === 'dry-run' ? 'Preparing dry run' : 'Preparing iteration';
   let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let control = '';
   const interactive = Boolean(process.stdin.isTTY);
-  console.log(rule); console.log(chalk.gray('  Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop'));
-  const spinner = ora({ text: `${stage} · 0m 00s`, color: 'cyan', discardStdin: false }).start();
-  const update = setInterval(() => { spinner.text = `${stage} · ${durationText(Date.now() - iterationStarted)}`; }, 1000);
+  const controls = chalk.gray('Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop');
+  const footer = new LiveFooter(process.stdout, controls);
+  const spinnerFrames = ['-', '\\', '|', '/']; let frame = 0;
+  const statusText = () => `${chalk.cyan(spinnerFrames[frame++ % spinnerFrames.length])} ${stage} · ${durationText(Date.now() - iterationStarted)}`;
+  const renderFooter = () => footer.render(statusText());
+  const footerAttached = footer.enabled;
+  if (footerAttached) { process.stdout.write('\x1b[?25l'); renderFooter(); }
+  else { console.log(rule); console.log(chalk.gray(`  ${controls}`)); }
+  const update = setInterval(renderFooter, 180);
+  const onResize = () => renderFooter();
+  if (footerAttached) process.stdout.on('resize', onResize);
   const liveUpdate = setInterval(async () => {
     if (!eventFile) return;
     try {
@@ -185,8 +193,8 @@ async function runWithTui(runnerArgs, settings, project, mode) {
     try {
       await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, `${kind} requested by user at ${new Date().toISOString()}\n`, 'utf8');
       const message = kind === 'abort' ? 'Emergency stop requested. The current iteration will be terminated.' : 'Stop requested. The current iteration will finish, then development will stop.';
-      spinner.stopAndPersist({ symbol: chalk.yellow('!'), text: message }); spinner.start(); stage = kind === 'abort' ? 'Stopping current iteration' : 'Finishing current iteration';
-    } catch (error) { control = ''; spinner.stopAndPersist({ symbol: chalk.red('x'), text: `Could not request stop: ${error.message}` }); spinner.start(); }
+      footer.persist(chalk.yellow(`! ${message}`)); stage = kind === 'abort' ? 'Stopping current iteration' : 'Finishing current iteration'; renderFooter();
+    } catch (error) { control = ''; footer.persist(chalk.red(`x Could not request stop: ${error.message}`)); renderFooter(); }
   };
   const onInput = data => { const key = String(data).toLowerCase(); if (key === 's' || key === '\u0003') void requestControl('stop'); if (key === 'x') void requestControl('abort'); };
   const onSigint = () => { void requestControl('stop'); };
@@ -206,7 +214,7 @@ async function runWithTui(runnerArgs, settings, project, mode) {
               iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`;
               stage = `${iterationLabel} | ${event.taskId || 'next roadmap task'} | ${event.pending} tasks pending`;
             }
-            if (event.type === 'iteration-finished') { spinner.stopAndPersist({ symbol: event.stoppedReason ? chalk.yellow('!') : chalk.green('✓'), text: iterationCheckpointText(event) }); console.log(rule); spinner.start(); stage = 'Preparing next iteration'; }
+              if (event.type === 'iteration-finished') { footer.persist(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${iterationCheckpointText(event)}`); stage = 'Preparing next iteration'; renderFooter(); }
           } catch { }
           return;
         }
@@ -220,19 +228,19 @@ async function runWithTui(runnerArgs, settings, project, mode) {
       child.stderr.on('data', chunk => { stderr += chunk.toString(); });
       child.once('error', reject); child.once('close', code => resolve({ code, stdout, stderr }));
     });
-    clearInterval(update); clearInterval(liveUpdate); cleanupControls();
-    if (result.code === 0) spinner.succeed(`Development run finished · ${durationText(Date.now() - started)}`);
-    else spinner.fail('Development run could not start.');
+    clearInterval(update); clearInterval(liveUpdate); cleanupControls(); if (footerAttached) process.stdout.off('resize', onResize); footer.clear(); if (footerAttached) process.stdout.write('\x1b[?25h');
+    if (result.code === 0) console.log(chalk.green(`✓ Development run finished · ${durationText(Date.now() - started)}`));
+    else console.log(chalk.red('x Development run could not start.'));
     const summaries = (await iterationSummariesSince(settings, project, configPath, started)).filter(summary => summary.id !== previousSummaryId);
     if (summaries.length) showRunOverview(summaries, settings, project);
     else if (result.code !== 0) showRunnerFailure(result.stderr || result.stdout);
     return result.code === 0;
   } catch (error) {
-    clearInterval(update); clearInterval(liveUpdate); cleanupControls(); spinner.fail('Development runner could not start.'); console.log(chalk.red(error.message)); return false;
+    clearInterval(update); clearInterval(liveUpdate); cleanupControls(); if (footerAttached) process.stdout.off('resize', onResize); footer.clear(); if (footerAttached) process.stdout.write('\x1b[?25h'); console.log(chalk.red(`x Development runner could not start: ${error.message}`)); return false;
   }
 }
 async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [], activeAccountId: '', reasoning: {} }; settings.openCode.accounts ||= []; migrateProfiles(settings); normalizeRuntime(settings); normalizeProxy(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the setup wizard once or pass --config <file>. ${error.message}`); } }
-async function save(settings) { settings.schemaVersion = 7; migrateProfiles(settings); normalizeRuntime(settings); normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
+async function save(settings) { settings.schemaVersion = 8; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
 function parseModels(text) { return [...new Set(text.split(/\r?\n/).map(v => v.trim()).filter(v => /^[a-z0-9_.-]+\/.+/i.test(v)))]; }
 function storeEnvironment(storeId) { return storeId && storeId !== 'legacy-shared' ? { OPENCODE_DB: authStorePath(configPath, storeId) } : null; }
 function authStore(settings, id) { return (settings.openCode?.stores || []).find(store => store.id === id) || null; }
@@ -244,34 +252,6 @@ async function refreshOpenCode(settings, storeId = 'legacy-shared') {
     const models = parseModels(await execute(executable, ['models'], root, false, env)); if (storeId === 'legacy-shared') settings.openCode.accounts = [...accounts, ...settings.openCode.accounts.filter(account => account.authMethod === 'local')];
     spinner.succeed(`OpenCode refreshed: ${accounts.length} account(s), ${models.length} model(s).`); return { accounts, models };
   } catch (error) { spinner.fail('OpenCode refresh failed.'); throw error; }
-}
-function selectedProject(settings) { return activeProject(settings); }
-function latestLocalCostEstimate(settings, project, minimumObservedAt = '') {
-  if (!project) return null;
-  const minimum = Date.parse(minimumObservedAt) || 0; const logs = path.join(projectDataRoot(settings, project, configPath), 'logs'); let latest = null;
-  const visit = directory => {
-    let entries; try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      const file = path.join(directory, entry.name);
-      if (entry.isDirectory()) { visit(file); continue; }
-      if (!entry.name.endsWith('.summary.json')) continue;
-      try { const stat = statSync(file); const value = JSON.parse(readFileSync(file, 'utf8')); if (Date.parse(value.ended || '') < minimum) continue; if (!latest || stat.mtimeMs > latest.mtimeMs) latest = { mtimeMs: stat.mtimeMs, value }; } catch { }
-    }
-  };
-  visit(logs); return latest?.value?.quotaEstimatedSpendUSD != null ? latest.value : null;
-}
-function roadmapProgress(project) {
-  if (!project?.path || !project?.roadmap) return null;
-  try {
-    const pattern = project.taskIdPattern ? new RegExp(project.taskIdPattern) : null;
-    let complete = 0; let pending = 0;
-    for (const line of readFileSync(path.join(project.path, project.roadmap), 'utf8').split(/\r?\n/)) {
-      if (pattern && !pattern.test(line)) continue;
-      if (/^\s*-\s*\[[xX]\]/.test(line)) complete++;
-      if (/^\s*-\s*\[ \]/.test(line)) pending++;
-    }
-    const total = complete + pending; return { complete, pending, total, percent: total ? (complete / total) * 100 : 0 };
-  } catch { return null; }
 }
 function limitSummary(profile) {
   if (!profile) return 'No profile selected'; if (profile.policy === 'local') return 'No provider limits';
@@ -300,19 +280,15 @@ function profileKindLabel(profile) {
   return chalk.yellow('[API]');
 }
 function header(settings) {
-  clear(); const project = selectedProject(settings); const profile = activeProfile(settings);
-  console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' }))); console.log(chalk.gray('RUNNER  v2.1  ·  Local OpenCode development orchestrator')); console.log(rule);
+  clear(); const profile = activeProfile(settings);
+  console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' }))); console.log(chalk.gray('RUNNER  v2.2  ·  Local OpenCode development orchestrator')); console.log(rule);
   const account = settings.openCode?.accounts?.find(item => item.id === settings.openCode?.activeAccountId); const snapshot = profile?.usageSource || {}; const unit = snapshot.unit === 'usd' ? 'USD' : '%';
   const balance = profile?.policy === 'local' ? 'not applicable' : snapshot.remaining == null ? 'snapshot required' : `${snapshot.remaining} ${unit}`;
   const age = snapshot.observedAt ? `${Math.max(0, (Date.now() - Date.parse(snapshot.observedAt)) / 60000).toFixed(0)} min ago` : 'not recorded';
-  console.log(`${chalk.bold('Project')}   ${chalk.white(project?.id || 'not selected')}  ${chalk.gray('│')}  ${chalk.bold('Branch')}  ${project?.branch || 'not configured'}`); console.log(`${chalk.bold('Path')}      ${chalk.gray(project?.path || 'not configured')}`);
   console.log(`${chalk.bold('Account')}   ${account?.label || profile?.credentialLabel || 'not selected'}  ${chalk.gray('│')}  ${profileKindLabel(profile || {})}  ${chalk.gray('│')}  ${chalk.cyan(profile?.model || 'not selected')}  ${chalk.gray('│')}  Reasoning ${profile?.reasoningVariant || 'provider default'}`);
-  const roadmap = roadmapProgress(project);
-  const estimate = snapshot.costTracking?.enabled ? latestLocalCostEstimate(settings, project, snapshot.observedAt) : null;
   console.log(`${chalk.bold('Snapshot')}  ${balance}  ${chalk.gray(`│ ${age}`)}`); console.log(`${chalk.bold('Limits')}    ${chalk.yellow(limitSummary(profile))}`);
-  if (snapshot.costTracking?.enabled) console.log(`${chalk.bold('OpenCode')}  ${estimate ? `$${Number(estimate.quotaEstimatedSpendUSD).toFixed(4)} recorded since snapshot  │  estimated ${estimate.quotaRemaining} ${estimate.quotaUnit}` : `cost estimate enabled  │  baseline $${Number(snapshot.costTracking.baselineAllTimeCostUsd || 0).toFixed(4)}  │  awaiting first measured iteration`}`);
+  if (snapshot.costTracking?.enabled) console.log(`${chalk.bold('OpenCode')}  local cost estimate enabled`);
   else if (profile?.policy === 'api' && snapshot.unit === 'usd') console.log(`${chalk.bold('OpenCode')}  local cost estimate is off`);
-  if (roadmap) console.log(`${chalk.bold('Roadmap')}   ${roadmap.total} total  │  ${chalk.green(`${roadmap.complete} complete`)}  │  ${roadmap.pending} remaining  │  ${roadmap.percent.toFixed(1)}%`);
   console.log(rule);
 }
 function numberValue(raw, fallback) { const parsed = Number(String(raw).trim().replace(',', '.')); return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback; }
@@ -357,10 +333,9 @@ async function configureOpenCodeCostEstimate(settings, profile) {
   console.log(chalk.gray('This subtracts locally recorded OpenCode spend from your last provider-reported USD snapshot.'));
   console.log(chalk.gray('It is an estimate, not a provider balance, and it covers all OpenCode usage recorded by this installation.'));
   if (!(await yesNo('Enable this estimate for the active snapshot?'))) return;
-  const project = selectedProject(settings);
   const spinner = ora('Reading local OpenCode lifetime usage...').start();
   try {
-    const raw = await execute(settings.openCodeCommand || 'opencode', ['stats', '--all', '--json'], project?.path || root);
+    const raw = await execute(settings.openCodeCommand || 'opencode', ['stats', '--all', '--json'], root);
     const cost = openCodeCostFromStats(JSON.parse(raw));
     if (cost == null) throw new Error('OpenCode did not return a usable lifetime cost.');
     profile.usageSource.costTracking = { enabled: true, baselineAllTimeCostUsd: cost, baselineObservedAt: new Date().toISOString() };
@@ -520,10 +495,13 @@ async function chooseRunIterationLimit() {
   }
 }
 const coordinatorId = crypto.randomUUID();
-async function chooseDevelopmentProject(settings) {
+async function chooseProject(settings) {
   const projects = normalizeProjects(settings); if (!projects.length) return null;
   const id = await pick('Project', projects.map(project => { const profile = (settings.openCode.profiles || []).find(item => item.id === project.defaultProfileId); return { name: `${project.id}  ${chalk.gray(`— ${profile?.model || 'default profile not assigned'}`)}`, value: project.id }; }));
-  if (!id) return null; const project = projects.find(item => item.id === id); const profile = (settings.openCode.profiles || []).find(item => item.id === project.defaultProfileId);
+  return projects.find(item => item.id === id) || null;
+}
+async function chooseDevelopmentProject(settings) {
+  const project = await chooseProject(settings); if (!project) return null; const profile = (settings.openCode.profiles || []).find(item => item.id === project.defaultProfileId);
   if (!profile) { console.log(chalk.yellow(`Project '${project.id}' has no default profile. Assign one in Projects before development.`)); await pause(); return null; }
   return { project, profile };
 }
@@ -540,19 +518,26 @@ async function startDispatcherInstance(settings, project, profile, launch) {
   console.log(chalk.green(`Project instance '${project.id}' is opening in a separate terminal.`)); return pause();
 }
 async function runInMainWindow(settings, command, project, profile, maxIterations) {
-  if (command !== 'dry-run') {
-    const snapshotRelevant = profile.policy !== 'local' && profile.limitPolicy?.mode !== 'unlimited';
-    if (snapshotRelevant) { let freshness = snapshotFreshness(profile); if (!freshness.ok) { if (!(await refreshSnapshotBeforeRun(settings, profile, freshness))) return; freshness = snapshotFreshness(profile); if (!freshness.ok) { console.log(chalk.red(`Snapshot is still not ready: ${freshness.detail}`)); return pause(); } } }
-  }
+  const snapshotRelevant = profile.policy !== 'local' && profile.limitPolicy?.mode !== 'unlimited';
+  if (snapshotRelevant) { let freshness = snapshotFreshness(profile); if (!freshness.ok) { if (!(await refreshSnapshotBeforeRun(settings, profile, freshness))) return; freshness = snapshotFreshness(profile); if (!freshness.ok) { console.log(chalk.red(`Snapshot is still not ready: ${freshness.detail}`)); return pause(); } } }
   const args = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-ProfileId', profile.id, '-Config', configPath];
   if (command === 'dry-run') args.push('-DryRun'); else { args.push('-UiEvents', '-ClearControlFlags', command === 'continuous' ? '-Continuous' : '-Once'); if (command === 'continuous') args.push(maxIterations > 0 ? '-MaxIterations' : '-UnlimitedIterations', ...(maxIterations > 0 ? [String(maxIterations)] : [])); }
   const label = command === 'dry-run' ? 'Run a dry run' : command === 'continuous' ? `Run continuously${maxIterations ? ` for up to ${maxIterations} iteration(s)` : ''}` : 'Run one iteration';
   if (!(await yesNo(`${label} for '${project.id}' in the main window?`))) return;
-  await runWithTui(args, settings, project, command === 'continuous' ? 'continuous' : 'once'); return pause();
+  clear(); console.log(chalk.bold('DEVELOPMENT')); console.log(rule); console.log(`  Project  ${chalk.white(project.id)}`); console.log(`  Profile  ${chalk.cyan(profile.model)}  ${chalk.gray(`(${profile.credentialLabel || profile.policy})`)}`); console.log(`  Command  ${label}`); console.log(rule);
+  await runWithTui(args, settings, project, command); return pause();
+}
+async function testProxyForProject(settings, project) {
+  if (!(await yesNo(`Test the active proxy route for '${project.id}' without starting a model?`))) return;
+  header(settings); console.log(chalk.bold('PROXY TEST')); console.log(rule); console.log(`  Project  ${project.id}`); console.log(chalk.gray('  Testing HTTPS CONNECT through the active route…')); console.log(rule);
+  const args = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-ProxyTest'];
+  try { await execute('pwsh.exe', args, root, true); } catch (error) { console.log(chalk.red(error.message)); }
+  return pause();
 }
 async function developmentMenu(settings) {
-  const command = await pick('Development', [{ name: 'One iteration', value: 'once' }, { name: 'Dry run', value: 'dry-run' }, { name: 'Continuous', value: 'continuous' }, { name: 'Active instances', value: 'instances' }]);
+  const command = await pick('Development', [{ name: 'One iteration', value: 'once' }, { name: 'Dry run', value: 'dry-run' }, { name: 'Continuous', value: 'continuous' }, { name: 'Active instances', value: 'instances' }, { name: 'Proxy test', value: 'proxy-test' }]);
   if (!command) return; if (command === 'instances') return instancesMenu();
+  if (command === 'proxy-test') { const project = await chooseProject(settings); if (project) await testProxyForProject(settings, project); return; }
   const selected = await chooseDevelopmentProject(settings); if (!selected) return;
   const target = await chooseDevelopmentTarget(); if (!target) return;
   const maxIterations = command === 'continuous' ? await chooseRunIterationLimit() : 1;
@@ -597,22 +582,21 @@ async function editProject(settings, project, isNew = false) {
   if (!profileId && profiles.length) return;
   const updated = { id, path: projectPath, branch, roadmap, progress, defaultProfileId: profileId || '' };
   if (isNew) projects.push(updated); else Object.assign(project, updated);
-  settings.activeProjectId = id; await save(settings); console.log(chalk.green(`Project '${id}' saved and selected.`)); return pause();
+  await save(settings); console.log(chalk.green(`Project '${id}' saved.`)); return pause();
 }
 async function projectsMenu(settings) {
   while (true) {
     header(settings); console.log(chalk.bold('PROJECTS')); const projects = normalizeProjects(settings);
-    const action = await pick('Select a project or manage its configuration', [
-      ...projects.map(project => { const profile = (settings.openCode.profiles || []).find(item => item.id === project.defaultProfileId); return { name: `${project.id === settings.activeProjectId ? chalk.green('●') : ' '} ${project.id}  ${chalk.gray(`— ${profile?.model || 'no default profile'}`)}`, value: `project:${project.id}` }; }),
+    const action = await pick('Manage project configuration', [
+      ...projects.map(project => { const profile = (settings.openCode.profiles || []).find(item => item.id === project.defaultProfileId); return { name: `${project.id}  ${chalk.gray(`— ${profile?.model || 'no default profile'}`)}`, value: `project:${project.id}` }; }),
       { name: chalk.cyan('+ Add project'), value: 'add' }
     ]);
     if (!action) return;
     if (action === 'add') { await editProject(settings, { path: '', branch: '', roadmap: '', progress: '' }, true); continue; }
     const project = projects.find(item => item.id === action.slice('project:'.length)); if (!project) continue;
     const detail = await pick(`Project: ${project.id}`, [
-      { name: project.id === settings.activeProjectId ? '● Selected project' : 'Use this project', value: 'use' }, { name: 'Edit project configuration', value: 'edit' }, { name: chalk.red('Remove project configuration'), value: 'remove' }
+      { name: 'Edit project configuration', value: 'edit' }, { name: chalk.red('Remove project configuration'), value: 'remove' }
     ]);
-    if (detail === 'use') { settings.activeProjectId = project.id; await save(settings); console.log(chalk.green(`Selected '${project.id}'.`)); await pause(); }
     if (detail === 'edit') await editProject(settings, project);
     if (detail === 'remove') {
       if (projects.length === 1) { console.log(chalk.yellow('Keep at least one project configured.')); await pause(); continue; }
@@ -623,15 +607,17 @@ async function projectsMenu(settings) {
   }
 }
 async function reportsMenu(settings) {
-  const project = selectedProject(settings); if (!project) return pause(); const latest = await latestIterationSummary(settings, project, configPath); const reports = await dailyReports(settings, project, configPath);
-  header(settings); console.log(chalk.bold('REPORTS')); if (latest) {
-    const result = Number(latest.exitCode) === 0 && !latest.stoppedReason ? chalk.green('successful') : chalk.yellow(latest.stoppedReason || `exit ${latest.exitCode}`);
-    console.log(`  Last run     ${latest.id || 'unknown'}  ${result}`); console.log(`  Finished     ${latest.ended || 'unknown'}`); console.log(`  Tasks        ${(latest.completedTaskIds || []).join(', ') || 'none'}`); console.log(`  Files        code ${latest.codeFilesChanged || 0} · tests ${latest.testFilesChanged || 0} · docs ${latest.documentationFilesChanged || 0}`); console.log(`  Cost/tokens  ${latest.costDeltaUSD == null ? 'not available' : `$${Number(latest.costDeltaUSD).toFixed(4)}`} · ${latest.totalTokensAfter == null ? 'n/a' : Number(latest.totalTokensAfter).toLocaleString('en-US')}`);
-  } else console.log(chalk.gray('  No iteration summaries are available for this project.'));
-  console.log(`  Daily reports ${reports.length ? reports.slice(0, 5).join(', ') : 'none'}`);
-  const action = await pick('Reports', [{ name: 'Generate current daily report', value: 'report' }, { name: 'Show runner status', value: 'status' }]); if (!action) return;
-  const flag = action === 'report' ? '-Report' : '-Status'; const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, flag];
-  try { await execute('pwsh.exe', runnerArgs, root, true); } catch (error) { console.log(chalk.yellow(`Report command ended: ${error.message}`)); } return pause();
+  const projects = normalizeProjects(settings);
+  const rows = await Promise.all(projects.map(async project => ({ project, latest: await latestIterationSummary(settings, project, configPath), reports: await dailyReports(settings, project, configPath) })));
+  header(settings); console.log(chalk.bold('REPORTS · ALL PROJECTS')); console.log(rule);
+  if (!rows.length) console.log(chalk.gray('  No projects are configured.'));
+  for (const row of rows) {
+    const latest = row.latest;
+    const result = !latest ? chalk.gray('no iterations') : Number(latest.exitCode) === 0 && !latest.stoppedReason ? chalk.green('successful') : chalk.yellow(latest.stoppedReason || `exit ${latest.exitCode}`);
+    console.log(`  ${chalk.bold(row.project.id)}  ${result}  ${chalk.gray(latest?.ended || 'no completed run')}`);
+    console.log(`    Daily reports: ${row.reports.length ? row.reports.slice(0, 3).join(', ') : 'none'}`);
+  }
+  console.log(rule); return pause();
 }
 async function editProxyRoute(settings, route = null) {
   const current = route || { id: crypto.randomUUID(), name: '', protocol: 'http', host: '', port: 8080, username: '', passwordProtected: '', caFile: '', noProxy: [] };
@@ -652,10 +638,9 @@ async function proxyRoutesMenu(settings) {
   while (true) {
     const proxy = normalizeProxy(settings); const active = activeProxyRoute(settings);
     header(settings); console.log(chalk.bold('PROXY ROUTES')); console.log(`  Active  ${active ? redactedRoute(active) : 'Direct (no proxy)'}\n`);
-    const choice = await pick('Select or manage a route', [{ name: `${proxy.activeRouteId === DIRECT_ROUTE_ID ? '●' : ' '} Direct`, value: DIRECT_ROUTE_ID }, ...proxy.routes.map(route => ({ name: `${route.id === proxy.activeRouteId ? '●' : ' '} ${route.name}  ${chalk.gray(redactedRoute(route))}`, value: route.id })), { name: chalk.cyan('+ Add proxy route'), value: 'add' }, { name: 'Test active route', value: 'test' }]);
+    const choice = await pick('Select or manage a route', [{ name: `${proxy.activeRouteId === DIRECT_ROUTE_ID ? '●' : ' '} Direct`, value: DIRECT_ROUTE_ID }, ...proxy.routes.map(route => ({ name: `${route.id === proxy.activeRouteId ? '●' : ' '} ${route.name}  ${chalk.gray(redactedRoute(route))}`, value: route.id })), { name: chalk.cyan('+ Add proxy route'), value: 'add' }]);
     if (!choice) return;
     if (choice === 'add') { await editProxyRoute(settings); continue; }
-    if (choice === 'test') { const project = selectedProject(settings); const args = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-ProxyTest']; try { await execute('pwsh.exe', args, root, true); } catch (error) { console.log(chalk.red(error.message)); } await pause(); continue; }
     if (choice === DIRECT_ROUTE_ID) { proxy.activeRouteId = DIRECT_ROUTE_ID; await save(settings); console.log(chalk.green('Direct route selected.')); await pause(); continue; }
     const route = proxy.routes.find(item => item.id === choice); const action = await pick(`Proxy route: ${route.name}`, [{ name: 'Use this route', value: 'use' }, { name: 'Edit route', value: 'edit' }, { name: chalk.red('Delete route'), value: 'delete' }]);
     if (action === 'use') { proxy.activeRouteId = route.id; await save(settings); console.log(chalk.green(`Selected ${route.name}.`)); await pause(); }
@@ -669,13 +654,10 @@ async function systemMenu(settings) {
   if (action === 'proxy') return proxyRoutesMenu(settings);
   if (action === 'config') { console.log(`\n${configPath}`); return pause(); }
   if (action === 'diagnostics') {
-    header(settings); console.log(chalk.bold('SYSTEM DIAGNOSTICS')); const project = selectedProject(settings); const checks = [];
+    header(settings); console.log(chalk.bold('SYSTEM DIAGNOSTICS')); const checks = [];
     checks.push({ label: 'Configuration', ok: true, detail: configPath });
-    try { await fs.stat(project?.path || ''); checks.push({ label: 'Project directory', ok: true, detail: project.path }); } catch { checks.push({ label: 'Project directory', ok: false, detail: project?.path || 'not configured' }); }
-    try { const branch = (await execute('git', ['-C', project.path, 'branch', '--show-current'])).trim(); checks.push({ label: 'Git branch', ok: branch === project.branch, detail: branch || 'detached HEAD' }); } catch { checks.push({ label: 'Git branch', ok: false, detail: 'Git is not available for this project' }); }
-    for (const [label, file] of [['Roadmap', project?.roadmap], ['Progress file', project?.progress]]) {
-      try { await fs.access(path.join(project.path, file)); checks.push({ label, ok: true, detail: file }); } catch { checks.push({ label, ok: false, detail: file || 'not configured' }); }
-    }
+    checks.push({ label: 'Configured projects', ok: normalizeProjects(settings).length > 0, detail: `${normalizeProjects(settings).length}` });
+    try { const executable = await resolveCommand('pwsh.exe'); checks.push({ label: 'PowerShell', ok: true, detail: executable }); } catch (error) { checks.push({ label: 'PowerShell', ok: false, detail: error.message }); }
     try { const executable = await resolveCommand(settings.openCodeCommand || 'opencode'); checks.push({ label: 'OpenCode command', ok: true, detail: executable }); } catch (error) { checks.push({ label: 'OpenCode command', ok: false, detail: error.message }); }
     for (const check of checks) console.log(`  ${check.ok ? chalk.green('✓') : chalk.red('×')} ${chalk.bold(check.label)}  ${check.detail}`);
     return pause();

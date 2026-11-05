@@ -804,7 +804,7 @@ function Rotate-Reports([string]$DataDirectory, $Settings) {
 }
 
 $cfg = Get-Content -LiteralPath $Config -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 40
-if ([int]$cfg.schemaVersion -notin @(1,2,3,4,5,6,7)) { throw 'Unsupported terra-config.json schemaVersion.' }
+if ([int]$cfg.schemaVersion -notin @(1,2,3,4,5,6,7,8)) { throw 'Unsupported terra-config.json schemaVersion.' }
 $projectConfig = @($cfg.projects | Where-Object { $_.id -eq $Project })
 if ($projectConfig.Count -ne 1) { throw "Expected exactly one project with id '$Project'." }
 $projectConfig = $projectConfig[0]

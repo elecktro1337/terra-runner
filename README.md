@@ -1,4 +1,4 @@
-# Terra Runner 2.1
+# Terra Runner 2.2
 
 Terra Runner is a local Windows orchestrator for controlled OpenCode development. The central application manages projects, profiles, models, proxy routes and running workspaces; a development command can run in the main window or in a separate project terminal.
 
@@ -18,11 +18,7 @@ Normal settings and state live in `%LOCALAPPDATA%\TerraRunner`. `-Portable` keep
 
 ## What the UI shows
 
-The header identifies the selected project, branch, account type, model, reasoning level, provider snapshot, limits, and roadmap progress:
-
-- total, completed, and remaining roadmap tasks;
-- completed percentage;
-- API cost-estimate status when enabled.
+The central header contains only global profile and account information. A project is selected explicitly only from Development, where the selected project and its default profile are shown before confirmation. Reports is an all-project read-only summary.
 
 During a run, Terra Runner shows the selected roadmap task, safe live activity (inspection, file changes, Git, or verification), elapsed time for the current iteration, tool/check counts, and a checkpoint after every completed iteration. It does not display model reasoning text.
 
@@ -46,7 +42,7 @@ This is explicitly an estimate, not the provider's actual balance. It may includ
 
 ## Running development
 
-The main menu is **Development**, **Projects**, **Models & accounts**, **Reports**, **System**, and **Exit**. In **Development**, choose **One iteration**, **Dry run**, **Continuous**, or **Active instances**. A launch always follows command → project → run mode → (continuous parameters) → confirmation.
+The main menu is **Development**, **Projects**, **Models & accounts**, **Reports**, **System**, and **Exit**. In **Development**, choose **One iteration**, **Dry run**, **Continuous**, **Active instances**, or **Proxy test**. A development launch always follows command → project → run mode → (continuous parameters) → confirmation.
 
 Choose **Development → One iteration** for one explicit agent run. **Main window** keeps live progress and the selected profile's normal safety limits. **Dispatcher instance** opens the project in a separate terminal immediately with the selected command snapshot; it retains project locks, isolated OpenCode storage and proxy scope, but intentionally has no Terra budget, quota, or reservation checks.
 
@@ -57,7 +53,7 @@ For **Run continuously**, choose the iteration limit at launch:
 
 The continuous launch also asks whether to use the provider snapshot guard. It is on by default. Disabling it is a temporary, clearly labelled override for that run; it bypasses provider snapshot freshness and threshold checks only. Other runner safety checks remain active.
 
-While a run is active:
+Before every main-window run, including **Dry run**, a missing or stale provider snapshot is requested directly and the original command continues after it is saved. While a run is active, the terminal keeps its status and controls in a fixed two-line footer:
 
 - `S` or `Ctrl+C` requests a stop after the current iteration.
 - `X` requests an emergency stop of the current iteration.
@@ -87,11 +83,12 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester .\tests\TerraRun
 
 The test suites use local mocks and temporary repositories. They make no paid OpenCode requests.
 
-## Upgrade to 2.1
+## Upgrade to 2.2
 
-On first dispatcher start, configuration is migrated to schema v7. Existing
+On first dispatcher start, configuration is migrated to schema v8. Existing
 profiles are attached to a `Legacy shared OpenCode` storage and selected as the
-default profile for existing projects. Create an isolated authentication storage,
+default profile for existing projects. The obsolete global selected-project value
+is removed. Create an isolated authentication storage,
 sign in through the dispatcher, then assign it to each cloud profile before
 running multiple cloud projects in parallel.
 

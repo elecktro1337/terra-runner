@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyProfile, isLocalModel, migrateProfiles, policyFor, profileFrom, splitModelVariant } from '../lib/profiles.mjs';
-import { activeProject, validateProjectId } from '../lib/projects.mjs';
+import { normalizeProjects, validateProjectId } from '../lib/projects.mjs';
 import { projectDataRoot } from '../lib/reports.mjs';
 import { DIRECT_ROUTE_ID, activeProxyRoute, noProxyValue, normalizeProxy, validateProxyRoute } from '../lib/proxy.mjs';
 
@@ -89,9 +89,10 @@ test('creates snapshots for cloud profiles without storing credentials', () => {
   assert.equal(api.usageSource.kind, 'snapshot');
   assert.equal(local.usageSource.kind, 'none');
 });
-test('keeps an explicit active project and validates project IDs', () => {
+test('removes the obsolete global active project and validates project IDs', () => {
   const settings = { activeProjectId: 'b', projects: [{ id: 'a' }, { id: 'b' }] };
-  assert.equal(activeProject(settings).id, 'b');
+  assert.deepEqual(normalizeProjects(settings), settings.projects);
+  assert.equal('activeProjectId' in settings, false);
   assert.match(validateProjectId('bad id', settings.projects), /Use/);
   assert.match(validateProjectId('a', settings.projects), /already exists/);
 });

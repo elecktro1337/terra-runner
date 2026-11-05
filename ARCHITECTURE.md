@@ -1,10 +1,10 @@
-# Terra Runner 2.1 architecture
+# Terra Runner 2.2 architecture
 
 ## Dispatcher and project workspaces
 
 `node-ui/index.mjs` is the central dispatcher. It owns a heartbeat and a
-non-secret runtime registry beside `terra-config.json`. Development first
-selects a command, then a project and a run mode. Main-window mode invokes the
+non-secret runtime registry beside `terra-config.json`. It has no global active
+project: Development first selects a command, then a project and a run mode. Main-window mode invokes the
 runner directly; dispatcher-instance mode writes an immutable command snapshot
 and starts `node-ui/instance.mjs` in a separate terminal.
 
@@ -30,13 +30,13 @@ Terra Runner separates presentation, execution, and persistent project evidence.
 
 ## Run flow
 
-1. Node UI selects the project's default profile and command snapshot. In main-window mode it validates the required provider snapshot, unless the user explicitly disables that guard for one continuous run.
+1. Node UI selects the project's default profile and command snapshot. In main-window mode it validates the required provider snapshot for one iteration, continuous runs and dry runs.
 2. Node UI invokes `terra-runner.ps1` with the explicit project and profile parameters; it does not change the global selected profile.
 3. The runner validates the project, Git branch, clean working tree, remote state and control flags. It validates limits only for main-window runs.
 4. The runner emits compact `__TERRA_UI__` telemetry records only when requested by the Node UI.
 5. Node reads safe tool-event metadata from the raw JSONL stream to render activity and verification counts. It does not render model reasoning content.
 6. The runner writes immutable per-iteration JSON summaries and raw/readable event logs under the stable project ID.
-7. Node renders checkpoints during continuous execution and aggregates the new summaries at completion.
+7. Node renders checkpoints during continuous execution and keeps live status plus Stop/Abort controls in a fixed terminal footer; it aggregates new summaries at completion.
 
 ## State boundaries
 

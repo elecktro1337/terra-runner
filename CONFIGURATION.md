@@ -1,13 +1,15 @@
 # Configuration reference
 
-Terra Runner 2.1 stores normal configuration and runtime state in `%LOCALAPPDATA%\TerraRunner`. Use `-Portable` to keep state beside the installation.
+Terra Runner 2.2 stores normal configuration and runtime state in `%LOCALAPPDATA%\TerraRunner`. Use `-Portable` to keep state beside the installation.
 
 ## Dispatcher runtime and isolated OpenCode storage
 
-Schema v7 includes `projects[].defaultProfileId` and `openCode.stores[]` with
+Schema v8 includes `projects[].defaultProfileId` and `openCode.stores[]` with
 `profiles[].authStoreId`. Runtime instance records, heartbeats and addressable
 controls live next to the configuration under `runtime/`; they contain no
 provider secrets or Terra budget/quota values.
+
+There is no global selected project. The legacy `activeProjectId` is removed on save; Development explicitly selects a project for each launch.
 
 An isolated store's OpenCode SQLite database is kept under
 `opencode-stores/<store-id>/opencode.db` and is selected only through the
@@ -36,7 +38,7 @@ The Node UI imports accounts through `opencode auth list --format json` and mode
 
 A snapshot is a user-reported provider observation. It contains a unit (`usd` or `percent`), remaining amount, observation time, and a maximum acceptable age. It is not a provider API result.
 
-For profiles using a snapshot guard, a main-window run fails closed when the snapshot is missing or stale. The UI asks for a fresh value immediately before that run rather than requiring manual JSON editing. Dispatcher instances do not read, write, or validate Terra budget or quota state.
+For profiles using a snapshot guard, a main-window run, including dry run, fails closed when the snapshot is missing or stale. The UI asks for a fresh value immediately before that run rather than requiring manual JSON editing. Dispatcher instances do not read, write, or validate Terra budget or quota state.
 
 For a continuous run only, the user may disable the provider snapshot guard. This temporary override bypasses provider snapshot freshness and threshold checks; it does not bypass Git, timeout, no-progress, error, or manual stop safeguards.
 
