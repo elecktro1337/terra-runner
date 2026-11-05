@@ -11,7 +11,7 @@ import chalk from 'chalk';
 import figlet from 'figlet';
 import { clearInstanceControls, instanceRunnerFailure, readCoordinatorHeartbeat, readInstance, requestInstanceControl, updateInstance } from './lib/runtime.mjs';
 import { activeProxyRoute } from './lib/proxy.mjs';
-import { LiveFooter, LiveStatusBlock } from './lib/live-footer.mjs';
+import { LiveFooter, LiveHeaderBlock, LiveStatusBlock } from './lib/live-footer.mjs';
 import { developmentHeaderRows } from './lib/run-display.mjs';
 import { readRoadmapProgress } from './lib/roadmap.mjs';
 import { completedIterationText } from './lib/iteration-history.mjs';
@@ -57,9 +57,11 @@ function globalHeader(settings, subtitle = 'PROJECT INSTANCE') {
 }
 function renderRunHeader(settings, project, profile, command, roadmap) {
   clear();
-  const rows = [chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' })), chalk.gray('RUNNER  v2.4  ·  Active development run  ·  Dispatcher instance'), rule, ...developmentHeaderRows({ project, profile, command, roadmap, includeTerraLimits: false }), rule];
+  const prefix = [chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' })), chalk.gray('RUNNER  v2.4  ·  Active development run  ·  Dispatcher instance'), rule];
+  const dynamic = developmentHeaderRows({ project, profile, command, roadmap, includeTerraLimits: false, run: { elapsedSeconds: 0, lastTask: '', lastCommit: null } });
+  const rows = [...prefix, ...dynamic, rule];
   for (const row of rows) console.log(row);
-  return rows.reduce((count, row) => count + String(row).split(/\r?\n/).length, 0);
+  return { statusRow: rows.reduce((count, row) => count + String(row).split(/\r?\n/).length, 0), liveHeaderRow: prefix.reduce((count, row) => count + String(row).split(/\r?\n/).length, 0), command };
 }
 async function pick(message, choices) { try { return await select({ message, choices: [...choices, { name: '← Back', value: null }], loop: false }); } catch (error) { if (error?.name === 'ExitPromptError') return null; throw error; } }
 async function load() { const [settings, instance] = await Promise.all([fs.readFile(configPath, 'utf8').then(JSON.parse), readInstance(configPath, instanceId)]); if (!instance) throw new Error('The dispatcher instance record no longer exists.'); const project = (settings.projects || []).find(item => item.id === instance.projectId); if (!project) throw new Error(`Project '${instance.projectId}' was removed from the configuration.`); return { settings, instance, project }; }
@@ -97,21 +99,23 @@ async function run(mode, limit = 1) {
   await clearInstanceControls(configPath, instanceId); await safeUpdate({ state: 'starting', runnerPid: null, activity: 'Preparing OpenCode', runStartedAt });
   const command = mode === 'continuous' ? `Run continuously${limit ? ` for up to ${limit} iteration(s)` : ''}` : 'Run one iteration';
   const roadmap = await readRoadmapProgress(project);
-  const statusRow = renderRunHeader(settings, project, instance.profile || {}, command, roadmap);
-  const footer = new LiveFooter(process.stdout, controls); const status = new LiveStatusBlock(process.stdout, statusRow, 1);
-  const liveAttached = footer.enabled && status.enabled; let frame = 0; const frames = ['-', '\\', '|', '/']; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration'; let detail = 'Waiting for runner events…'; let iterationStarted = Date.now(); let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let control = ''; let controlNotice = ''; const completedIterations = [];
+  const header = renderRunHeader(settings, project, instance.profile || {}, command, roadmap);
+  const footer = new LiveFooter(process.stdout, controls); const status = new LiveStatusBlock(process.stdout, header.statusRow, 1); const liveHeader = new LiveHeaderBlock(process.stdout, header.liveHeaderRow);
+  const liveAttached = footer.enabled && status.enabled; let frame = 0; const frames = ['-', '\\', '|', '/']; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration'; let detail = 'Waiting for runner events…'; let iterationStarted = Date.now(); let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let selectedTask = ''; let control = ''; let controlNotice = ''; let liveRoadmap = roadmap; let lastTask = ''; let lastCommit = null; const completedIterations = [];
   const statusText = () => `${chalk.cyan(frames[frame++ % frames.length])} ${stage} · ${durationText(Date.now() - iterationStarted)}`;
   const renderStatus = () => status.render(statusText(), detail, completedIterations, controlNotice);
-  if (liveAttached) { process.stdout.write('\x1b[?25l'); renderStatus(); footer.render(); }
+  const renderHeader = () => liveHeader.render([...developmentHeaderRows({ project, profile: instance.profile || {}, command: header.command, roadmap: liveRoadmap, includeTerraLimits: false, run: { elapsedSeconds: (Date.now() - runStartedAt) / 1000, lastTask, lastCommit } }), rule]);
+  if (liveAttached) { process.stdout.write('\x1b[?25l'); renderHeader(); renderStatus(); footer.render(); }
   else { console.log(`  ${statusText()}`); console.log(`  ${controls}`); }
   const paint = liveAttached ? setInterval(renderStatus, 180) : null;
-  const onResize = () => { renderStatus(); footer.render(); };
+  const headerUpdate = liveAttached ? setInterval(renderHeader, 1000) : null;
+  const onResize = () => { renderHeader(); renderStatus(); footer.render(); };
   if (liveAttached) process.stdout.on('resize', onResize);
   const eventWatch = setInterval(async () => {
     if (!eventFile) return;
     try {
       const lines = (await fs.readFile(eventFile, 'utf8')).split(/\r?\n/).filter(Boolean);
-      for (const line of lines.slice(eventLines)) { try { const event = JSON.parse(line); const task = selectedRoadmapTaskFromEvent(event); if (task) detail = `Task: ${task}`; const next = activityFromEvent(event); if (next) { toolCount++; if (next === 'Running verification') checkCount++; activity = next; } } catch { } }
+      for (const line of lines.slice(eventLines)) { try { const event = JSON.parse(line); const task = selectedRoadmapTaskFromEvent(event); if (task) { selectedTask = task; detail = `Task: ${task}`; } const next = activityFromEvent(event); if (next) { toolCount++; if (next === 'Running verification') checkCount++; activity = next; } } catch { } }
       eventLines = lines.length;
       if (activity) stage = `${iterationLabel ? `${iterationLabel} | ` : ''}${activity}${toolCount ? ` | tools ${toolCount}${checkCount ? ` | checks ${checkCount}` : ''}` : ''}`;
     } catch { }
@@ -128,11 +132,11 @@ async function run(mode, limit = 1) {
       if (!line.startsWith('__TERRA_UI__')) continue;
       try {
         const event = JSON.parse(line.slice('__TERRA_UI__'.length));
-        if (event.type === 'iteration-started') { eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; iterationStarted = Date.now(); iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`; stage = `${iterationLabel} | selecting actionable task | ${event.pending} tasks pending`; detail = 'Selecting next actionable roadmap task…'; }
+        if (event.type === 'iteration-started') { eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; selectedTask = ''; iterationStarted = Date.now(); iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`; stage = `${iterationLabel} | selecting actionable task | ${event.pending} tasks pending`; detail = 'Selecting next actionable roadmap task…'; }
         if (event.type === 'recovery-finished') { stage = 'Recovered interrupted Terra work'; detail = `Recovery commit ${event.recoveryCommit || 'created and pushed'}`; }
         if (event.type === 'network-waiting') { stage = `Waiting for ${event.source || 'network'} connection`; detail = `Retry ${event.attempt || 1}; next check in ${event.delaySeconds || '?'}s`; }
         if (event.type === 'iteration-heartbeat') { stage = `Iteration ${event.iteration} | working`; }
-        if (event.type === 'iteration-finished') { completedIterations.push(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`); stage = control ? 'Finalizing requested stop' : 'Preparing next iteration'; detail = ''; }
+        if (event.type === 'iteration-finished') { completedIterations.push(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`); lastTask = (Array.isArray(event.completedTaskIds) && event.completedTaskIds.find(Boolean)) || selectedTask || event.taskId || lastTask; lastCommit = Array.isArray(event.commits) ? event.commits[0] || lastCommit : lastCommit; stage = control ? 'Finalizing requested stop' : 'Preparing next iteration'; detail = ''; void readRoadmapProgress(project).then(next => { liveRoadmap = next; if (liveAttached) renderHeader(); }); if (liveAttached) renderHeader(); }
         const instanceActivity = event.type === 'iteration-heartbeat' ? `Iteration ${event.iteration}: ${event.elapsedSeconds}s` : event.type === 'network-waiting' ? `Waiting for ${event.source || 'network'} connection` : event.type;
         await safeUpdate({ state: 'running', activity: instanceActivity, iteration: event.iteration ?? null });
       } catch { }
@@ -150,7 +154,7 @@ async function run(mode, limit = 1) {
     const safetyStopped = code === 0 && Boolean(summaryAfter?.stoppedReason) && summaryAfter.stoppedReason !== 'roadmap-complete';
     await safeUpdate({ state: aborted ? 'aborted' : stopped || safetyStopped ? 'stopped' : code === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', error: failed ? instanceRunnerFailure(stderr, code) : '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? 'Graceful stop completed.' : code === 0 ? normalReason : `runner exit ${code}` });
   }).catch(async error => { await safeUpdate({ state: 'failed', runnerPid: null, error: error.message, activity: '' }); }).finally(() => {
-    if (paint) clearInterval(paint); clearInterval(eventWatch); if (liveAttached) process.stdout.off('resize', onResize); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h');
+    if (paint) clearInterval(paint); if (headerUpdate) clearInterval(headerUpdate); clearInterval(eventWatch); if (liveAttached) process.stdout.off('resize', onResize); liveHeader.clear(); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h');
   });
   if (process.stdin.isTTY) { process.stdin.off('data', keyHandler); process.stdin.setRawMode?.(false); }
 }

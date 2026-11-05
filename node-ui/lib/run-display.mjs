@@ -9,7 +9,21 @@ export function profileSnapshotSummary(profile = {}, now = Date.now()) {
   const age = Number.isFinite(observed) ? `${Math.max(0, (now - observed) / 60000).toFixed(0)} min ago` : 'not recorded';
   return { value, age };
 }
-export function developmentHeaderRows({ project, profile, command, roadmap = {}, limitText = '', includeTerraLimits = true, now = Date.now() }) {
+function durationText(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
+}
+function compact(value, maximum = 44) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > maximum ? `${text.slice(0, Math.max(0, maximum - 1)).trimEnd()}…` : text;
+}
+function commitText(commit) {
+  if (!commit) return '—';
+  const hash = typeof commit === 'object' ? commit.hash : String(commit).split(/\s+/, 1)[0];
+  const subject = typeof commit === 'object' ? commit.subject : '';
+  return `${String(hash || '').slice(0, 12)}${subject ? `  ${compact(subject)}` : ''}` || '—';
+}
+export function developmentHeaderRows({ project, profile, command, roadmap = {}, limitText = '', includeTerraLimits = true, run = null, now = Date.now() }) {
   const snapshot = profileSnapshotSummary(profile, now);
   const account = profile.credentialLabel || (profile.policy === 'local' ? 'Local inference' : 'not selected');
   const type = profile.policy === 'api' ? 'API' : profile.policy === 'oauth-managed' ? 'OAuth' : 'LOCAL';
@@ -27,5 +41,6 @@ export function developmentHeaderRows({ project, profile, command, roadmap = {},
     `  ${chalk.bold.cyan('Profile')}   ${chalk.white(account)} ${chalk.gray(`(${type})`)}  ${chalk.gray('│')}  ${chalk.cyan(profile.model || 'not selected')}  ${chalk.gray('│')}  ${chalk.bold('Reasoning')} ${chalk.magenta(reasoning)}`
   ];
   if (includeTerraLimits) rows.push(`  ${chalk.bold.cyan('Snapshot')}  ${chalk.yellow(snapshot.value)}${snapshot.age ? chalk.gray(`  │  ${snapshot.age}`) : ''}  ${chalk.gray('│')}  ${chalk.bold.cyan('Limits')}  ${chalk.yellow(limits)}  ${chalk.gray('│')}  OpenCode ${chalk.white(estimate)}`);
+  if (run) rows.push(`  ${chalk.bold.cyan('Run')}       ${chalk.white(durationText(run.elapsedSeconds))}  ${chalk.gray('│')}  ${chalk.bold.cyan('Last task')}  ${chalk.cyan(run.lastTask || '—')}  ${chalk.gray('│')}  ${chalk.bold.cyan('Last commit')}  ${chalk.gray(commitText(run.lastCommit))}`);
   return rows;
 }

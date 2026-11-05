@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Refresh the live Development header with roadmap counts, run duration, last task, and last commit after every iteration.
 - Close the dispatcher terminal window when its project-instance Node process exits instead of leaving a `cmd` prompt behind.
 - Live Development now waits for an explicit worker task-selection marker instead of labelling every iteration with the first unchecked roadmap item.
 - Permit a new or edited project-instructions file as the sole local Git change; the worker commits that unchanged file separately before task work.

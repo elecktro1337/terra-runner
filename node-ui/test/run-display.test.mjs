@@ -36,3 +36,10 @@ test('omits Terra-only snapshot and limit fields for a dispatcher instance', () 
   assert.match(rows, /OpenAI \(API\).*openai\/gpt.*Reasoning medium/);
   assert.doesNotMatch(rows, /Snapshot|Limits|OpenCode/);
 });
+
+test('includes live run duration, last task, and last commit when supplied', () => {
+  const rows = developmentHeaderRows({ project, profile: { policy: 'local', model: 'local/test' }, command: 'Run continuously', run: { elapsedSeconds: 367, lastTask: 'NTD-0146', lastCommit: { hash: 'abc123456789def', subject: 'feat(checkin): issue confirmation token' } } }).join('\n');
+  assert.match(rows, /Run\s+6m 07s/);
+  assert.match(rows, /Last task\s+NTD-0146/);
+  assert.match(rows, /Last commit\s+abc123456789.*issue confirmation token/);
+});

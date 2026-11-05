@@ -14,7 +14,7 @@ import { DEFAULT_PROJECT_INSTRUCTIONS, normalizeProjects, validateProjectId, val
 import { dailyReports, latestIterationSummary, iterationSummariesSince, projectDataRoot } from './lib/reports.mjs';
 import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, redactedRoute, validateProxyRoute } from './lib/proxy.mjs';
 import { authStorePath, canFinalizeStalledInstance, cleanupLegacyReservations, clearTerminalInstances, createInstance, deleteTerminalInstance, isTerminalInstance, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
-import { LiveFooter, LiveStatusBlock } from './lib/live-footer.mjs';
+import { LiveFooter, LiveHeaderBlock, LiveStatusBlock } from './lib/live-footer.mjs';
 import { selectedRoadmapTaskFromEvent } from './lib/task-selection.mjs';
 import { developmentHeaderRows } from './lib/run-display.mjs';
 import { readRoadmapProgress } from './lib/roadmap.mjs';
@@ -155,25 +155,28 @@ function showRunnerFailure(output) {
   console.log(`\n${chalk.red.bold(title)}`); console.log(rule);
   console.log(`  ${chalk.bold('Reason')}  ${reason}`); if (detail) console.log(`  ${chalk.bold('Detail')}  ${detail.slice(0, 360)}`); console.log(`  ${chalk.bold('Next step')} ${action}`); console.log(rule);
 }
-async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
+async function runWithTui(runnerArgs, settings, project, profile, mode, header) {
   const executable = await resolveCommand('pwsh.exe');
   const previousSummaryId = (await latestIterationSummary(settings, project, configPath))?.id || '';
   const started = Date.now(); let iterationStarted = started; let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing continuous development' : mode === 'dry-run' ? 'Preparing dry run' : 'Preparing iteration';
-  let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let control = ''; let checkpoint = ''; let controlNotice = ''; const completedIterations = [];
+  let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let selectedTask = ''; let control = ''; let checkpoint = ''; let controlNotice = ''; let liveRoadmap = await readRoadmapProgress(project); let lastTask = ''; let lastCommit = null; const completedIterations = [];
   const interactive = Boolean(process.stdin.isTTY);
   const controls = chalk.gray('Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop');
   const footer = new LiveFooter(process.stdout, controls);
-  const status = new LiveStatusBlock(process.stdout, statusRow, 1);
+  const status = new LiveStatusBlock(process.stdout, header.statusRow, 1);
+  const liveHeader = new LiveHeaderBlock(process.stdout, header.liveHeaderRow);
   const spinnerFrames = ['-', '\\', '|', '/']; let frame = 0;
   const statusText = () => `${chalk.cyan(spinnerFrames[frame++ % spinnerFrames.length])} ${stage} · ${durationText(Date.now() - iterationStarted)}`;
   const renderStatus = () => status.render(statusText(), checkpoint, completedIterations, controlNotice);
+  const renderHeader = () => liveHeader.render([...developmentHeaderRows({ project, profile, command: header.command, roadmap: liveRoadmap, limitText: limitSummary(profile), run: { elapsedSeconds: (Date.now() - started) / 1000, lastTask, lastCommit } }), rule]);
   const footerAttached = footer.enabled;
   const statusAttached = status.enabled;
   const liveAttached = footerAttached && statusAttached;
-  if (liveAttached) { process.stdout.write('\x1b[?25l'); renderStatus(); footer.render(); }
+  if (liveAttached) { process.stdout.write('\x1b[?25l'); renderHeader(); renderStatus(); footer.render(); }
   else { console.log(`  ${statusText()}`); console.log(`  ${controls}`); }
   const update = liveAttached ? setInterval(renderStatus, 180) : null;
-  const onResize = () => { renderStatus(); footer.render(); };
+  const headerUpdate = liveAttached ? setInterval(renderHeader, 1000) : null;
+  const onResize = () => { renderHeader(); renderStatus(); footer.render(); };
   if (liveAttached) process.stdout.on('resize', onResize);
   const liveUpdate = setInterval(async () => {
     if (!eventFile) return;
@@ -183,7 +186,7 @@ async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
         try {
           const event = JSON.parse(line);
           const task = selectedRoadmapTaskFromEvent(event);
-          if (task) checkpoint = `Task: ${task}`;
+          if (task) { selectedTask = task; checkpoint = `Task: ${task}`; }
           const next = activityFromEvent(event); if (next) { toolCount++; if (next === 'Running verification') checkCount++; activity = next; }
         } catch { }
       }
@@ -217,13 +220,21 @@ async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
           try {
             const event = JSON.parse(line.slice('__TERRA_UI__'.length));
             if (event.type === 'iteration-started') {
-              eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; iterationStarted = Date.now();
+              eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; selectedTask = ''; iterationStarted = Date.now();
               iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`;
               checkpoint = 'Selecting next actionable roadmap task…';
               stage = `${iterationLabel} | selecting actionable task | ${event.pending} tasks pending`;
             }
               if (event.type === 'recovery-finished') { checkpoint = `Recovered interrupted work: ${event.recoveryCommit || 'checkpoint committed and pushed'}`; stage = 'Recovered interrupted Terra work'; }
-              if (event.type === 'iteration-finished') { const completed = `${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`; completedIterations.push(completed); checkpoint = ''; stage = control ? 'Finalizing requested stop' : 'Preparing next iteration'; if (liveAttached) renderStatus(); else console.log(`  ${completed}`); }
+              if (event.type === 'iteration-finished') {
+                const completed = `${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`;
+                completedIterations.push(completed);
+                lastTask = (Array.isArray(event.completedTaskIds) && event.completedTaskIds.find(Boolean)) || selectedTask || event.taskId || lastTask;
+                lastCommit = Array.isArray(event.commits) ? event.commits[0] || lastCommit : lastCommit;
+                checkpoint = ''; stage = control ? 'Finalizing requested stop' : 'Preparing next iteration';
+                void readRoadmapProgress(project).then(next => { liveRoadmap = next; if (liveAttached) renderHeader(); });
+                if (liveAttached) { renderHeader(); renderStatus(); } else console.log(`  ${completed}`);
+              }
           } catch { }
           return;
         }
@@ -237,7 +248,7 @@ async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
       child.stderr.on('data', chunk => { stderr += chunk.toString(); });
       child.once('error', reject); child.once('close', code => resolve({ code, stdout, stderr }));
     });
-    if (update) clearInterval(update); clearInterval(liveUpdate); cleanupControls(); if (liveAttached) process.stdout.off('resize', onResize); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h'); clear();
+    if (update) clearInterval(update); if (headerUpdate) clearInterval(headerUpdate); clearInterval(liveUpdate); cleanupControls(); if (liveAttached) process.stdout.off('resize', onResize); liveHeader.clear(); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h'); clear();
     if (result.code === 0) console.log(chalk.green(`✓ Development run finished · ${durationText(Date.now() - started)}`));
     else console.log(chalk.red('x Development run could not start.'));
     const summaries = (await iterationSummariesSince(settings, project, configPath, started)).filter(summary => summary.id !== previousSummaryId);
@@ -245,7 +256,7 @@ async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
     else if (result.code !== 0) showRunnerFailure(result.stderr || result.stdout);
     return result.code === 0;
   } catch (error) {
-    if (update) clearInterval(update); clearInterval(liveUpdate); cleanupControls(); if (liveAttached) process.stdout.off('resize', onResize); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h'); clear(); console.log(chalk.red(`x Development runner could not start: ${error.message}`)); return false;
+    if (update) clearInterval(update); if (headerUpdate) clearInterval(headerUpdate); clearInterval(liveUpdate); cleanupControls(); if (liveAttached) process.stdout.off('resize', onResize); liveHeader.clear(); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h'); clear(); console.log(chalk.red(`x Development runner could not start: ${error.message}`)); return false;
   }
 }
 async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [] }; settings.openCode.accounts ||= []; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the setup wizard once or pass --config <file>. ${error.message}`); } }
@@ -297,15 +308,20 @@ function header(settings) {
 }
 function renderDevelopmentHeader(project, profile, command, roadmap) {
   clear();
+  const prefix = [chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' })), chalk.gray('RUNNER  v2.4  ·  Active development run'), rule];
+  const run = { elapsedSeconds: 0, lastTask: '', lastCommit: null };
+  const dynamic = developmentHeaderRows({ project, profile, command, roadmap, limitText: limitSummary(profile), run });
   const rows = [
-    chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' })),
-    chalk.gray('RUNNER  v2.4  ·  Active development run'),
-    rule,
-    ...developmentHeaderRows({ project, profile, command, roadmap, limitText: limitSummary(profile) }),
+    ...prefix,
+    ...dynamic,
     rule
   ];
   for (const row of rows) console.log(row);
-  return rows.reduce((total, row) => total + String(row).split(/\r?\n/).length, 0);
+  return {
+    statusRow: rows.reduce((total, row) => total + String(row).split(/\r?\n/).length, 0),
+    liveHeaderRow: prefix.reduce((total, row) => total + String(row).split(/\r?\n/).length, 0),
+    command
+  };
 }
 function numberValue(raw, fallback) { const parsed = Number(String(raw).trim().replace(',', '.')); return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback; }
 async function configureLimits(settings, profile) {
@@ -583,8 +599,8 @@ async function runInMainWindow(settings, command, project, profile, maxIteration
   if (effectiveProfile.authStoreId) args.push('-AuthStoreId', effectiveProfile.authStoreId);
   if (command === 'dry-run') args.push('-DryRun'); else { args.push('-UiEvents', '-ClearControlFlags', command === 'continuous' ? '-Continuous' : '-Once'); if (command === 'continuous') args.push(maxIterations > 0 ? '-MaxIterations' : '-UnlimitedIterations', ...(maxIterations > 0 ? [String(maxIterations)] : [])); }
   const roadmap = await readRoadmapProgress(project);
-  const statusRow = renderDevelopmentHeader(project, profile, label, roadmap);
-  await runWithTui(args, settings, project, command, statusRow); return pause();
+  const header = renderDevelopmentHeader(project, profile, label, roadmap);
+  await runWithTui(args, settings, project, profile, command, header); return pause();
 }
 async function developmentMenu(settings) {
   while (true) {

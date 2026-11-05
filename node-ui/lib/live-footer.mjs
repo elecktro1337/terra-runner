@@ -69,6 +69,16 @@ export class LiveFooter extends FixedRows {
   }
 }
 
+export class LiveHeaderBlock extends FixedRows {
+  constructor(stream, row) { super(stream, row, Number(row) + 2); }
+
+  render(rows) {
+    const values = Array.isArray(rows) ? rows : [];
+    if (Number(this.stream?.rows || 0) < this.row + values.length + 1) { this.clear(); this.enabled = false; return false; }
+    return this.renderRows(values, this.row);
+  }
+}
+
 export class LiveStatusBlock extends FixedRows {
   constructor(stream, row, reservedRows = 0) {
     super(stream, row, Number(row) + 3);
