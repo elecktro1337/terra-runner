@@ -1,33 +1,51 @@
 # Configuration reference
 
-Terra Runner 1.5 stores a normal installation in `%LOCALAPPDATA%\TerraRunner`. Use `-Portable` to keep configuration beside the scripts.
+Terra Runner 1.6 stores normal configuration and runtime state in `%LOCALAPPDATA%\TerraRunner`. Use `-Portable` to keep state beside the installation.
 
 ## Projects
 
-Each project has an ID, absolute path, Git branch, roadmap, and progress file. Paths may contain spaces and Unicode. Logs, reports, control state, and stop files are stored under `logs.root/<project-id>`.
+Each project has a stable ID, absolute path, expected Git branch, roadmap filename, and progress filename. Paths may contain spaces and Unicode characters. Project logs, reports, run summaries, and control files are stored below `logs.root/<project-id>`.
 
-`taskIdPattern` is optional. Without it, every Markdown checkbox is a roadmap task. With it, completed IDs are added to reports. Legacy NTD projects use `NTD-\d{4,}`.
+`taskIdPattern` is optional. Without it, every Markdown checkbox is a roadmap task. When it is absent, Terra Runner still recognises conventional IDs such as `NTD-0109` in newly completed roadmap entries.
 
-## Budget
+## Profiles
 
-`daily`, `balance`, `hybrid`, and `unlimited` are supported. User-entered amounts accept `.` or `,` and are stored using invariant JSON numbers. A snapshot balance is an estimate based on local OpenCode usage; it is not provider billing.
+Profiles are stored under `openCode.profiles`. A profile holds non-secret account identity, model, reasoning variant, policy, optional provider snapshot, and limits. Terra Runner never stores an API key or OAuth token.
 
-## OpenCode accounts, quotas, and local models
+- `api`: a cloud API profile. It can use USD snapshots and hourly, daily, critical-minimum, or unlimited policies.
+- `oauth-managed`: a cloud OAuth profile. It can use a manually observed quota snapshot and critical or freshness policies.
+- `local`: local inference with no provider money or quota controls.
 
-Open **Settings → OpenCode accounts and reasoning → Refresh accounts from OpenCode**. Terra Runner reads `opencode auth list --format json` and presents saved provider/credential labels; it never reads, exports, or stores API keys or OAuth tokens. Selecting an account calls OpenCode's normal `auth switch` command.
+The Node UI imports accounts through `opencode auth list --format json` and models through `opencode models`. It uses OpenCode's normal account switch command at run time.
 
-- API-key accounts use the existing USD balance modes and local OpenCode usage accounting.
-- OAuth accounts use a separately configured, provider-reported quota snapshot. Set its unit (percent, requests, or sessions), remaining quota, reserve, and validity period. It is intentionally never displayed as USD or called a balance. OpenCode currently exposes no general quota API, so Terra Runner does not invent provider quota usage; an expired snapshot fails closed until reconciled.
-- Local profiles have no balance or quota UI and do not require `opencode stats --json`. Select **Use the selected model as a local/no-limit profile** when OpenCode cannot classify the provider automatically.
+## Provider snapshots
 
-Reasoning is a model variant. Choose it in the same menu; Terra Runner appends `#low`, `#medium`, `#high`, and so on to the selected model and can pass OpenCode's `--thinking` display flag. Unsupported variants are rejected by OpenCode before an agent run.
+A snapshot is a user-reported provider observation. It contains a unit (`usd` or `percent`), remaining amount, observation time, and a maximum acceptable age. It is not a provider API result.
 
-## Recovery
+For profiles using a snapshot guard, Terra Runner fails closed when the snapshot is missing or stale. The UI asks for a fresh value immediately before a run rather than requiring manual JSON editing.
 
-Settings are written atomically and backups are retained in `config-backups`. If the active JSON is invalid, Terra Runner offers the newest valid backup. Accepting recovery preserves the invalid file as a timestamped `.corrupt-*` copy.
+For a continuous run only, the user may disable the provider snapshot guard. This temporary override bypasses provider snapshot freshness and threshold checks; it does not bypass Git, timeout, no-progress, error, or manual stop safeguards.
 
-## Transient connection retries
+## Optional local OpenCode cost estimate
 
-`execution.maxTransientRetries` defaults to `3` and `execution.transientRetryDelaySeconds` defaults to `30`. When an OpenCode event or worker error indicates a TLS, SSL, or transient network failure, Terra Runner waits, checks OpenCode usage statistics without launching an agent, and retries the interrupted iteration only after that check succeeds. It stops safely if connection checks or the retry limit are exhausted.
+An API profile with a USD snapshot can enable `usageSource.costTracking` from the profile screen. The UI obtains an all-time local OpenCode cost baseline from `opencode stats --all --json`.
 
-`execution.maxPushRetries` and `execution.pushRetryDelaySeconds` also default to `3` and `30`. When an agent leaves local commits unpublished because of a transient remote failure, Terra Runner retries a normal non-force `git push` before starting another paid iteration. A non-transient rejection, diverged history, or exhausted retry limit stops development safely.
+During later runs, Terra Runner calculates:
+
+```text
+estimated remaining = provider-reported snapshot - local OpenCode cost since baseline
+```
+
+This is a local estimate only. It may include usage from other projects recorded by the same OpenCode installation and must not be called provider balance. Saving a new provider snapshot disables this estimate until a new baseline is created.
+
+## Continuous execution
+
+The continuous iteration count is selected per launch and is not persisted in a profile. `0` means run until a normal safety condition stops execution; `1`–`1000` sets a limit for that one run.
+
+During a Node UI run, `S` or `Ctrl+C` creates a project `STOP` request and lets the current iteration finish. `X` creates an `ABORT` request and ends the active iteration at the next runner poll. A new UI launch clears stale control flags before execution.
+
+## Recovery and retries
+
+Settings are written atomically. If active JSON is invalid, the UI offers the newest valid backup and preserves the invalid file as a timestamped `.corrupt-*` copy.
+
+`execution.maxTransientRetries` and `execution.transientRetryDelaySeconds` control TLS/SSL and transient network recovery. `execution.maxPushRetries` and `execution.pushRetryDelaySeconds` control non-force Git push retries. Failed or exhausted safety checks stop development rather than launching another agent iteration.

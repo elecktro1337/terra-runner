@@ -1,20 +1,64 @@
-# Terra Runner 1.6 (development)
+# Terra Runner 1.6
 
-Terra Runner is a local Windows orchestrator for controlled OpenCode development cycles. It runs one selected project at a time, verifies Git state, records usage, and keeps project logs separate.
+Terra Runner is a local Windows orchestrator for controlled OpenCode development. It runs one selected project at a time, checks Git and safety rules, records project-scoped evidence, and keeps OpenCode execution explicit.
 
 ## Start
 
-Double-click `Terra Runner.cmd`. The primary interface uses Node.js 20+ for a cleaner terminal experience; PowerShell 7 remains the execution engine. If Node.js is unavailable, the launcher opens the compatible PowerShell interface. Setup only saves settings and never starts OpenCode.
+Double-click `Terra Runner.cmd`.
 
-For a normal installation, settings and state are stored in `%LOCALAPPDATA%\TerraRunner`. An existing configuration beside the scripts is copied there with a timestamped backup. The original configuration is not overwritten. Use `-Portable` to retain installation-folder storage.
+The primary interface is the Node.js terminal UI (Node.js 20+). PowerShell 7 remains the execution engine. If Node.js is unavailable, the launcher opens the compatible PowerShell UI. Setup and profile editing never start OpenCode.
 
-## Repository hygiene
+Normal settings and state live in `%LOCALAPPDATA%\TerraRunner`. `-Portable` keeps them beside the installation instead. Existing configuration is migrated with a timestamped backup; project logs and historical state are preserved.
 
-Personal configuration, portable-mode state, logs, reports, balance snapshots, locks, IDE metadata, and Pester output are excluded by `.gitignore`. Existing local runtime data is deliberately preserved when it is removed from Git tracking.
+## What the UI shows
 
-## Safe commands
+The header identifies the selected project, branch, account type, model, reasoning level, provider snapshot, limits, and roadmap progress:
 
-All commands use named parameters; positional parameters are rejected. OpenCode starts only with an explicit command:
+- total, completed, and remaining roadmap tasks;
+- completed percentage;
+- API cost-estimate status when enabled.
+
+During a run, Terra Runner shows the selected roadmap task, safe live activity (inspection, file changes, Git, or verification), elapsed time for the current iteration, tool/check counts, and a checkpoint after every completed iteration. It does not display model reasoning text.
+
+## Profiles, snapshots, and limits
+
+A profile combines an OpenCode account, model, reasoning level, and execution policy.
+
+- **API** profiles can use a USD snapshot and API limit policies: hourly cap, daily cap, critical minimum, or unlimited.
+- **OAuth** profiles can use a provider-reported percentage or other quota snapshot and a critical threshold or freshness policy.
+- **Local** profiles have no monetary or quota controls.
+
+Terra Runner never reads or stores API keys or OAuth tokens. It imports account labels through `opencode auth list --format json`, selects accounts through OpenCode, and imports models through `opencode models`.
+
+A provider snapshot is a user-entered observation, not a live provider query. When a required snapshot is missing or stale, the UI asks for it directly before development starts.
+
+### Optional local OpenCode cost estimate
+
+For an API profile with a USD snapshot, choose **Profiles → Configure local OpenCode cost estimate**. Terra Runner reads `opencode stats --all --json` once to set a baseline, then subtracts subsequently recorded local OpenCode cost from the provider-reported snapshot during later runs.
+
+This is explicitly an estimate, not the provider's actual balance. It may include all usage recorded by the local OpenCode installation. Saving a new provider snapshot resets the estimate baseline; enable the option again to establish a new one.
+
+## Running development
+
+Choose **Development → Run one iteration** for one explicit agent run.
+
+For **Run continuously**, choose the iteration limit at launch:
+
+- `0` means continue until a normal safety stop, budget stop, roadmap completion, or user stop.
+- `1`–`1000` limits only this run and is not saved in the profile.
+
+The continuous launch also asks whether to use the provider snapshot guard. It is on by default. Disabling it is a temporary, clearly labelled override for that run; it bypasses provider snapshot freshness and threshold checks only. Other runner safety checks remain active.
+
+While a run is active:
+
+- `S` or `Ctrl+C` requests a stop after the current iteration.
+- `X` requests an emergency stop of the current iteration.
+
+Starting a new UI run automatically clears stale stop requests left by a previous run.
+
+## Safe CLI commands
+
+All public commands use named parameters. OpenCode starts only with an explicit execution command.
 
 ```powershell
 pwsh -File .\terra-runner.ps1 -Project my-project -Once
@@ -24,48 +68,20 @@ pwsh -File .\terra-runner.ps1 -Project my-project -Status
 pwsh -File .\terra-runner.ps1 -Project my-project -Report
 ```
 
-`-Status`, `-Report`, configuration actions, cancelled menus, and an invocation without an execution command never launch `opencode run`.
-
-## Money and budgets
-
-User-entered money accepts `96.11` or `96,11`, is parsed with invariant decimal arithmetic, and is displayed as `$96.11`. Amounts with both separators, exponent notation, whitespace, negative values, NaN, Infinity, and overflow are rejected.
-
-OpenCode usage is not a provider balance. A snapshot balance is an estimate: recorded balance minus the change in local all-time OpenCode usage. Limited modes fail closed when required usage information is unavailable.
-
-## Accounts and reasoning
-
-Use **Settings → OpenCode accounts and reasoning** to refresh and select saved OpenCode accounts by their existing labels. API-key accounts use balance limits; OAuth accounts use a user-reported quota snapshot; local profiles show no balance or quota at all. Credentials remain in OpenCode — Terra Runner stores only non-secret IDs and labels. The same screen configures a supported model reasoning variant and optional OpenCode thinking-block display.
-
-## Project isolation
-
-## Model profiles
-
-The Node.js UI treats the model, OpenCode credential, reasoning level and safety policy as one profile. It imports credentials through `opencode auth list --format json` and models through `opencode models`, including Ollama models.
-
-- **API key** profiles use the existing daily and/or estimated-balance limits. The estimate is not provider billing.
-- **OAuth** profiles show provider-managed usage. Terra Runner neither requests a manual quota snapshot nor invents a remaining allowance.
-- **Local** profiles have no monetary or quota controls.
-
-Credentials stay in OpenCode; Terra Runner stores only identifiers and labels. Choose reasoning by name, not by a numeric code.
-
-Each project has a stable ID and its own logs, reports, control state, and stop files. The selected project path is always absolute and may contain spaces or Unicode characters. Terra Runner never derives it from its own installation path.
+`-Status`, `-Report`, preflight, configuration actions, cancelled menus, and an invocation without an execution command never launch `opencode run`.
 
 ## Tests
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\terra-ui-selftest.ps1
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\terra-ui-navigation-selftest.ps1
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\terra-ui-workflow-selftest.ps1
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\terra-ui-setup-selftest.ps1
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\tests\terra-selftest.ps1
+npm run test:node
 pwsh -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester .\tests\TerraRunner.Regression.Tests.ps1"
 ```
 
-The tests use a local mock OpenCode and temporary repositories. They make no paid requests.
+The test suites use local mocks and temporary repositories. They make no paid OpenCode requests.
 
-## Upgrade from 1.4
+## Upgrade to 1.6
 
-Start the UI once and accept the automatic local copy migration. Review the generated settings before running development. Existing legacy files remain in place; copy any historical project data deliberately if it is required for reporting.
+Start Terra Runner once through the launcher. Existing configuration is migrated in place and legacy profile values are preserved. Review each cloud profile, set a fresh provider snapshot, and optionally enable the local OpenCode cost estimate for USD API snapshots. No project repository or OpenCode credential is modified by migration.
 
 ## Reference
 
