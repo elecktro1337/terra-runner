@@ -13,9 +13,10 @@ import { defaultApiLimits, isLocalModel, migrateProfiles, profileFrom } from './
 import { normalizeProjects, validateProjectId } from './lib/projects.mjs';
 import { dailyReports, latestIterationSummary, iterationSummariesSince, projectDataRoot } from './lib/reports.mjs';
 import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, redactedRoute, validateProxyRoute } from './lib/proxy.mjs';
-import { authStorePath, cleanupLegacyReservations, createInstance, isTerminalInstance, listInstances, normalizeRuntime, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
+import { authStorePath, canFinalizeStalledInstance, cleanupLegacyReservations, createInstance, isTerminalInstance, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
 import { LiveFooter, LiveStatusBlock } from './lib/live-footer.mjs';
 import { developmentHeaderRows } from './lib/run-display.mjs';
+import { instanceTerminalLauncher } from './lib/instance-launcher.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -521,9 +522,16 @@ async function startDispatcherInstance(settings, project, profile, launch) {
   if (profile.policy !== 'local' && profile.authStoreId === 'legacy-shared' && running.some(instance => !isTerminalInstance(instance) && instance.profile?.policy !== 'local')) { console.log(chalk.yellow('The legacy shared OpenCode storage is global. Create an isolated authentication storage before running multiple cloud projects.')); return pause(); }
   if (profile.policy !== 'local' && profile.authStoreId !== 'legacy-shared') { try { await fs.access(authStorePath(configPath, profile.authStoreId)); } catch { console.log(chalk.yellow(`Authentication storage '${profile.authStoreId}' is not initialized. Open System → OpenCode authentication storages and sign in.`)); return pause(); } }
   const route = activeProxyRoute(settings); const instance = await createInstance(configPath, project, profile, route, coordinatorId, launch);
-  const command = `"${process.execPath}" "${path.join(root, 'node-ui', 'instance.mjs')}" --config "${configPath}" --instance "${instance.id}"`;
-  const launcher = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `start "Terra ${project.id}" cmd.exe /d /k "${command}"`], { cwd: root, detached: true, stdio: 'ignore', windowsHide: false });
-  launcher.unref(); await updateInstance(configPath, instance.id, { state: 'launching', activity: 'Opening project terminal' });
+  await updateInstance(configPath, instance.id, { state: 'launching', activity: 'Opening project terminal' });
+  const launcherSpec = instanceTerminalLauncher({ comSpec: process.env.ComSpec || 'cmd.exe', title: `Terra ${project.id}`, nodePath: process.execPath, instancePath: path.join(root, 'node-ui', 'instance.mjs'), configPath, instanceId: instance.id });
+  const launcher = spawn(launcherSpec.command, launcherSpec.args, { cwd: root, detached: true, stdio: 'ignore', windowsHide: false });
+  const markLaunchFailure = async error => {
+    const current = await readInstance(configPath, instance.id);
+    if (current?.state === 'launching') await updateInstance(configPath, instance.id, { state: 'failed', activity: '', error: `Project terminal could not open: ${error.message}`, stopReason: 'launch failed' });
+  };
+  launcher.once('error', error => void markLaunchFailure(error));
+  launcher.once('close', code => { if (code !== 0) void markLaunchFailure(new Error(`launcher exit ${code}`)); });
+  launcher.unref();
   console.log(chalk.green(`Project instance '${project.id}' is opening in a separate terminal.`)); return pause();
 }
 async function runInMainWindow(settings, command, project, profile, maxIterations) {
@@ -544,8 +552,9 @@ async function testProxyForProject(settings, project) {
   return pause();
 }
 async function developmentMenu(settings) {
+  header(settings); console.log(chalk.bold('DEVELOPMENT')); console.log(rule);
   const command = await pick('Development', [{ name: 'One iteration', value: 'once' }, { name: 'Dry run', value: 'dry-run' }, { name: 'Continuous', value: 'continuous' }, { name: 'Active instances', value: 'instances' }, { name: 'Proxy test', value: 'proxy-test' }]);
-  if (!command) return; if (command === 'instances') return instancesMenu();
+  if (!command) return; if (command === 'instances') return instancesMenu(settings);
   if (command === 'proxy-test') { const project = await chooseProject(settings); if (project) await testProxyForProject(settings, project); return; }
   const selected = await chooseDevelopmentProject(settings); if (!selected) return;
   const target = await chooseDevelopmentTarget(); if (!target) return;
@@ -554,16 +563,18 @@ async function developmentMenu(settings) {
   if (target === 'instance') { if (!(await yesNo(`Open '${selected.project.id}' in a separate terminal and start ${command}?`))) return; return startDispatcherInstance(settings, selected.project, selected.profile, launch); }
   return runInMainWindow(settings, command, selected.project, selected.profile, maxIterations);
 }
-async function instancesMenu() {
+async function instancesMenu(settings) {
   while (true) {
-    const instances = await listInstances(configPath); clear(); console.log(chalk.bold('ACTIVE AND RECENT PROJECT INSTANCES')); console.log(rule);
+    const instances = await listInstances(configPath); header(settings); console.log(chalk.bold('ACTIVE AND RECENT PROJECT INSTANCES')); console.log(rule);
     if (!instances.length) console.log(chalk.gray('  No project windows have been opened yet.'));
     const choice = await pick('Open an instance', instances.map(instance => ({ name: `${isTerminalInstance(instance) ? chalk.gray('○') : chalk.green('●')} ${instance.projectId}  ${chalk.gray(instance.profile?.model || '')}  ${instance.state}${instance.activity ? ` — ${instance.activity}` : ''}`, value: instance.id })));
     if (!choice) return; const instance = instances.find(item => item.id === choice); if (!instance) continue;
     const action = await pick(`Instance: ${instance.projectId}`, [
-      { name: 'Request graceful stop', value: 'stop', disabled: isTerminalInstance(instance) }, { name: chalk.red('Emergency abort'), value: 'abort', disabled: isTerminalInstance(instance) }, { name: 'Refresh', value: 'refresh' }
+      { name: 'Request graceful stop', value: 'stop', disabled: isTerminalInstance(instance) }, { name: chalk.red('Emergency abort'), value: 'abort', disabled: isTerminalInstance(instance) },
+      { name: chalk.yellow(instance.state === 'aborting' ? 'Finalize stalled abort' : 'Finalize stalled instance'), value: 'finalize', disabled: !canFinalizeStalledInstance(instance) }, { name: 'Refresh', value: 'refresh' }
     ]);
     if (action === 'stop' || action === 'abort') { const kind = action === 'abort' ? 'ABORT' : 'STOP'; await requestInstanceControl(configPath, instance.id, kind); await updateInstance(configPath, instance.id, { state: action === 'abort' ? 'aborting' : 'stopping', activity: action === 'abort' ? 'Emergency abort requested by dispatcher' : 'Graceful stop requested by dispatcher' }); }
+    if (action === 'finalize') { const aborted = instance.state === 'aborting'; await updateInstance(configPath, instance.id, { state: aborted ? 'aborted' : 'failed', runnerPid: null, activity: '', stopReason: aborted ? 'Emergency abort finalized: no runner process is active.' : 'Stalled launch finalized: no runner process is active.' }); }
   }
 }
 async function stopAllInstances() {
@@ -655,6 +666,7 @@ async function proxyRoutesMenu(settings) {
   }
 }
 async function systemMenu(settings) {
+  header(settings); console.log(chalk.bold('SYSTEM')); console.log(rule);
   const action = await pick('System', [{ name: 'OpenCode authentication storages', value: 'auth-stores' }, { name: 'Proxy routes', value: 'proxy' }, { name: 'Run diagnostics (read-only)', value: 'diagnostics' }, { name: 'Refresh legacy OpenCode accounts and models', value: 'refresh' }, { name: 'Show configuration path', value: 'config' }]); if (!action) return;
   if (action === 'auth-stores') return authStoresMenu(settings);
   if (action === 'proxy') return proxyRoutesMenu(settings);

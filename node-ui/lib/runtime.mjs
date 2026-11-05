@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 const TERMINAL = new Set(['finished', 'failed', 'aborted', 'stopped', 'orphaned']);
+const RECOVERABLE = new Set(['launching', 'stopping', 'aborting']);
 
 export function runtimeRoot(configPath) { return path.join(path.dirname(path.resolve(configPath)), 'runtime'); }
 export function instancesRoot(configPath) { return path.join(runtimeRoot(configPath), 'instances'); }
@@ -16,6 +17,15 @@ export function authStorePath(configPath, id) {
   return path.join(path.dirname(path.resolve(configPath)), 'opencode-stores', id, 'opencode.db');
 }
 export function isTerminalInstance(instance) { return TERMINAL.has(String(instance?.state || '')); }
+export function isProcessAlive(pid) {
+  const value = Number(pid);
+  if (!Number.isInteger(value) || value <= 0) return false;
+  try { process.kill(value, 0); return true; }
+  catch (error) { return error?.code === 'EPERM'; }
+}
+export function canFinalizeStalledInstance(instance) {
+  return RECOVERABLE.has(String(instance?.state || '')) && !isProcessAlive(instance?.runnerPid);
+}
 export function sanitizeProfile(profile) {
   const source = profile || {};
   // Instance records are runtime coordination data, not a second configuration

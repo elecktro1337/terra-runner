@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { authStorePath, clearInstanceControls, createInstance, instanceControlPath, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance } from '../lib/runtime.mjs';
+import { authStorePath, canFinalizeStalledInstance, clearInstanceControls, createInstance, instanceControlPath, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance } from '../lib/runtime.mjs';
 
 async function fixture() { return fs.mkdtemp(path.join(os.tmpdir(), 'terra-runtime-')); }
 
@@ -30,4 +30,11 @@ test('instance registry stores a command snapshot without profile limit fields',
 test('authentication database path is derived from a safe storage ID', () => {
   assert.match(authStorePath('C:\\terra\\terra-config.json', 'team_a'), /opencode-stores[\\/]team_a[\\/]opencode\.db$/i);
   assert.throws(() => authStorePath('C:\\terra\\terra-config.json', '../secret'), /Unsafe/);
+});
+
+test('only an active state without a live runner can be finalized as stalled', () => {
+  assert.equal(canFinalizeStalledInstance({ state: 'aborting', runnerPid: null }), true);
+  assert.equal(canFinalizeStalledInstance({ state: 'launching', runnerPid: 0 }), true);
+  assert.equal(canFinalizeStalledInstance({ state: 'running', runnerPid: null }), false);
+  assert.equal(canFinalizeStalledInstance({ state: 'aborting', runnerPid: process.pid }), false);
 });

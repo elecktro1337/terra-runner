@@ -34,7 +34,13 @@ function show(instance, project) {
 async function safeUpdate(patch) { return updateInstance(configPath, instanceId, patch); }
 async function request(kind) { await requestInstanceControl(configPath, instanceId, kind); await safeUpdate({ state: kind === 'ABORT' ? 'aborting' : 'stopping', activity: kind === 'ABORT' ? 'Emergency abort requested' : 'Finishing the current iteration' }); }
 async function run(mode, limit = 1) {
-  const { instance } = await load(); if (['running', 'starting', 'stopping', 'aborting'].includes(instance.state)) { console.log(chalk.yellow('This instance already has an active runner.')); return; }
+  const { instance } = await load();
+  if (['stopping', 'aborting'].includes(instance.state)) {
+    const aborted = instance.state === 'aborting';
+    await safeUpdate({ state: aborted ? 'aborted' : 'stopped', runnerPid: null, activity: '', stopReason: aborted ? 'Emergency abort requested before the runner started.' : 'Stop requested before the runner started.' });
+    return;
+  }
+  if (['running', 'starting'].includes(instance.state)) { console.log(chalk.yellow('This instance already has an active runner.')); return; }
   await clearInstanceControls(configPath, instanceId); await safeUpdate({ state: 'starting', runnerPid: null, activity: 'Preparing OpenCode' });
   const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', instance.projectId, '-Config', configPath, '-InstanceId', instanceId, '-UiEvents', '-ClearControlFlags', mode === 'continuous' ? '-Continuous' : '-Once'];
   if (mode === 'continuous') runnerArgs.push(limit > 0 ? '-MaxIterations' : '-UnlimitedIterations', String(limit || ''));
@@ -52,7 +58,10 @@ async function run(mode, limit = 1) {
   child.stdout.on('data', data => void consume(data)); child.stderr.on('data', data => process.stderr.write(data));
   const keyHandler = data => { const key = String(data).toLowerCase(); if (key === 's' || key === '\u0003') void request('STOP'); if (key === 'x') void request('ABORT'); };
   if (process.stdin.isTTY) { process.stdin.setRawMode?.(true); process.stdin.resume(); process.stdin.on('data', keyHandler); }
-  await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }).then(async code => { await safeUpdate({ state: code === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', stopReason: code === 0 ? '' : `runner exit ${code}` }); }).catch(async error => { await safeUpdate({ state: 'failed', runnerPid: null, error: error.message, activity: '' }); });
+  await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }).then(async code => {
+    const current = await readInstance(configPath, instanceId); const aborted = current?.state === 'aborting'; const stopped = current?.state === 'stopping';
+    await safeUpdate({ state: aborted ? 'aborted' : stopped ? 'stopped' : code === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? 'Graceful stop completed.' : code === 0 ? '' : `runner exit ${code}` });
+  }).catch(async error => { await safeUpdate({ state: 'failed', runnerPid: null, error: error.message, activity: '' }); });
   if (process.stdin.isTTY) { process.stdin.off('data', keyHandler); process.stdin.setRawMode?.(false); }
 }
 async function preflight() {
@@ -66,8 +75,14 @@ async function heartbeatWatch() {
 }
 const watch = setInterval(() => void heartbeatWatch(), 5000); watch.unref();
 async function main() {
-  await safeUpdate({ state: 'idle', windowPid: process.pid, activity: '' });
   const initial = await readInstance(configPath, instanceId);
+  if (!initial) throw new Error('The dispatcher instance record no longer exists.');
+  if (['stopping', 'aborting'].includes(initial.state)) {
+    const aborted = initial.state === 'aborting';
+    await safeUpdate({ state: aborted ? 'aborted' : 'stopped', windowPid: process.pid, runnerPid: null, activity: '', stopReason: aborted ? 'Emergency abort requested before the project window opened.' : 'Stop requested before the project window opened.' });
+    return;
+  }
+  await safeUpdate({ state: 'idle', windowPid: process.pid, activity: '' });
   const launch = initial?.launch || { command: 'idle', maxIterations: 0 };
   if (['once', 'continuous', 'dry-run'].includes(launch.command)) {
     const { project } = await load(); show(initial, project);
