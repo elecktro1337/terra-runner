@@ -38,6 +38,11 @@ Describe 'Terra Runner safe command dispatch' {
         $prompt | Should Match 'Do not install, upgrade, uninstall, or reconfigure system software'
         $prompt | Should Match 'Do not.*request elevation'
     }
+    It 'uses UTF-8 for PowerShell UI events carrying roadmap titles' {
+        $source = Get-Content -LiteralPath $runner -Raw
+        $source | Should Match '\$OutputEncoding\s*=\s*\$Utf8NoBom'
+        $source | Should Match '\[Console\]::OutputEncoding\s*=\s*\$Utf8NoBom'
+    }
     It 'does not start an agent for Report' {
         & $runner -Project safe-project -Config $script:config -Report
         (Test-Path -LiteralPath $script:calls) | Should Be $false

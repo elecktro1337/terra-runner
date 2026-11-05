@@ -15,7 +15,7 @@ try {
     & git init -q -b codex/terra $repo
     & git -C $repo config user.email terra-runner@example.invalid
     & git -C $repo config user.name 'Terra Runner Mock'
-    [IO.File]::WriteAllText((Join-Path $repo 'NTD-ROADMAP.md'),"- [ ] **NTD-0001 [P0]** — Mock task`n")
+    [IO.File]::WriteAllText((Join-Path $repo 'NTD-ROADMAP.md'),"- [ ] **NTD-0001 [P0]** — Проверить UTF-8 заголовок задачи`n")
     [IO.File]::WriteAllText((Join-Path $repo 'NTD-PROGRESS.md'),"# Progress`n")
     & git -C $repo add NTD-ROADMAP.md NTD-PROGRESS.md
     & git -C $repo commit -qm 'Initial mock files'

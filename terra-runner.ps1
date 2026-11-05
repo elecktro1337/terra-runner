@@ -46,6 +46,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7+ is required. Run with pwsh.' }
+# UI events are read as UTF-8 JSON by the Node processes. The Windows console
+# code page is not a transport encoding: force UTF-8 for redirected stdout so
+# Cyrillic roadmap titles survive the PowerShell -> Node boundary.
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = $Utf8NoBom
+try { [Console]::OutputEncoding = $Utf8NoBom } catch { }
+try { [Console]::InputEncoding = $Utf8NoBom } catch { }
 $Invariant = [System.Globalization.CultureInfo]::InvariantCulture
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Import-Module (Join-Path $ScriptDir 'terra-core.psm1') -Force -ErrorAction Stop

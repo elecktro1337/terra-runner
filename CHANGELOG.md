@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.3.6 - 2026-11-05
+
+- Formatted active-instance heartbeat durations as minutes and seconds instead of raw seconds.
+- Forced UTF-8 for PowerShell UI-event pipes so non-ASCII roadmap task titles remain readable in Node live screens.
+
 ## 2.3.5 - 2026-11-05
 
 - Granted the development agent a bounded local-infrastructure capability: it can start and await already-installed local development dependencies such as Docker Desktop and project-scoped Compose services, while remaining prohibited from installation, elevation, system/network reconfiguration, production access, and destructive cleanup outside resources it started.

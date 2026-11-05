@@ -20,6 +20,7 @@ import { readRoadmapProgress } from './lib/roadmap.mjs';
 import { instanceTerminalLauncher } from './lib/instance-launcher.mjs';
 import { ensureProjectAuthStore, isProjectManagedStore, removeProjectAuthStore } from './lib/project-auth-stores.mjs';
 import { completedIterationText } from './lib/iteration-history.mjs';
+import { instanceActivityText } from './lib/instance-display.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -597,7 +598,7 @@ async function instancesMenu(settings) {
     if (!instances.length) console.log(chalk.gray('  No project windows have been opened yet.'));
     const terminalCount = instances.filter(isTerminalInstance).length;
     console.log(chalk.gray('  Controls: select an active instance for Stop/Abort; completed records can be removed safely.'));
-    const choices = instances.map(instance => ({ name: `${isTerminalInstance(instance) ? chalk.gray('○') : chalk.green('●')} ${instance.projectId}  ${chalk.cyan(instance.profile?.model || '')}  ${isTerminalInstance(instance) ? chalk.gray(instance.state) : chalk.yellow(instance.state)}${instance.activity ? chalk.gray(` — ${instance.activity}`) : ''}`, value: instance.id }));
+    const choices = instances.map(instance => ({ name: `${isTerminalInstance(instance) ? chalk.gray('○') : chalk.green('●')} ${instance.projectId}  ${chalk.cyan(instance.profile?.model || '')}  ${isTerminalInstance(instance) ? chalk.gray(instance.state) : chalk.yellow(instance.state)}${instance.activity ? chalk.gray(` — ${instanceActivityText(instance.activity)}`) : ''}`, value: instance.id }));
     if (terminalCount) choices.push({ name: chalk.yellow(`Clear ${terminalCount} completed / failed record(s)`), value: 'clear-terminal' });
     choices.push({ name: 'Refresh', value: 'refresh' });
     const choice = await pick('Open an instance', choices);
