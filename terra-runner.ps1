@@ -37,6 +37,7 @@ param(
     [switch]$ShowProgress,
     [switch]$UiEvents,
     [string]$InstanceId = '',
+    [string]$ProfileId = '',
     [switch]$UnlimitedIterations,
     [switch]$SkipProviderSnapshotGuard,
     [ValidateRange(0, 1000)][int]$MaxIterations = 0
@@ -477,6 +478,9 @@ function New-OAuthSnapshot {
 function New-UnlimitedSnapshot {
     return [pscustomobject]@{ Kind='unlimited'; Mode='unlimited'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReportedRemaining=$null; QuotaEstimatedSpendUSD=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
 }
+function New-UntrackedSnapshot {
+    return [pscustomobject]@{ Kind='untracked'; Mode='disabled'; Daily=(New-ZeroUsage 'day'); AllTime=(New-ZeroUsage 'all'); BalanceUSD=$null; BalanceSource=''; BalanceObservedAt=''; QuotaRemaining=$null; QuotaReportedRemaining=$null; QuotaEstimatedSpendUSD=$null; QuotaReserve=$null; QuotaUnit=''; QuotaObservedAt='' }
+}
 function Switch-OpenCodeAccount([string]$Executable, $Account, [string]$Directory) {
     if ([string](Read-Member $Account 'usageKind') -eq 'local') { return }
     $provider = [string](Read-Member $Account 'provider'); $credential = [string](Read-Member $Account 'credentialId')
@@ -487,64 +491,6 @@ function Get-BalanceStatePath([string]$Root, $Settings) {
     $id = [string](Read-Member $Settings 'id')
     if ($id -cnotmatch '^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$') { throw 'Unsafe or missing balance.id' }
     return Join-Path (Join-Path $Root 'budgets') ($id + '.json')
-}
-function Get-TerraReservationScope($Instance, $Account) {
-    if ($null -eq $Instance) { return '' }
-    $profile = Read-Member $Instance 'profile'; $store = [string](Read-Member $profile 'authStoreId')
-    if ([string]::IsNullOrWhiteSpace($store) -or $store -eq 'legacy-shared') { return '' }
-    $provider = [string](Read-Member $Account 'provider'); $credential = [string](Read-Member $Account 'credentialId')
-    if (-not $provider -or -not $credential) { return '' }
-    return (($store + '-' + $provider + '-' + $credential) -replace '[^A-Za-z0-9_.-]','_')
-}
-function Get-TerraReservationAmount($Instance) {
-    if ($null -eq $Instance) { return 0.0 }
-    $amount = Read-Member (Read-Member $Instance 'profile') 'parallelReservation'
-    if ($null -eq $amount) { return 0.0 }
-    return Require-NonNegativeNumber $amount 'profile.parallelReservation'
-}
-function Read-TerraReservations([string]$File) {
-    if (-not (Test-Path -LiteralPath $File -PathType Leaf)) { return @() }
-    try { return @((Get-Content -LiteralPath $File -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 10).entries) } catch { return @() }
-}
-function Write-TerraReservations([string]$File, $Entries) { Save-Json $File ([ordered]@{ entries=@($Entries); updatedAt=(Get-Date).ToUniversalTime().ToString('o') }) }
-function Get-TerraReservationBlock($Snapshot, $Budget, [double]$Held, [double]$Amount) {
-    if ($Amount -le 0) { return '' }
-    if ($Snapshot.Kind -eq 'quota') {
-        if (($Snapshot.QuotaRemaining - $Held - $Amount) -le $Snapshot.QuotaReserve) { return 'shared provider snapshot reserve would be exceeded' }
-        return ''
-    }
-    if ($Snapshot.Kind -ne 'balance') { return '' }
-    if ($Snapshot.Mode -in @('daily','hybrid') -and (($Snapshot.Daily.CostUSD + $Held + $Amount) -ge ([double]$Budget.dailyUsd - [double]$Budget.reserveUsd))) { return 'shared daily budget reserve would be exceeded' }
-    if ($Snapshot.Mode -eq 'hourly' -and (($Snapshot.Hourly.CostUSD + $Held + $Amount) -ge [double]$Budget.hourlyUsd)) { return 'shared hourly budget would be exceeded' }
-    if ($Snapshot.Mode -in @('balance','hybrid') -and (($Snapshot.BalanceUSD - $Held - $Amount) -le ([double]$Budget.balance.minimumUsd))) { return 'shared balance reserve would be exceeded' }
-    return ''
-}
-function Acquire-TerraReservation([string]$RuntimeRoot, $Instance, $Account, $Snapshot, $Budget) {
-    $scope = Get-TerraReservationScope $Instance $Account; $amount = Get-TerraReservationAmount $Instance
-    if (-not $scope -or $amount -le 0) { return $null }
-    $directory = Join-Path $RuntimeRoot 'reservations'; Ensure-Directory $directory
-    $file = Join-Path $directory "$scope.json"; $lockFile = Join-Path $directory "$scope.lock"; $lock = $null
-    try {
-        $lock = [IO.File]::Open($lockFile,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
-        $now = [DateTimeOffset]::UtcNow; $entries = New-Object Collections.Generic.List[object]
-        foreach ($entry in @(Read-TerraReservations $file)) {
-            $expiry = $null; try { $expiry = [DateTimeOffset]::Parse([string](Read-Member $entry 'expiresAt')) } catch { }
-            $pid = [int](Read-Member $entry 'pid'); $alive = $false; try { $alive = $null -ne (Get-Process -Id $pid -ErrorAction Stop) } catch { }
-            if ($null -ne $expiry -and $expiry -gt $now -and $alive) { $entries.Add($entry) }
-        }
-        $held = (@($entries | ForEach-Object { [double](Read-Member $_ 'amount') }) | Measure-Object -Sum).Sum; if ($null -eq $held) { $held = 0.0 }
-        $block = Get-TerraReservationBlock $Snapshot $Budget ([double]$held) $amount; if ($block) { Write-TerraReservations $file $entries; throw "Cannot start iteration: $block." }
-        $record = [ordered]@{ instanceId=[string](Read-Member $Instance 'id'); pid=$PID; amount=$amount; expiresAt=$now.AddMinutes(2).ToString('o') }; $entries.Add($record); Write-TerraReservations $file $entries
-        return [pscustomobject]@{ Scope=$scope; File=$file; LockFile=$lockFile; InstanceId=$record.instanceId; Amount=$amount }
-    } finally { if ($null -ne $lock) { $lock.Dispose() } }
-}
-function Renew-TerraReservation($Reservation) {
-    if ($null -eq $Reservation) { return }
-    $lock = $null; try { $lock=[IO.File]::Open($Reservation.LockFile,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None); $entries=Read-TerraReservations $Reservation.File; foreach ($entry in $entries) { if ([string](Read-Member $entry 'instanceId') -eq $Reservation.InstanceId -and [int](Read-Member $entry 'pid') -eq $PID) { $entry['expiresAt']=[DateTimeOffset]::UtcNow.AddMinutes(2).ToString('o') } }; Write-TerraReservations $Reservation.File $entries } finally { if ($lock) { $lock.Dispose() } }
-}
-function Release-TerraReservation($Reservation) {
-    if ($null -eq $Reservation) { return }
-    $lock = $null; try { $lock=[IO.File]::Open($Reservation.LockFile,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None); $entries=@((Read-TerraReservations $Reservation.File) | Where-Object { -not ([string](Read-Member $_ 'instanceId') -eq $Reservation.InstanceId -and [int](Read-Member $_ 'pid') -eq $PID) }); Write-TerraReservations $Reservation.File $entries } finally { if ($lock) { $lock.Dispose() } }
 }
 function Get-LiveBalance($Settings) {
     $command = [string](Read-Member $Settings 'command')
@@ -828,6 +774,7 @@ function Write-EnglishDailyReport([string]$DataDirectory, [string]$Date) {
     if ($usageKinds.Count -eq 1 -and $usageKinds.Contains('balance')) { $rows.Add(('- Estimated local OpenCode usage during iterations: **${0:N4}**' -f $cost)) }
     elseif ($usageKinds.Count -eq 1 -and $usageKinds.Contains('quota') -and $null -ne $latestQuota) { $rows.Add(('- Latest provider-reported quota snapshot: **{0} {1}**; reserve **{2} {1}**' -f (Read-Member $latestQuota 'quotaRemaining'),(Read-Member $latestQuota 'quotaUnit'),(Read-Member $latestQuota 'quotaReserve'))) }
     elseif ($usageKinds.Count -eq 1 -and $usageKinds.Contains('local')) { $rows.Add('- Local model profile: **no provider balance or quota tracking**.') }
+    elseif ($usageKinds.Count -eq 1 -and $usageKinds.Contains('untracked')) { $rows.Add('- Dispatcher instance: **Terra budget and quota tracking disabled**.') }
     else { $rows.Add('- Mixed account usage: see each iteration policy below.') }
     $rows.Add("- Changed files: code **$code**, tests **$tests**, documentation **$docs**; tool errors **$errors**")
     if ($ids.Count) { $rows.Add('- Completed task IDs: ' + (@($ids | Sort-Object) -join ', ')) }
@@ -837,11 +784,11 @@ function Write-EnglishDailyReport([string]$DataDirectory, [string]$Date) {
         $started = [string](Read-Member $summary 'started'); $time = if ($started.Length -ge 19) { $started.Substring(11,8) } else { '--:--:--' }
         $completed = [Math]::Max(0,[int](Read-Member $summary 'doneAfter')-[int](Read-Member $summary 'doneBefore'))
         $kind = [string](Read-Member $summary 'accountUsageKind'); if (-not $kind) { $kind='balance' }
-        $delta = Read-Member $summary 'costDeltaUSD'; $displayCost = if ($kind -eq 'quota') { ('{0} {1}' -f (Read-Member $summary 'quotaRemaining'),(Read-Member $summary 'quotaUnit')) } elseif ($kind -eq 'local') { 'not tracked' } elseif ($null -eq $delta) { '?' } else { ('$' + ([double]$delta).ToString('F4',$Invariant)) }
+        $delta = Read-Member $summary 'costDeltaUSD'; $displayCost = if ($kind -eq 'quota') { ('{0} {1}' -f (Read-Member $summary 'quotaRemaining'),(Read-Member $summary 'quotaUnit')) } elseif ($kind -in @('local','untracked')) { 'not tracked' } elseif ($null -eq $delta) { '?' } else { ('$' + ([double]$delta).ToString('F4',$Invariant)) }
         $reason = [string](Read-Member $summary 'stoppedReason'); if (-not $reason) { $reason = '-' }
         $rows.Add(('| {0} | `{1}` | {2} | {3} | {4} | {5} | {6} | {7} | {8} | {9} |' -f $time,[string](Read-Member $summary 'id'),$kind,$completed,[int](Read-Member $summary 'codeFilesChanged'),[int](Read-Member $summary 'testFilesChanged'),[int](Read-Member $summary 'documentationFilesChanged'),$displayCost,([bool](Read-Member $summary 'pushVerified')),$reason.Replace('|','/')))
     }
-    $rows.Add(''); $rows.Add('Balance is derived from local OpenCode statistics and is an estimate, not provider billing. OAuth plan usage and reset windows are managed by the provider and are not locally estimated. Local profiles have no provider-limit tracking. Verification commands observed in agent logs do not by themselves prove successful tests.')
+    $rows.Add(''); $rows.Add('Balance is derived from local OpenCode statistics and is an estimate, not provider billing. OAuth plan usage and reset windows are managed by the provider and are not locally estimated. Local profiles and dispatcher instances have no Terra provider-limit tracking. Verification commands observed in agent logs do not by themselves prove successful tests.')
     $markdown = Join-Path $reportDirectory "$Date.md"
     [IO.File]::WriteAllText($markdown,(($rows -join "`n") + "`n"),[Text.UTF8Encoding]::new($false))
     Save-Json (Join-Path $reportDirectory "$Date.json") ([ordered]@{ project=(Split-Path $DataDirectory -Leaf); date=$Date; iterations=$summaries.Count; tasksCompleted=$tasks; pushesVerified=$pushes; costDeltaUsd=[Math]::Round($cost,6); codeFilesChanged=$code; testFilesChanged=$tests; documentationFilesChanged=$docs; toolErrors=$errors; completedTaskIds=@($ids | Sort-Object); commits=@($commits.ToArray()); generatedAt=(Get-Date).ToString('o') })
@@ -857,7 +804,7 @@ function Rotate-Reports([string]$DataDirectory, $Settings) {
 }
 
 $cfg = Get-Content -LiteralPath $Config -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 40
-if ([int]$cfg.schemaVersion -notin @(1,2,3,4,5,6)) { throw 'Unsupported terra-config.json schemaVersion.' }
+if ([int]$cfg.schemaVersion -notin @(1,2,3,4,5,6,7)) { throw 'Unsupported terra-config.json schemaVersion.' }
 $projectConfig = @($cfg.projects | Where-Object { $_.id -eq $Project })
 if ($projectConfig.Count -ne 1) { throw "Expected exactly one project with id '$Project'." }
 $projectConfig = $projectConfig[0]
@@ -873,14 +820,21 @@ $projectData = Join-Path $logRoot $Project
 $logsPath = Join-Path $projectData 'logs'
 $runtimeRoot = Join-Path (Split-Path -Parent $Config) 'runtime'
 $instance = $null
-if ($InstanceId) {
-    if ($InstanceId -notmatch '^[a-fA-F0-9-]{36}$') { throw 'Unsafe instance ID.' }
-    $instancePath = Join-Path (Join-Path $runtimeRoot 'instances') "$InstanceId.json"
-    if (-not (Test-Path -LiteralPath $instancePath -PathType Leaf)) { throw "Instance '$InstanceId' was not found." }
-    $instance = Get-Content -LiteralPath $instancePath -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 30
-    if ([string](Read-Member $instance 'projectId') -ne $Project) { throw 'Instance project does not match -Project.' }
-    $profile = Read-Member $instance 'profile'
-    if ($null -eq $profile) { throw 'Instance profile snapshot is missing.' }
+$limitsEnabled = -not [bool]$InstanceId
+if ($InstanceId -or $ProfileId) {
+    if ($InstanceId -and $InstanceId -notmatch '^[a-fA-F0-9-]{36}$') { throw 'Unsafe instance ID.' }
+    if ($InstanceId) {
+        $instancePath = Join-Path (Join-Path $runtimeRoot 'instances') "$InstanceId.json"
+        if (-not (Test-Path -LiteralPath $instancePath -PathType Leaf)) { throw "Instance '$InstanceId' was not found." }
+        $instance = Get-Content -LiteralPath $instancePath -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 30
+        if ([string](Read-Member $instance 'projectId') -ne $Project) { throw 'Instance project does not match -Project.' }
+        $profile = Read-Member $instance 'profile'
+        if ($null -eq $profile) { throw 'Instance profile snapshot is missing.' }
+    } else {
+        $profiles = @((Read-Member (Read-Member $cfg 'openCode') 'profiles') | Where-Object { [string](Read-Member $_ 'id') -eq $ProfileId })
+        if ($profiles.Count -ne 1) { throw "Expected exactly one profile with id '$ProfileId'." }
+        $profile = $profiles[0]
+    }
     $cfg.model = [string](Read-Member $profile 'model')
     $variant = [string](Read-Member $profile 'reasoningVariant'); if ($variant) { $cfg.model += "#$variant" }
     $cfg.openCode = [ordered]@{ activeAccountId='instance'; reasoning=[ordered]@{ variant=$variant; showThinking=[bool](Read-Member $profile 'showThinking') }; accounts=@() }
@@ -936,11 +890,11 @@ if ($ClearStop -or $ClearControlFlags) {
 
 $usageKind = Get-OpenCodeUsageKind $cfg
 $activeOpenCodeAccount = Get-ActiveOpenCodeAccount $cfg
-$budgetMode = if ($usageKind -eq 'balance') { Get-BudgetMode $cfg.budget } else { $usageKind }
-if ($usageKind -eq 'balance' -and -not [bool]$cfg.budget.requireGlobalOpenCodeStats) {
+$budgetMode = if ($limitsEnabled -and $usageKind -eq 'balance') { Get-BudgetMode $cfg.budget } elseif ($limitsEnabled) { $usageKind } else { 'disabled' }
+if ($limitsEnabled -and $usageKind -eq 'balance' -and -not [bool]$cfg.budget.requireGlobalOpenCodeStats) {
     throw 'The global OpenCode usage scope is required for reliable local accounting.'
 }
-if ($usageKind -eq 'balance' -and $budgetMode -in @('daily','hybrid')) {
+if ($limitsEnabled -and $usageKind -eq 'balance' -and $budgetMode -in @('daily','hybrid')) {
     Require-PositiveNumber $cfg.budget.dailyUsd 'budget.dailyUsd' | Out-Null
     [void](Require-NonNegativeNumber $cfg.budget.reserveUsd 'budget.reserveUsd')
     Require-PositiveNumber $cfg.budget.emergencyStopUsd 'budget.emergencyStopUsd' | Out-Null
@@ -951,17 +905,17 @@ if ($usageKind -eq 'balance' -and $budgetMode -in @('daily','hybrid')) {
         throw 'reserveUsd must be below dailyUsd.'
     }
 }
-if ($usageKind -eq 'balance' -and $budgetMode -eq 'hourly') {
+if ($limitsEnabled -and $usageKind -eq 'balance' -and $budgetMode -eq 'hourly') {
     Require-PositiveNumber $cfg.budget.hourlyUsd 'budget.hourlyUsd' | Out-Null
 }
-if ($usageKind -eq 'balance' -and $budgetMode -in @('balance','hybrid')) {
+if ($limitsEnabled -and $usageKind -eq 'balance' -and $budgetMode -in @('balance','hybrid')) {
     if ($null -eq (Read-Member $cfg.budget 'balance')) { throw 'budget.balance is required.' }
     [void](Require-NonNegativeNumber $cfg.budget.balance.minimumUsd 'budget.balance.minimumUsd')
     [void](Require-NonNegativeNumber $cfg.budget.balance.iterationReserveUsd 'budget.balance.iterationReserveUsd')
     if ($cfg.budget.balance.source -eq 'snapshot') { [void](Get-BalanceStatePath $logRoot $cfg.budget.balance) }
     elseif ($cfg.budget.balance.source -ne 'command') { throw 'budget.balance.source must be snapshot or command.' }
 }
-if ($hasSetBalance -and ($usageKind -ne 'balance' -or $budgetMode -notin @('balance','hybrid'))) {
+if ($hasSetBalance -and (-not $limitsEnabled -or $usageKind -ne 'balance' -or $budgetMode -notin @('balance','hybrid'))) {
     throw '-SetBalanceUsd is only available in balance/hybrid modes.'
 }
 if ($hasSetBalance -and $cfg.budget.balance.source -ne 'snapshot') {
@@ -996,10 +950,12 @@ if ($Report) {
     return
 }
 if ($Status) {
-    $snapshot = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot
-    Show-Usage $snapshot $cfg.budget
-    $reason = Get-BudgetStopReason $snapshot $cfg.budget $false
-    if ($reason) { Write-Host "No new iteration allowed: $reason" }
+    if ($limitsEnabled) {
+        $snapshot = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot
+        Show-Usage $snapshot $cfg.budget
+        $reason = Get-BudgetStopReason $snapshot $cfg.budget $false
+        if ($reason) { Write-Host "No new iteration allowed: $reason" }
+    } else { Write-Host 'Terra limits and provider snapshots are disabled for this dispatcher instance.' }
     Write-Host "Project logs: $logsPath"
     Write-Host "STOP: $(Test-Path -LiteralPath $stopPath); ABORT: $(Test-Path -LiteralPath $abortPath)"
     return
@@ -1011,9 +967,8 @@ if (-not ($Once -or $Continuous -or $DryRun -or $hasSetBalance)) {
     return
 }
 
-# One Git worktree can have only one active runner. Budget coordination for
-# different projects is performed through short-lived reservations, not a lock
-# held for the complete OpenCode session.
+# One Git worktree can have only one active runner; different projects remain
+# independent and may run concurrently.
 $projectLockPath = Join-Path $projectData 'project-runner.lock'
 Ensure-Directory (Split-Path -Parent $projectLockPath)
 $lock = $null
@@ -1059,7 +1014,7 @@ try {
     foreach ($flag in @('--agent','--format','--auto')) {
         if ($help -notmatch [regex]::Escape($flag)) { throw "Installed OpenCode does not support $flag; update OpenCode first." }
     }
-    if ($usageKind -eq 'balance' -or ($usageKind -eq 'quota' -and [bool](Read-Member (Read-Member $activeOpenCodeAccount 'quota') 'trackOpenCodeCosts'))) {
+    if ($limitsEnabled -and ($usageKind -eq 'balance' -or ($usageKind -eq 'quota' -and [bool](Read-Member (Read-Member $activeOpenCodeAccount 'quota') 'trackOpenCodeCosts')))) {
         $statsHelp = Invoke-Cli $openCode @('stats','--help') $repo
         if ($statsHelp -notmatch '\-\-json') { throw 'Installed OpenCode lacks stats --json; update to compatible OpenCode v2.' }
     }
@@ -1077,13 +1032,13 @@ try {
     if ($DryRun) {
         # A dry run must not write logs or budgets, but it still verifies that
         # the selected account's usage data is internally consistent.
-        [void](Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot)
+        if ($limitsEnabled) { [void](Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot) }
         Write-Host "DRY RUN OK: project=$Project branch=$branch iterations=$maxCycles; would launch agent '$($cfg.agent)'."
         return
     }
     if ($null -ne $activeProxyRoute) { $proxyBridge = Start-TerraProxyBridge $activeProxyRoute; Write-Host "Proxy route enabled for this Terra run: $($proxyBridge.Display)" }
-    $initialUsage = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot
-    Show-Usage $initialUsage $cfg.budget
+    $initialUsage = if ($limitsEnabled) { Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot } else { New-UntrackedSnapshot }
+    if ($limitsEnabled) { Show-Usage $initialUsage $cfg.budget } else { Write-Host 'Terra budget, quota, and snapshot controls are disabled for this dispatcher instance.' }
     Rotate-ProjectLogs $logsPath $cfg.logs
     Rotate-Reports $projectData $cfg.logs
     if (Test-Path -LiteralPath $stopPath) { throw "STOP flag exists: $stopPath. Use -ClearStop after review." }
@@ -1095,12 +1050,12 @@ try {
     for ($i = 1; $i -le $maxCycles; $i++) {
         if (Test-Path -LiteralPath $stopPath) { Write-Host 'STOP detected; exiting after previous iteration.'; break }
         if (Test-Path -LiteralPath $abortPath) { Write-Host 'ABORT detected; exiting.'; break }
-        $usageBefore = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot
-        Show-Usage $usageBefore $cfg.budget
-        $budgetBlock = Get-BudgetStopReason $usageBefore $cfg.budget $false
-        if ($budgetBlock) { Write-Host "Cannot start next iteration: $budgetBlock"; break }
-        $reservation = $null
-        try { $reservation = Acquire-TerraReservation $runtimeRoot $instance $activeOpenCodeAccount $usageBefore $cfg.budget } catch { Write-Host $_.Exception.Message; break }
+        $usageBefore = if ($limitsEnabled) { Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot } else { New-UntrackedSnapshot }
+        if ($limitsEnabled) {
+            Show-Usage $usageBefore $cfg.budget
+            $budgetBlock = Get-BudgetStopReason $usageBefore $cfg.budget $false
+            if ($budgetBlock) { Write-Host "Cannot start next iteration: $budgetBlock"; break }
+        }
         $pending = Count-Pending $roadmap $taskIdPattern
         if ($pending -eq 0) { Write-Host 'No pending roadmap checkbox tasks found. Stopping.'; break }
         $plannedTask = Get-NextPendingRoadmapTask $roadmap $taskIdPattern
@@ -1131,7 +1086,7 @@ try {
             $argsList = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$workerFile,
                 '-OpenCodeCommand',$openCode,'-ProjectPath',$repo,'-PromptFile',$promptFile,
                 '-EventsFile',$eventsPath,'-ErrorFile',$stderrPath,'-Agent',([string]$cfg.agent),'-Model',([string]$cfg.model))
-            if ($InstanceId) { $argsList += '-Standalone' }
+            if ($InstanceId -or $ProfileId) { $argsList += '-Standalone' }
             if ($null -ne $proxyBridge) { $argsList += @('-ProxyUrl',$proxyBridge.Url,'-NoProxy',$proxyBridge.NoProxy,'-CaFile',$proxyBridge.CaFile) }
             $reasoning = Read-Member (Read-Member $cfg 'openCode') 'reasoning'
             if ($null -ne $reasoning -and [bool](Read-Member $reasoning 'showThinking')) { $argsList += '-ShowThinking' }
@@ -1145,17 +1100,16 @@ try {
                 Show-IterationProgress $i $maxCycles $elapsed ([double]$cfg.execution.maxIterationMinutes) $pending
                 if ($elapsed.TotalMinutes -gt [double]$cfg.execution.maxIterationMinutes) { $termination = 'iteration-timeout'; break }
                 $size = (Get-Item -LiteralPath $eventsPath).Length
-                Renew-TerraReservation $reservation
                 Write-UiEvent 'iteration-heartbeat' @{ iteration=$i; elapsedSeconds=[Math]::Round($elapsed.TotalSeconds,0); eventBytes=$size }
                 if ($size -gt ([double]$cfg.execution.maxRawLogMiB * 1MB)) { $termination = 'raw-log-size-limit'; break }
-                try {
+                if ($limitsEnabled) { try {
                     $liveUsage = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot
                     $liveBlock = Get-BudgetStopReason $liveUsage $cfg.budget $true
                     if ($liveBlock) { $termination = "budget-emergency-stop: $liveBlock"; break }
                 } catch {
                     $termination = "budget-unverifiable: $($_.Exception.Message)"
                     break
-                }
+                } }
             }
             if ($termination) { Stop-Child $child }
             if ($child.HasExited) { $exitCode = $child.ExitCode }
@@ -1169,7 +1123,6 @@ try {
                 if (-not $child.HasExited) { Stop-Child $child }
                 $child.Dispose()
             }
-            Release-TerraReservation $reservation
             $activeChild = $null
         }
         $ended = Get-Date
@@ -1179,8 +1132,7 @@ try {
         }
         $usageAfter = $null
         $usageError = ''
-        try { $usageAfter = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot }
-        catch { $usageError = $_.Exception.Message }
+        if ($limitsEnabled) { try { $usageAfter = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot } catch { $usageError = $_.Exception.Message } } else { $usageAfter = New-UntrackedSnapshot }
         $headAfter = Get-Head $repo
         $doneAfter = Count-Completed $roadmap $taskIdPattern
         $eventErrors = 0
@@ -1215,7 +1167,7 @@ try {
         if ((Get-Item -LiteralPath $eventsPath).Length -eq 0 -and -not $termination) {
             $termination = 'empty-opencode-event-stream'
         }
-        if ($null -ne $usageAfter -and
+        if ($limitsEnabled -and $null -ne $usageAfter -and
             $usageAfter.AllTime.Tokens -gt $usageBefore.AllTime.Tokens -and
             $usageAfter.AllTime.CostUSD -le $usageBefore.AllTime.CostUSD -and
             [bool]$cfg.budget.stopOnZeroCostWithTokens -and -not $termination) {
@@ -1273,27 +1225,27 @@ try {
             workingTreeClean = ($gitStatus.Trim() -eq '')
             doneBefore = $doneBefore; doneAfter = $doneAfter
             pendingAfter = (Count-Pending $roadmap $taskIdPattern)
-            costBeforeUSD = $usageBefore.Daily.CostUSD
-            costAfterUSD = $(if ($null -ne $usageAfter) { $usageAfter.Daily.CostUSD } else { $null })
-            costDeltaUSD = $(if ($null -ne $usageAfter -and ($usageKind -eq 'balance' -or ($usageKind -eq 'quota' -and $null -ne $usageAfter.QuotaEstimatedSpendUSD))) {
+            costBeforeUSD = $(if ($limitsEnabled) { $usageBefore.Daily.CostUSD } else { $null })
+            costAfterUSD = $(if ($limitsEnabled -and $null -ne $usageAfter) { $usageAfter.Daily.CostUSD } else { $null })
+            costDeltaUSD = $(if ($limitsEnabled -and $null -ne $usageAfter -and ($usageKind -eq 'balance' -or ($usageKind -eq 'quota' -and $null -ne $usageAfter.QuotaEstimatedSpendUSD))) {
                 [Math]::Round([Math]::Max(0.0,[double]$usageAfter.AllTime.CostUSD-[double]$usageBefore.AllTime.CostUSD),6)
             } else { $null })
-            dayBefore = $usageBefore.Daily.Day
-            dayAfter = $(if ($null -ne $usageAfter) { $usageAfter.Daily.Day } else { $null })
-            totalTokensBefore = $usageBefore.AllTime.Tokens
-            totalTokensAfter = $(if ($null -ne $usageAfter) { $usageAfter.AllTime.Tokens } else { $null })
+            dayBefore = $(if ($limitsEnabled) { $usageBefore.Daily.Day } else { $null })
+            dayAfter = $(if ($limitsEnabled -and $null -ne $usageAfter) { $usageAfter.Daily.Day } else { $null })
+            totalTokensBefore = $(if ($limitsEnabled) { $usageBefore.AllTime.Tokens } else { $null })
+            totalTokensAfter = $(if ($limitsEnabled -and $null -ne $usageAfter) { $usageAfter.AllTime.Tokens } else { $null })
             budgetMode = $budgetMode
-            accountUsageKind = $usageKind
+            accountUsageKind = $(if ($limitsEnabled) { $usageKind } else { 'untracked' })
             openCodeAccountId = [string](Read-Member $activeOpenCodeAccount 'id')
             openCodeAccountLabel = [string](Read-Member $activeOpenCodeAccount 'label')
-            quotaRemaining = $(if ($null -ne $usageAfter) { $usageAfter.QuotaRemaining } else { $usageBefore.QuotaRemaining })
-            quotaReportedRemaining = $(if ($null -ne $usageAfter) { $usageAfter.QuotaReportedRemaining } else { $usageBefore.QuotaReportedRemaining })
-            quotaEstimatedSpendUSD = $(if ($null -ne $usageAfter) { $usageAfter.QuotaEstimatedSpendUSD } else { $usageBefore.QuotaEstimatedSpendUSD })
-            quotaReserve = $(if ($null -ne $usageAfter) { $usageAfter.QuotaReserve } else { $usageBefore.QuotaReserve })
-            quotaUnit = $(if ($null -ne $usageAfter) { $usageAfter.QuotaUnit } else { $usageBefore.QuotaUnit })
-            balanceBeforeUSD = $usageBefore.BalanceUSD
-            balanceAfterUSD = $(if ($null -ne $usageAfter) { $usageAfter.BalanceUSD } else { $null })
-            balanceSource = $usageBefore.BalanceSource
+            quotaRemaining = $(if ($limitsEnabled -and $null -ne $usageAfter) { $usageAfter.QuotaRemaining } else { $null })
+            quotaReportedRemaining = $(if ($limitsEnabled -and $null -ne $usageAfter) { $usageAfter.QuotaReportedRemaining } else { $null })
+            quotaEstimatedSpendUSD = $(if ($limitsEnabled -and $null -ne $usageAfter) { $usageAfter.QuotaEstimatedSpendUSD } else { $null })
+            quotaReserve = $(if ($limitsEnabled -and $null -ne $usageAfter) { $usageAfter.QuotaReserve } else { $null })
+            quotaUnit = $(if ($limitsEnabled -and $null -ne $usageAfter) { $usageAfter.QuotaUnit } else { '' })
+            balanceBeforeUSD = $(if ($limitsEnabled) { $usageBefore.BalanceUSD } else { $null })
+            balanceAfterUSD = $(if ($limitsEnabled -and $null -ne $usageAfter) { $usageAfter.BalanceUSD } else { $null })
+            balanceSource = $(if ($limitsEnabled) { $usageBefore.BalanceSource } else { 'disabled' })
             codeFilesChanged = $changedFiles.Code
             documentationFilesChanged = $changedFiles.Docs
             testFilesChanged = $changedFiles.Tests
@@ -1312,7 +1264,7 @@ try {
         Write-UiEvent 'iteration-finished' @{ iteration=$i; runId=$runId; summaryFile=$summaryPath; completedTaskIds=@($completedIds); completedCount=($doneAfter-$doneBefore); doneAfter=$doneAfter; totalRoadmap=($doneAfter + $summary.pendingAfter); pending=$summary.pendingAfter; elapsedSeconds=$summary.elapsedSeconds; costDeltaUSD=$summary.costDeltaUSD; commits=@($iterationCommits); toolErrors=$toolErrors; exitCode=$exitCode; stoppedReason=$termination }
         $reportPath = Write-EnglishDailyReport $projectData $begin.ToString('yyyy-MM-dd')
         Write-Host "Iteration finished: exit=$exitCode new completed tasks=$($doneAfter-$doneBefore) changedHEAD=$($headAfter -ne $headBefore) code=$($changedFiles.Code) tests=$($changedFiles.Tests) docs=$($changedFiles.Docs) toolErrors=$toolErrors"
-        if ($null -ne $usageAfter) { Show-Usage $usageAfter $cfg.budget }
+        if ($limitsEnabled -and $null -ne $usageAfter) { Show-Usage $usageAfter $cfg.budget }
         Write-Host "Daily project report: $reportPath"
         Rotate-ProjectLogs $logsPath $cfg.logs
         Rotate-Reports $projectData $cfg.logs
@@ -1322,7 +1274,7 @@ try {
                 Write-Warning "Transient TLS/SSL failure retry limit ($maxTransientRetries) reached; stopping safely. See $summaryPath"
                 break
             }
-            if (-not (Wait-ForOpenCodeRecovery $openCode $repo $cfg.budget $logRoot $maxTransientRetries $transientRetryDelaySeconds)) {
+            if ($limitsEnabled -and -not (Wait-ForOpenCodeRecovery $openCode $repo $cfg.budget $logRoot $maxTransientRetries $transientRetryDelaySeconds)) {
                 Write-Warning "OpenCode did not recover after $maxTransientRetries connection checks; stopping safely. See $summaryPath"
                 break
             }

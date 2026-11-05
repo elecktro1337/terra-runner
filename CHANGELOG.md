@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.0 - 2026-11-05
+
+- Restored one unified Development flow: command, project, then main-window or dispatcher-instance mode.
+- Added automatic command handoff to separate project terminals and moved instance controls to Development.
+- Disabled Terra budget, quota, snapshot and reservation controls for dispatcher instances; main-window runs retain them.
+- Removed the parallel reservation ledger and compacted instance snapshots.
+
 ## 2.0.0 - 2026-11-05
 
 - Added the central dispatcher, separate project terminals and the instances dashboard.

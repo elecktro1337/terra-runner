@@ -17,9 +17,16 @@ export function authStorePath(configPath, id) {
 }
 export function isTerminalInstance(instance) { return TERMINAL.has(String(instance?.state || '')); }
 export function sanitizeProfile(profile) {
-  const copy = structuredClone(profile || {});
-  delete copy.password; delete copy.passwordProtected; delete copy.secret; delete copy.token;
-  return copy;
+  const source = profile || {};
+  // Instance records are runtime coordination data, not a second configuration
+  // store. Keep only what OpenCode needs to run the frozen profile.
+  return {
+    id: String(source.id || ''), model: String(source.model || ''), provider: String(source.provider || ''),
+    credentialId: String(source.credentialId || ''), credentialLabel: String(source.credentialLabel || ''),
+    policy: String(source.policy || ''), authStoreId: String(source.authStoreId || ''),
+    reasoningVariant: String(source.reasoningVariant || ''), showThinking: Boolean(source.showThinking),
+    runControls: structuredClone(source.runControls || {})
+  };
 }
 export function normalizeRuntime(settings) {
   settings.openCode ||= {};
@@ -29,7 +36,7 @@ export function normalizeRuntime(settings) {
   }
   for (const profile of settings.openCode.profiles || []) {
     if (!profile.authStoreId) profile.authStoreId = profile.policy === 'local' ? '' : 'legacy-shared';
-    if (profile.parallelReservation == null) profile.parallelReservation = Number(profile.policy === 'local' ? 0 : profile.usageSource?.reserve ?? profile.limits?.balance?.iterationReserveUsd ?? 0.5);
+    delete profile.parallelReservation;
   }
   const valid = new Set((settings.openCode.profiles || []).map(profile => profile.id));
   for (const project of settings.projects || []) if (!valid.has(project.defaultProfileId)) project.defaultProfileId = settings.openCode.activeProfileId && valid.has(settings.openCode.activeProfileId) ? settings.openCode.activeProfileId : '';
@@ -53,16 +60,23 @@ export async function listInstances(configPath) {
     return result.filter(Boolean).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
-export async function createInstance(configPath, project, profile, proxyRoute, coordinatorId) {
+export async function createInstance(configPath, project, profile, proxyRoute, coordinatorId, launch) {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const instance = {
     id, projectId: project.id, projectPath: project.path, state: 'launching', createdAt: now, updatedAt: now,
     coordinatorId, coordinatorHeartbeatAt: now, profile: sanitizeProfile(profile), proxyRoute: proxyRoute ? structuredClone(proxyRoute) : null,
+    launch: structuredClone(launch || { command: 'idle', maxIterations: 0 }),
     runnerPid: null, windowPid: null, iteration: null, activity: '', stopReason: '', error: '', logsPath: ''
   };
   await writeJson(instancePath(configPath, id), instance);
   return instance;
+}
+export async function cleanupLegacyReservations(configPath) {
+  const active = (await listInstances(configPath)).some(instance => !isTerminalInstance(instance));
+  if (active) return false;
+  try { await fs.rm(path.join(runtimeRoot(configPath), 'reservations'), { recursive: true, force: true }); return true; }
+  catch { return false; }
 }
 export async function updateInstance(configPath, id, patch) {
   const current = await readInstance(configPath, id);

@@ -14,7 +14,7 @@ import { activeProfile, applyProfile, isLocalModel, migrateProfiles, profileFrom
 import { activeProject, normalizeProjects, validateProjectId } from './lib/projects.mjs';
 import { dailyReports, latestIterationSummary, iterationSummariesSince, projectDataRoot } from './lib/reports.mjs';
 import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, redactedRoute, validateProxyRoute } from './lib/proxy.mjs';
-import { authStorePath, createInstance, isTerminalInstance, listInstances, normalizeRuntime, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
+import { authStorePath, cleanupLegacyReservations, createInstance, isTerminalInstance, listInstances, normalizeRuntime, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -232,7 +232,7 @@ async function runWithTui(runnerArgs, settings, project, mode) {
   }
 }
 async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [], activeAccountId: '', reasoning: {} }; settings.openCode.accounts ||= []; migrateProfiles(settings); normalizeRuntime(settings); normalizeProxy(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the setup wizard once or pass --config <file>. ${error.message}`); } }
-async function save(settings) { settings.schemaVersion = 6; migrateProfiles(settings); normalizeRuntime(settings); normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
+async function save(settings) { settings.schemaVersion = 7; migrateProfiles(settings); normalizeRuntime(settings); normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
 function parseModels(text) { return [...new Set(text.split(/\r?\n/).map(v => v.trim()).filter(v => /^[a-z0-9_.-]+\/.+/i.test(v)))]; }
 function storeEnvironment(storeId) { return storeId && storeId !== 'legacy-shared' ? { OPENCODE_DB: authStorePath(configPath, storeId) } : null; }
 function authStore(settings, id) { return (settings.openCode?.stores || []).find(store => store.id === id) || null; }
@@ -301,7 +301,7 @@ function profileKindLabel(profile) {
 }
 function header(settings) {
   clear(); const project = selectedProject(settings); const profile = activeProfile(settings);
-  console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' }))); console.log(chalk.gray('RUNNER  v1.6  ·  Local OpenCode development orchestrator')); console.log(rule);
+  console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' }))); console.log(chalk.gray('RUNNER  v2.1  ·  Local OpenCode development orchestrator')); console.log(rule);
   const account = settings.openCode?.accounts?.find(item => item.id === settings.openCode?.activeAccountId); const snapshot = profile?.usageSource || {}; const unit = snapshot.unit === 'usd' ? 'USD' : '%';
   const balance = profile?.policy === 'local' ? 'not applicable' : snapshot.remaining == null ? 'snapshot required' : `${snapshot.remaining} ${unit}`;
   const age = snapshot.observedAt ? `${Math.max(0, (Date.now() - Date.parse(snapshot.observedAt)) / 60000).toFixed(0)} min ago` : 'not recorded';
@@ -463,15 +463,14 @@ async function configureType(settings, profile) {
 }
 async function profileScreen(settings, profile) {
   while (true) {
-    header(settings); console.log(chalk.bold('PROFILE DETAILS')); console.log(`  Model      ${chalk.cyan(profile.model)}`); console.log(`  Account    ${profile.credentialLabel || 'Not selected'}`); console.log(`  Storage    ${authStore(settings, profile.authStoreId)?.name || profile.authStoreId || 'not applicable'}`); console.log(`  Type       ${profile.policy}`); console.log(`  Reasoning  ${profile.reasoningVariant || 'provider default'}`); console.log(`  Limits     ${limitSummary(profile)}`); console.log(`  Hold       ${profile.parallelReservation || 0} per active iteration`); console.log(`  Data       ${usageSourceSummary(profile)}\n`);
+    header(settings); console.log(chalk.bold('PROFILE DETAILS')); console.log(`  Model      ${chalk.cyan(profile.model)}`); console.log(`  Account    ${profile.credentialLabel || 'Not selected'}`); console.log(`  Storage    ${authStore(settings, profile.authStoreId)?.name || profile.authStoreId || 'not applicable'}`); console.log(`  Type       ${profile.policy}`); console.log(`  Reasoning  ${profile.reasoningVariant || 'provider default'}`); console.log(`  Limits     ${limitSummary(profile)} ${chalk.gray('(main-window runs only)')}`); console.log(`  Data       ${usageSourceSummary(profile)}\n`);
     const canDelete = settings.openCode.profiles.length > 1;
     const actions = [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }];
-    if (profile.policy !== 'local') actions.push({ name: 'Configure provider snapshot', value: 'snapshot' }, { name: 'Configure limits', value: 'policy' }, { name: 'Set parallel iteration reservation', value: 'reservation' });
+    if (profile.policy !== 'local') actions.push({ name: 'Configure provider snapshot', value: 'snapshot' }, { name: 'Configure limits', value: 'policy' });
     if (profile.policy === 'api' && profile.usageSource?.unit === 'usd') actions.push({ name: 'Configure local OpenCode cost estimate', value: 'cost-estimate' });
     if (canDelete) actions.push({ name: chalk.red('Remove this profile'), value: 'remove' });
     const action = await pick('Profile actions', actions);
     if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'snapshot') await configureSnapshot(settings, profile); if (action === 'policy') await configureLimitPolicy(settings, profile); if (action === 'cost-estimate') await configureOpenCodeCostEstimate(settings, profile);
-    if (action === 'reservation') { const value = Number(String(await input({ message: 'Maximum reservation per active iteration', default: String(profile.parallelReservation ?? profile.usageSource?.reserve ?? 0) })).trim()); if (!Number.isFinite(value) || value < 0) { console.log(chalk.red('Enter a non-negative number.')); await pause(); } else { profile.parallelReservation = value; await save(settings); } }
     if (action === 'remove' && await yesNo(`Remove profile '${profile.model}'? This does not disconnect or delete the OpenCode account.`)) {
       settings.openCode.profiles = settings.openCode.profiles.filter(item => item.id !== profile.id);
       if (settings.openCode.activeProfileId === profile.id) applyProfile(settings, settings.openCode.profiles[0]);
@@ -513,14 +512,6 @@ async function authStoresMenu(settings) {
     if (action === 'unlink' && await yesNo(`Unlink '${store.name}'? Existing profiles using it must be reassigned first.`)) { if ((settings.openCode.profiles || []).some(profile => profile.authStoreId === store.id)) { console.log(chalk.yellow('Reassign or remove the profiles using this storage first.')); await pause(); } else { settings.openCode.stores = stores.filter(item => item.id !== store.id); await save(settings); } }
   }
 }
-async function runPreflight(settings) { header(settings); console.log(chalk.bold('PROJECT PREFLIGHT')); const project = selectedProject(settings); const profile = activeProfile(settings); const checks = [];
-  try { await fs.stat(project.path); checks.push(['Project directory', true, project.path]); } catch { checks.push(['Project directory', false, 'not found']); }
-  try { const branch = (await execute('git', ['-C', project.path, 'branch', '--show-current'])).trim(); checks.push(['Git branch', branch === project.branch, branch || 'detached HEAD']); } catch { checks.push(['Git branch', false, 'Git unavailable']); }
-  try { const status = (await execute('git', ['-C', project.path, 'status', '--porcelain'])).trim(); checks.push(['Git working tree', !status, status ? 'uncommitted or untracked files found' : 'clean']); } catch { checks.push(['Git working tree', false, 'could not read status']); }
-  for (const [name, file] of [['Roadmap', project.roadmap], ['Progress file', project.progress]]) { try { await fs.access(path.join(project.path, file)); checks.push([name, true, file]); } catch { checks.push([name, false, `${file} missing`]); } }
-  try { checks.push(['OpenCode command', true, await resolveCommand(settings.openCodeCommand || 'opencode')]); } catch (error) { checks.push(['OpenCode command', false, error.message]); }
-  const fresh = snapshotFreshness(profile); checks.push(['Provider snapshot', fresh.ok, fresh.detail]);
-  for (const [name, ok, detail] of checks) console.log(`  ${ok ? chalk.green('✓') : chalk.red('×')} ${chalk.bold(name)}  ${detail}`); return pause(); }
 async function chooseRunIterationLimit() {
   while (true) {
     const raw = String(await input({ message: 'Iterations for this run (0 = until a safety stop)', default: '0' })).trim();
@@ -528,47 +519,46 @@ async function chooseRunIterationLimit() {
     console.log(chalk.yellow('Enter a whole number from 0 to 1000.'));
   }
 }
-async function runRunner(settings, mode) {
-  const profile = activeProfile(settings);
-  if (!profile) { console.log(chalk.yellow('Create and select a profile first.')); return pause(); }
-  const limit = mode === 'continuous' ? await chooseRunIterationLimit() : 1;
-  const snapshotRelevant = profile.policy !== 'local' && profile.limitPolicy?.mode !== 'unlimited';
-  const skipSnapshotGuard = mode === 'continuous' && snapshotRelevant && !(await yesNo('Use the provider snapshot guard for this run?', true));
-  if (!skipSnapshotGuard) {
-    let freshness = snapshotFreshness(profile);
-    if (!freshness.ok) {
-      if (!(await refreshSnapshotBeforeRun(settings, profile, freshness))) return;
-      freshness = snapshotFreshness(profile);
-      if (!freshness.ok) { console.log(chalk.red(`Snapshot is still not ready: ${freshness.detail}`)); return pause(); }
-    }
-  }
-  applyProfile(settings, profile); await save(settings);
-  const project = selectedProject(settings);
-  if (!project) { console.log(chalk.red('No project is configured.')); return pause(); }
-  const runLabel = mode === 'continuous' ? (limit ? `Start continuous development for up to ${limit} iteration(s)` : 'Start continuous development until a safety stop') : 'Run one development iteration';
-  const guardNote = skipSnapshotGuard ? ' without the provider snapshot guard' : '';
-  if (!(await yesNo(`${runLabel}${guardNote}?`))) return;
-  const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-UiEvents', '-ClearControlFlags', mode === 'continuous' ? '-Continuous' : '-Once'];
-  if (mode === 'continuous') { if (limit > 0) runnerArgs.push('-MaxIterations', String(limit)); else runnerArgs.push('-UnlimitedIterations'); }
-  if (skipSnapshotGuard) runnerArgs.push('-SkipProviderSnapshotGuard');
-  await runWithTui(runnerArgs, settings, project, mode);
-  return pause();
-}
-async function developmentMenu(settings) { const action = await pick('Development', [{ name: 'Run one iteration', value: 'once' }, { name: 'Run continuously', value: 'continuous' }, { name: 'Project preflight (no agent)', value: 'preflight' }]); if (action === 'preflight') await runPreflight(settings); else if (action) await runRunner(settings, action); }
 const coordinatorId = crypto.randomUUID();
-async function openProjectWorkspace(settings) {
-  const project = selectedProject(settings); if (!project) { console.log(chalk.yellow('Create and select a project first.')); return pause(); }
-  const profile = (settings.openCode.profiles || []).find(item => item.id === project.defaultProfileId);
-  if (!profile) { console.log(chalk.yellow(`Project '${project.id}' has no default profile. Assign one in Projects.`)); return pause(); }
+async function chooseDevelopmentProject(settings) {
+  const projects = normalizeProjects(settings); if (!projects.length) return null;
+  const id = await pick('Project', projects.map(project => { const profile = (settings.openCode.profiles || []).find(item => item.id === project.defaultProfileId); return { name: `${project.id}  ${chalk.gray(`— ${profile?.model || 'default profile not assigned'}`)}`, value: project.id }; }));
+  if (!id) return null; const project = projects.find(item => item.id === id); const profile = (settings.openCode.profiles || []).find(item => item.id === project.defaultProfileId);
+  if (!profile) { console.log(chalk.yellow(`Project '${project.id}' has no default profile. Assign one in Projects before development.`)); await pause(); return null; }
+  return { project, profile };
+}
+async function chooseDevelopmentTarget() { return pick('Run mode', [{ name: 'Main window — limits and live control', value: 'main' }, { name: 'Dispatcher instance — separate terminal, no Terra limits', value: 'instance' }]); }
+async function startDispatcherInstance(settings, project, profile, launch) {
   const running = await listInstances(configPath);
   if (running.some(instance => instance.projectId === project.id && !isTerminalInstance(instance))) { console.log(chalk.yellow(`Project '${project.id}' already has an active workspace.`)); return pause(); }
   if (profile.policy !== 'local' && profile.authStoreId === 'legacy-shared' && running.some(instance => !isTerminalInstance(instance) && instance.profile?.policy !== 'local')) { console.log(chalk.yellow('The legacy shared OpenCode storage is global. Create an isolated authentication storage before running multiple cloud projects.')); return pause(); }
   if (profile.policy !== 'local' && profile.authStoreId !== 'legacy-shared') { try { await fs.access(authStorePath(configPath, profile.authStoreId)); } catch { console.log(chalk.yellow(`Authentication storage '${profile.authStoreId}' is not initialized. Open System → OpenCode authentication storages and sign in.`)); return pause(); } }
-  const route = activeProxyRoute(settings); const instance = await createInstance(configPath, project, profile, route, coordinatorId);
+  const route = activeProxyRoute(settings); const instance = await createInstance(configPath, project, profile, route, coordinatorId, launch);
   const command = `"${process.execPath}" "${path.join(root, 'node-ui', 'instance.mjs')}" --config "${configPath}" --instance "${instance.id}"`;
   const launcher = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `start "Terra ${project.id}" cmd.exe /d /k "${command}"`], { cwd: root, detached: true, stdio: 'ignore', windowsHide: false });
   launcher.unref(); await updateInstance(configPath, instance.id, { state: 'launching', activity: 'Opening project terminal' });
-  console.log(chalk.green(`Project workspace '${project.id}' is opening in a separate terminal.`)); return pause();
+  console.log(chalk.green(`Project instance '${project.id}' is opening in a separate terminal.`)); return pause();
+}
+async function runInMainWindow(settings, command, project, profile, maxIterations) {
+  if (command !== 'dry-run') {
+    const snapshotRelevant = profile.policy !== 'local' && profile.limitPolicy?.mode !== 'unlimited';
+    if (snapshotRelevant) { let freshness = snapshotFreshness(profile); if (!freshness.ok) { if (!(await refreshSnapshotBeforeRun(settings, profile, freshness))) return; freshness = snapshotFreshness(profile); if (!freshness.ok) { console.log(chalk.red(`Snapshot is still not ready: ${freshness.detail}`)); return pause(); } } }
+  }
+  const args = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-ProfileId', profile.id, '-Config', configPath];
+  if (command === 'dry-run') args.push('-DryRun'); else { args.push('-UiEvents', '-ClearControlFlags', command === 'continuous' ? '-Continuous' : '-Once'); if (command === 'continuous') args.push(maxIterations > 0 ? '-MaxIterations' : '-UnlimitedIterations', ...(maxIterations > 0 ? [String(maxIterations)] : [])); }
+  const label = command === 'dry-run' ? 'Run a dry run' : command === 'continuous' ? `Run continuously${maxIterations ? ` for up to ${maxIterations} iteration(s)` : ''}` : 'Run one iteration';
+  if (!(await yesNo(`${label} for '${project.id}' in the main window?`))) return;
+  await runWithTui(args, settings, project, command === 'continuous' ? 'continuous' : 'once'); return pause();
+}
+async function developmentMenu(settings) {
+  const command = await pick('Development', [{ name: 'One iteration', value: 'once' }, { name: 'Dry run', value: 'dry-run' }, { name: 'Continuous', value: 'continuous' }, { name: 'Active instances', value: 'instances' }]);
+  if (!command) return; if (command === 'instances') return instancesMenu();
+  const selected = await chooseDevelopmentProject(settings); if (!selected) return;
+  const target = await chooseDevelopmentTarget(); if (!target) return;
+  const maxIterations = command === 'continuous' ? await chooseRunIterationLimit() : 1;
+  const launch = { command, maxIterations };
+  if (target === 'instance') { if (!(await yesNo(`Open '${selected.project.id}' in a separate terminal and start ${command}?`))) return; return startDispatcherInstance(settings, selected.project, selected.profile, launch); }
+  return runInMainWindow(settings, command, selected.project, selected.profile, maxIterations);
 }
 async function instancesMenu() {
   while (true) {
@@ -693,16 +683,16 @@ async function systemMenu(settings) {
   try { await refreshOpenCode(settings); await save(settings); } catch (error) { console.log(chalk.red(error.message)); } return pause();
 }
 async function main() {
-  const settings = await load(); await save(settings); await writeCoordinatorHeartbeat(configPath, coordinatorId);
+  const settings = await load(); await save(settings); await cleanupLegacyReservations(configPath); await writeCoordinatorHeartbeat(configPath, coordinatorId);
   const heartbeat = setInterval(() => void writeCoordinatorHeartbeat(configPath, coordinatorId), 5000);
   try {
     while (true) {
-      header(settings); const project = selectedProject(settings); const action = await pick('Central dispatcher', [
-        { name: `Open project workspace${project ? `: ${project.id}` : ''}`, value: 'open' }, { name: 'Instances dashboard', value: 'instances' },
-        { name: 'Profiles and models', value: 'profiles' }, { name: 'Projects', value: 'projects' }, { name: 'Reports', value: 'reports' }, { name: 'System', value: 'system' }, { name: 'Stop all and exit', value: 'exit' }
+      header(settings); const action = await pick('Terra Runner', [
+        { name: 'Development', value: 'development' }, { name: 'Projects', value: 'projects' }, { name: 'Models and accounts', value: 'profiles' },
+        { name: 'Reports', value: 'reports' }, { name: 'System', value: 'system' }, { name: 'Stop all and exit', value: 'exit' }
       ]);
       if (!action || action === 'exit') { await save(settings); await stopAllInstances(); return; }
-      if (action === 'open') await openProjectWorkspace(settings); if (action === 'instances') await instancesMenu(); if (action === 'profiles') await profilesMenu(settings); if (action === 'projects') await projectsMenu(settings); if (action === 'reports') await reportsMenu(settings); if (action === 'system') await systemMenu(settings);
+      if (action === 'development') await developmentMenu(settings); if (action === 'profiles') await profilesMenu(settings); if (action === 'projects') await projectsMenu(settings); if (action === 'reports') await reportsMenu(settings); if (action === 'system') await systemMenu(settings);
     }
   } finally { clearInterval(heartbeat); await removeCoordinatorHeartbeat(configPath, coordinatorId); }
 }

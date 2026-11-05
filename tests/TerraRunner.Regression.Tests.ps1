@@ -53,12 +53,26 @@ Describe 'Terra Runner safe command dispatch' {
     It 'addresses instance controls without touching legacy project controls' {
         $id = [guid]::NewGuid().ToString()
         $runtime = Join-Path $script:root 'runtime/instances'; [void][IO.Directory]::CreateDirectory($runtime)
-        $instance = [ordered]@{ id=$id; projectId='safe-project'; profile=[ordered]@{ id='profile'; model='local/mock'; provider='local'; policy='local'; authStoreId=''; reasoningVariant=''; showThinking=$false; parallelReservation=0 }; state='idle' }
+        $instance = [ordered]@{ id=$id; projectId='safe-project'; profile=[ordered]@{ id='profile'; model='local/mock'; provider='local'; policy='local'; authStoreId=''; reasoningVariant=''; showThinking=$false }; launch=[ordered]@{ command='idle'; maxIterations=0 }; state='idle' }
         $instance | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $runtime "$id.json") -Encoding utf8
-        $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable; $settings.schemaVersion=6; $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
+        $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable; $settings.schemaVersion=7; $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
         & $runner -Project safe-project -Config $script:config -InstanceId $id -Stop
         (Test-Path -LiteralPath (Join-Path $script:root "runtime/controls/$id/STOP")) | Should Be $true
         (Test-Path -LiteralPath (Join-Path $script:state 'safe-project/STOP')) | Should Be $false
+    }
+    It 'disables Terra budget snapshots and validation for an instance' {
+        $id = [guid]::NewGuid().ToString()
+        $runtime = Join-Path $script:root 'runtime/instances'; [void][IO.Directory]::CreateDirectory($runtime)
+        $instance = [ordered]@{ id=$id; projectId='safe-project'; profile=[ordered]@{ id='profile'; model='local/mock'; provider='local'; policy='local'; authStoreId=''; reasoningVariant=''; showThinking=$false }; launch=[ordered]@{ command='idle'; maxIterations=0 }; state='idle' }
+        $instance | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $runtime "$id.json") -Encoding utf8
+        $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable
+        $settings.schemaVersion = 7; $settings.budget.dailyUsd = 0
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
+        $threw = $false
+        try { & $runner -Project safe-project -Config $script:config -InstanceId $id -Status } catch { $threw = $true }
+        $threw | Should Be $false
+        (Test-Path -LiteralPath (Join-Path $script:state 'safe-project/budgets')) | Should Be $false
+        (Test-Path -LiteralPath $script:calls) | Should Be $false
     }
     It 'keeps reports isolated by project ID' {
         $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable

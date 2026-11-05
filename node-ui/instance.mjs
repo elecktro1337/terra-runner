@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Project-scoped Terra Runner 2.0 terminal. The central dispatcher creates this
+// Project-scoped Terra Runner 2.1 terminal. The central dispatcher creates this
 // process; it deliberately receives only an instance ID, never credentials.
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -24,7 +24,7 @@ function clear() { if (process.stdout.isTTY) process.stdout.write('\x1Bc'); }
 async function pick(message, choices) { try { return await select({ message, choices: [...choices, { name: '← Back', value: null }], loop: false }); } catch (error) { if (error?.name === 'ExitPromptError') return null; throw error; } }
 async function load() { const [settings, instance] = await Promise.all([fs.readFile(configPath, 'utf8').then(JSON.parse), readInstance(configPath, instanceId)]); if (!instance) throw new Error('The dispatcher instance record no longer exists.'); const project = (settings.projects || []).find(item => item.id === instance.projectId); if (!project) throw new Error(`Project '${instance.projectId}' was removed from the configuration.`); return { settings, instance, project }; }
 function show(instance, project) {
-  clear(); console.log(chalk.cyan.bold('TERRA RUNNER 2.0  ·  PROJECT INSTANCE')); console.log(rule);
+  clear(); console.log(chalk.cyan.bold('TERRA RUNNER 2.1  ·  PROJECT INSTANCE')); console.log(rule);
   console.log(`  Project   ${chalk.white(project.id)}  ${chalk.gray(project.path)}`);
   console.log(`  Model     ${chalk.cyan(instance.profile?.model || 'not configured')}`);
   console.log(`  State     ${instance.state}${instance.activity ? chalk.gray(` — ${instance.activity}`) : ''}`);
@@ -67,10 +67,18 @@ async function heartbeatWatch() {
 const watch = setInterval(() => void heartbeatWatch(), 5000); watch.unref();
 async function main() {
   await safeUpdate({ state: 'idle', windowPid: process.pid, activity: '' });
+  const initial = await readInstance(configPath, instanceId);
+  const launch = initial?.launch || { command: 'idle', maxIterations: 0 };
+  if (['once', 'continuous', 'dry-run'].includes(launch.command)) {
+    const { project } = await load(); show(initial, project);
+    console.log(chalk.cyan(`Starting requested ${launch.command} run…`));
+    if (launch.command === 'dry-run') await preflight(); else await run(launch.command, Number(launch.maxIterations || 0));
+    await safeUpdate({ launch: { command: 'idle', maxIterations: 0 } });
+  }
   while (true) {
     const { instance, project } = await load(); show(instance, project);
     const action = await pick('Project instance', [
-      { name: 'Run one development iteration', value: 'once' }, { name: 'Run continuously', value: 'continuous' }, { name: 'Project preflight', value: 'preflight' },
+      { name: 'Run one development iteration', value: 'once' }, { name: 'Run continuously', value: 'continuous' }, { name: 'Dry run', value: 'preflight' },
       { name: 'Request graceful stop', value: 'stop' }, { name: chalk.red('Emergency abort'), value: 'abort' }, { name: 'Close project window', value: 'close' }
     ]);
     if (!action || action === 'close') { if (['running', 'starting', 'stopping', 'aborting'].includes(instance.state)) { console.log(chalk.yellow('Request Stop or Abort before closing this active project window.')); await input({ message: 'Press Enter to continue' }); continue; } await safeUpdate({ state: 'stopped', activity: 'Project window closed' }); return; }

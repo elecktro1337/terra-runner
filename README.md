@@ -1,11 +1,12 @@
-# Terra Runner 2.0
+# Terra Runner 2.1
 
-Terra Runner is a local Windows orchestrator for controlled OpenCode development. The central dispatcher manages projects, profiles, models, proxy routes and running workspaces; each opened project receives its own terminal window and process-scoped execution environment.
+Terra Runner is a local Windows orchestrator for controlled OpenCode development. The central application manages projects, profiles, models, proxy routes and running workspaces; a development command can run in the main window or in a separate project terminal.
 
 - A project has one active workspace, preventing concurrent edits to the same Git worktree.
 - Different projects can run in parallel with independent logs, controls and OpenCode environments.
+- Development always chooses a command, project, and run mode explicitly. Main-window runs enforce the profile limits; separate dispatcher instances deliberately do not read or enforce Terra budget/quota snapshots.
 - Isolated OpenCode credential stores use `OPENCODE_DB`; the legacy shared store remains available only for safe single-cloud-workspace migration.
-- Closing the dispatcher requests a graceful Stop for every project workspace. The dashboard exposes an explicit emergency Abort.
+- Closing the dispatcher requests a graceful Stop for every project workspace. `Development → Active instances` exposes an explicit emergency Abort.
 
 ## Start
 
@@ -35,7 +36,7 @@ A profile combines an OpenCode account, model, reasoning level, and execution po
 
 Terra Runner never reads or stores API keys or OAuth tokens. It imports account labels through `opencode auth list --format json`, selects accounts through OpenCode, and imports models through `opencode models`.
 
-A provider snapshot is a user-entered observation, not a live provider query. When a required snapshot is missing or stale, the UI asks for it directly before development starts.
+A provider snapshot is a user-entered observation, not a live provider query. When a required snapshot is missing or stale, the UI asks for it directly before a main-window development run starts. Separate dispatcher instances deliberately do not inspect snapshots or Terra limits.
 
 ### Optional local OpenCode cost estimate
 
@@ -45,7 +46,9 @@ This is explicitly an estimate, not the provider's actual balance. It may includ
 
 ## Running development
 
-Choose **Development → Run one iteration** for one explicit agent run.
+The main menu is **Development**, **Projects**, **Models & accounts**, **Reports**, **System**, and **Exit**. In **Development**, choose **One iteration**, **Dry run**, **Continuous**, or **Active instances**. A launch always follows command → project → run mode → (continuous parameters) → confirmation.
+
+Choose **Development → One iteration** for one explicit agent run. **Main window** keeps live progress and the selected profile's normal safety limits. **Dispatcher instance** opens the project in a separate terminal immediately with the selected command snapshot; it retains project locks, isolated OpenCode storage and proxy scope, but intentionally has no Terra budget, quota, or reservation checks.
 
 For **Run continuously**, choose the iteration limit at launch:
 
@@ -84,9 +87,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester .\tests\TerraRun
 
 The test suites use local mocks and temporary repositories. They make no paid OpenCode requests.
 
-## Upgrade to 2.0
+## Upgrade to 2.1
 
-On first dispatcher start, configuration is migrated to schema v6. Existing
+On first dispatcher start, configuration is migrated to schema v7. Existing
 profiles are attached to a `Legacy shared OpenCode` storage and selected as the
 default profile for existing projects. Create an isolated authentication storage,
 sign in through the dispatcher, then assign it to each cloud profile before
