@@ -14,6 +14,7 @@ import { activeProxyRoute } from './lib/proxy.mjs';
 import { LiveFooter, LiveStatusBlock } from './lib/live-footer.mjs';
 import { developmentHeaderRows } from './lib/run-display.mjs';
 import { readRoadmapProgress } from './lib/roadmap.mjs';
+import { completedIterationText } from './lib/iteration-history.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -113,7 +114,7 @@ async function run(mode, limit = 1) {
         const event = JSON.parse(line.slice('__TERRA_UI__'.length));
         if (event.type === 'iteration-started') { eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; iterationStarted = Date.now(); iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`; stage = `${iterationLabel} | ${event.taskId || 'next roadmap task'} | ${event.pending} tasks pending`; detail = event.taskTitle ? `Task: ${event.taskTitle}` : ''; }
         if (event.type === 'iteration-heartbeat') { stage = `Iteration ${event.iteration} | working`; }
-        if (event.type === 'iteration-finished') { completedIterations.push(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} Iteration ${event.iteration} complete | ${event.completedCount ? `+${event.completedCount} task(s)` : 'no roadmap task completed'} | ${event.pending} pending`); stage = 'Preparing next iteration'; detail = ''; }
+        if (event.type === 'iteration-finished') { completedIterations.push(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`); stage = 'Preparing next iteration'; detail = ''; }
         await safeUpdate({ state: 'running', activity: event.type === 'iteration-heartbeat' ? `Iteration ${event.iteration}: ${event.elapsedSeconds}s` : event.type, iteration: event.iteration ?? null });
       } catch { }
     }

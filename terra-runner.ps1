@@ -1274,7 +1274,7 @@ try {
             errorFile = [IO.Path]::GetFileName($stderrPath)
         }
         Save-Json $summaryPath $summary
-        Write-UiEvent 'iteration-finished' @{ iteration=$i; runId=$runId; summaryFile=$summaryPath; completedTaskIds=@($completedIds); completedCount=($doneAfter-$doneBefore); doneAfter=$doneAfter; totalRoadmap=($doneAfter + $summary.pendingAfter); pending=$summary.pendingAfter; elapsedSeconds=$summary.elapsedSeconds; costDeltaUSD=$summary.costDeltaUSD; commits=@($iterationCommits); toolErrors=$toolErrors; exitCode=$exitCode; stoppedReason=$termination }
+        Write-UiEvent 'iteration-finished' @{ iteration=$i; runId=$runId; summaryFile=$summaryPath; taskId=$plannedTask.Id; taskTitle=$plannedTask.Title; completedTaskIds=@($completedIds); completedCount=($doneAfter-$doneBefore); doneAfter=$doneAfter; totalRoadmap=($doneAfter + $summary.pendingAfter); pending=$summary.pendingAfter; elapsedSeconds=$summary.elapsedSeconds; costDeltaUSD=$summary.costDeltaUSD; commits=@($iterationCommits); toolErrors=$toolErrors; exitCode=$exitCode; stoppedReason=$termination }
         $reportPath = Write-EnglishDailyReport $projectData $begin.ToString('yyyy-MM-dd')
         Write-Host "Iteration finished: exit=$exitCode new completed tasks=$($doneAfter-$doneBefore) changedHEAD=$($headAfter -ne $headBefore) code=$($changedFiles.Code) tests=$($changedFiles.Tests) docs=$($changedFiles.Docs) toolErrors=$toolErrors"
         if ($limitsEnabled -and $null -ne $usageAfter) { Show-Usage $usageAfter $profileBudget }

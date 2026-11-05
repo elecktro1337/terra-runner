@@ -19,6 +19,7 @@ import { developmentHeaderRows } from './lib/run-display.mjs';
 import { readRoadmapProgress } from './lib/roadmap.mjs';
 import { instanceTerminalLauncher } from './lib/instance-launcher.mjs';
 import { ensureProjectAuthStore, isProjectManagedStore, removeProjectAuthStore } from './lib/project-auth-stores.mjs';
+import { completedIterationText } from './lib/iteration-history.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -125,15 +126,6 @@ function activityFromEvent(event) {
   if (/(read|list|glob|search|grep)/.test(tool)) return 'Inspecting project files';
   return 'Using OpenCode tools';
 }
-function iterationCheckpointText(event) {
-  const tasks = Array.isArray(event.completedTaskIds) && event.completedTaskIds.length ? event.completedTaskIds.join(', ') : event.completedCount ? `+${event.completedCount} roadmap task(s)` : 'no roadmap task completed';
-  const commit = Array.isArray(event.commits) && event.commits.length ? event.commits.map(item => item.hash ? `${item.hash} ${item.subject || ''}`.trim() : String(item)).join(', ') : 'no commit recorded';
-  const stopped = event.stoppedReason ? ` | ${event.stoppedReason}` : '';
-  const cost = event.costDeltaUSD == null ? '' : ` | $${Number(event.costDeltaUSD).toFixed(4)}`;
-  const total = Number(event.totalRoadmap || 0); const done = Number(event.doneAfter || 0);
-  const roadmap = total ? ` | roadmap ${done}/${total} (${((done / total) * 100).toFixed(1)}%)` : '';
-  return `Iteration ${event.iteration} complete | ${tasks} | ${durationText(Number(event.elapsedSeconds || 0) * 1000)}${cost}${roadmap} | ${commit}${stopped}`;
-}
 function showRunnerFailure(output) {
   const text = String(output || ''); let title = 'DEVELOPMENT DID NOT START'; let reason = 'Terra Runner could not start the development run.'; let action = 'Open the project logs or run Project preflight, then try again.'; let detail = '';
   if (/working tree has uncommitted\/untracked changes/i.test(text)) {
@@ -221,7 +213,7 @@ async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
               iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`;
               checkpoint = ''; notice = ''; stage = `${iterationLabel} | ${event.taskId || 'next roadmap task'} | ${event.pending} tasks pending`;
             }
-              if (event.type === 'iteration-finished') { const completed = `${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${iterationCheckpointText(event)}`; completedIterations.push(completed); checkpoint = ''; notice = ''; stage = 'Preparing next iteration'; if (liveAttached) renderStatus(); else console.log(`  ${completed}`); }
+              if (event.type === 'iteration-finished') { const completed = `${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`; completedIterations.push(completed); checkpoint = ''; notice = ''; stage = 'Preparing next iteration'; if (liveAttached) renderStatus(); else console.log(`  ${completed}`); }
           } catch { }
           return;
         }
