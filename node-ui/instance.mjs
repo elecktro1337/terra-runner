@@ -15,6 +15,8 @@ import { LiveFooter, LiveStatusBlock } from './lib/live-footer.mjs';
 import { developmentHeaderRows } from './lib/run-display.mjs';
 import { readRoadmapProgress } from './lib/roadmap.mjs';
 import { completedIterationText } from './lib/iteration-history.mjs';
+import { instanceOutcome } from './lib/instance-outcome.mjs';
+import { latestIterationSummary, projectDataRoot } from './lib/reports.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -60,12 +62,23 @@ function renderRunHeader(settings, project, profile, command, roadmap) {
 }
 async function pick(message, choices) { try { return await select({ message, choices: [...choices, { name: '← Back', value: null }], loop: false }); } catch (error) { if (error?.name === 'ExitPromptError') return null; throw error; } }
 async function load() { const [settings, instance] = await Promise.all([fs.readFile(configPath, 'utf8').then(JSON.parse), readInstance(configPath, instanceId)]); if (!instance) throw new Error('The dispatcher instance record no longer exists.'); const project = (settings.projects || []).find(item => item.id === instance.projectId); if (!project) throw new Error(`Project '${instance.projectId}' was removed from the configuration.`); return { settings, instance, project }; }
-function show(settings, instance, project) {
+async function show(settings, instance, project) {
+  const [summary, roadmap] = await Promise.all([latestIterationSummary(settings, project, configPath), readRoadmapProgress(project)]);
+  const outcome = instanceOutcome(instance, summary, roadmap);
   globalHeader(settings);
   console.log(`  Project   ${chalk.white(project.id)}  ${chalk.gray(project.path)}`);
   console.log(`  Model     ${chalk.cyan(instance.profile?.model || 'not configured')}`);
   console.log(`  State     ${instance.state}${instance.activity ? chalk.gray(` — ${instance.activity}`) : ''}`);
-  console.log(`  Started   ${instance.createdAt}`); if (instance.stopReason) console.log(`  Stop      ${chalk.yellow(instance.stopReason)}`); if (instance.error) console.log(`  Error     ${chalk.red(instance.error)}`);
+  console.log(`  Started   ${instance.createdAt}`);
+  if (outcome) {
+    const resultColor = outcome.kind === 'complete' ? chalk.green : outcome.kind === 'failed' || outcome.kind === 'aborted' ? chalk.red : chalk.yellow;
+    console.log(`  Result    ${resultColor(outcome.reason)}`);
+    if (outcome.roadmap) console.log(`  Roadmap   ${outcome.kind === 'complete' ? chalk.green(outcome.roadmap) : outcome.roadmap}`);
+    if (outcome.task) console.log(`  Last task ${chalk.cyan(outcome.task)}`);
+    if (outcome.duration) console.log(`  Duration  ${outcome.duration}`);
+    if (outcome.commit) console.log(`  Commit    ${chalk.gray(outcome.commit)}`);
+    console.log(`  Logs      ${chalk.gray(projectDataRoot(settings, project, configPath))}`);
+  }
   console.log(rule);
 }
 async function safeUpdate(patch) { return updateInstance(configPath, instanceId, patch); }
@@ -126,7 +139,9 @@ async function run(mode, limit = 1) {
   await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }).then(async code => {
     const current = await readInstance(configPath, instanceId); const aborted = current?.state === 'aborting'; const stopped = current?.state === 'stopping';
     const failed = !aborted && !stopped && code !== 0;
-    await safeUpdate({ state: aborted ? 'aborted' : stopped ? 'stopped' : code === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', error: failed ? instanceRunnerFailure(stderr, code) : '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? 'Graceful stop completed.' : code === 0 ? '' : `runner exit ${code}` });
+    const roadmapAfter = await readRoadmapProgress(project);
+    const normalReason = roadmapAfter.available && roadmapAfter.pending === 0 ? `Roadmap complete — all ${roadmapAfter.total} task(s) are done.` : '';
+    await safeUpdate({ state: aborted ? 'aborted' : stopped ? 'stopped' : code === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', error: failed ? instanceRunnerFailure(stderr, code) : '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? 'Graceful stop completed.' : code === 0 ? normalReason : `runner exit ${code}` });
   }).catch(async error => { await safeUpdate({ state: 'failed', runnerPid: null, error: error.message, activity: '' }); }).finally(() => {
     if (paint) clearInterval(paint); clearInterval(eventWatch); if (liveAttached) process.stdout.off('resize', onResize); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h');
   });
@@ -153,13 +168,13 @@ async function main() {
   await safeUpdate({ state: 'idle', windowPid: process.pid, activity: '' });
   const launch = initial?.launch || { command: 'idle', maxIterations: 0 };
   if (['once', 'continuous', 'dry-run'].includes(launch.command)) {
-    const { settings, project } = await load(); show(settings, initial, project);
+    const { settings, project } = await load(); await show(settings, initial, project);
     console.log(chalk.cyan(`Starting requested ${launch.command} run…`));
     if (launch.command === 'dry-run') await preflight(); else await run(launch.command, Number(launch.maxIterations || 0));
     await safeUpdate({ launch: { command: 'idle', maxIterations: 0 } });
   }
   while (true) {
-    const { settings, instance, project } = await load(); show(settings, instance, project);
+    const { settings, instance, project } = await load(); await show(settings, instance, project);
     const action = await pick('Project instance', [
       { name: 'Run one development iteration', value: 'once' }, { name: 'Run continuously', value: 'continuous' }, { name: 'Dry run', value: 'preflight' },
       { name: 'Request graceful stop', value: 'stop' }, { name: chalk.red('Emergency abort'), value: 'abort' }, { name: 'Close project window', value: 'close' }
