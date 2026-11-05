@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Permit a new or edited project-instructions file as the sole local Git change; the worker commits that unchanged file separately before task work.
 - Fixed project-instance results: the roadmap is shown once, and the result now includes completed tasks and iteration count for the current launch.
 - Temporary OpenCode and Git TLS/network failures now keep the instance waiting for reconnection instead of ending the development run; Stop and Abort remain available during the wait.
 

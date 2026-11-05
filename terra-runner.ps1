@@ -101,12 +101,17 @@ function Resolve-ProjectInstructionsFile([string]$Repository, $ProjectConfig) {
 function Assert-ProjectInstructionsFile([string]$Repository, $Instructions) {
     if ($null -eq $Instructions -or -not (Test-Path -LiteralPath $Instructions.Path -PathType Leaf)) {
         $relative = if ($null -eq $Instructions) { 'PROJECT-INSTRUCTIONS.md' } else { [string]$Instructions.Relative }
-        throw "Project instructions file is required: $relative. Create it from Projects, then commit it before Development."
+        throw "Project instructions file is required: $relative. Create it from Projects before Development."
     }
-    try { [void](Invoke-Cli 'git' @('-C',$Repository,'ls-files','--error-unmatch','--',$Instructions.Relative) $Repository) }
-    catch { throw "Project instructions file must be committed to Git: $($Instructions.Relative). Commit it before Development." }
-    $status = Invoke-Cli 'git' @('-C',$Repository,'status','--porcelain','--',$Instructions.Relative) $Repository
-    if ($status.Trim() -ne '') { throw "Project instructions file has uncommitted changes: $($Instructions.Relative). Commit it before Development." }
+}
+function Test-OnlyProjectInstructionsChanges([string]$Repository, $Instructions) {
+    # Compare Git's own porcelain output instead of parsing filenames ourselves:
+    # this remains correct for spaces and non-ASCII paths. The instructions
+    # file may be new, staged, or modified, but it must be the *only* change.
+    $allChanges = Invoke-Cli 'git' @('-C',$Repository,'status','--porcelain') $Repository
+    if ([string]::IsNullOrWhiteSpace($allChanges)) { return $false }
+    $instructionChanges = Invoke-Cli 'git' @('-C',$Repository,'status','--porcelain','--',$Instructions.Relative) $Repository
+    return $allChanges.Trim() -ceq $instructionChanges.Trim()
 }
 function Get-ActiveProxyRoute($Config) {
     $proxy = Read-Member $Config 'proxy'
@@ -1149,13 +1154,18 @@ try {
         Assert-ProjectInstructionsFile $repo $projectInstructions
     }
     $initialGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
-    if ($initialGitStatus.Trim() -ne '' -and ($Once -or $Continuous)) {
+    $instructionsAreOnlyChange = $requiresProjectInstructions -and (Test-OnlyProjectInstructionsChanges $repo $projectInstructions)
+    if ($initialGitStatus.Trim() -ne '' -and -not $instructionsAreOnlyChange -and ($Once -or $Continuous)) {
         $recovery = Recover-TerraInterruptedWork $repo ([string]$projectConfig.branch) $projectData $maxPushRetries $pushRetryDelaySeconds $stopPath $abortPath
         if ($null -ne $recovery -and $recovery.Interrupted) { return }
         $initialGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
+        $instructionsAreOnlyChange = $requiresProjectInstructions -and (Test-OnlyProjectInstructionsChanges $repo $projectInstructions)
     }
-    if ($initialGitStatus.Trim() -ne '') {
+    if ($initialGitStatus.Trim() -ne '' -and -not $instructionsAreOnlyChange) {
         throw 'Git working tree has uncommitted/untracked changes. Review and resolve them before automated execution.'
+    }
+    if ($instructionsAreOnlyChange) {
+        Write-Host "Project instructions are the only local Git change. The worker must commit '$($projectInstructions.Relative)' unchanged before task work."
     }
     $roadmap = Join-Path $repo ([string]$projectConfig.roadmap)
     $progress = Join-Path $repo ([string]$projectConfig.progress)

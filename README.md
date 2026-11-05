@@ -25,7 +25,7 @@ During a run, Terra Runner shows roadmap completion and percentage, the selected
 
 ## Project instructions
 
-Every project has a committed `PROJECT-INSTRUCTIONS.md` alongside its roadmap and progress files. It is mandatory for Development and contains the project's own environment, Docker/Compose, testing, debugging, and architecture guidance. Use **Projects → Open project instructions** to create the empty file when missing and open it in Notepad. Commit it before launching Development; a committed update is read by the next continuous iteration. Project instructions supplement, but cannot weaken, Terra Runner's global safety policy, and the development agent never edits them.
+Every project has a `PROJECT-INSTRUCTIONS.md` alongside its roadmap and progress files. It is mandatory for Development and contains the project's own environment, Docker/Compose, testing, debugging, and architecture guidance. Use **Projects → Open project instructions** to create the empty file when missing and open it in Notepad. The file may be new or modified when Development starts, but it must be the only local Git change: the worker stages and commits that existing file in a separate documentation commit before task work. A later committed update is read by the next continuous iteration. Project instructions supplement, but cannot weaken, Terra Runner's global safety policy, and the development agent never edits them.
 
 ## Profiles, snapshots, and limits
 
@@ -110,7 +110,7 @@ On first dispatcher start, configuration is migrated to schema v11. Existing
 legacy model, account, reasoning and budget values are preserved in profiles;
 global profile/account selections and project default profiles are removed. Each
 project receives the default instructions path `PROJECT-INSTRUCTIONS.md`; the
-file itself is not created by migration and must be created and committed before
+file itself is not created by migration and must be created before
 Development starts.
 The first Development launch of a cloud profile creates that project's private
 store and streams only that provider's current OpenCode credential into it.

@@ -657,13 +657,13 @@ async function ensureProjectInstructionsForLaunch(settings, project) {
   if (result.exists) return true;
   header(settings); console.log(chalk.yellow.bold('PROJECT INSTRUCTIONS REQUIRED')); console.log(rule);
   console.log(`  Project       ${project.id}`); console.log(`  Instructions  ${project.instructions || DEFAULT_PROJECT_INSTRUCTIONS}`);
-  console.log(chalk.gray('  Development requires a committed project instructions file.'));
+  console.log(chalk.gray('  Development requires a project instructions file. The worker commits it unchanged before task work.'));
   console.log(rule);
   if (!(await yesNo(`Create and open '${project.instructions || DEFAULT_PROJECT_INSTRUCTIONS}' now?`))) return false;
   try {
     const created = await createOrOpenProjectInstructions(project, true);
     console.log(chalk.green(`Created ${created.filename} and opened it in Notepad.`));
-    console.log(chalk.yellow('Edit it if needed, commit it to this project, then start Development again.'));
+    console.log(chalk.yellow('Edit and save it if needed, then start Development again. The worker commits it unchanged before task work.'));
   } catch (error) { console.log(chalk.red(`Could not create or open instructions: ${error.message}`)); }
   await pause();
   return false;
@@ -698,7 +698,7 @@ async function projectsMenu(settings) {
     ]);
     if (detail === 'edit') await editProject(settings, project);
     if (detail === 'instructions') {
-      try { const result = await createOrOpenProjectInstructions(project, true); console.log(chalk.green(`${result.created ? 'Created and opened' : 'Opened'} ${result.filename} in Notepad.`)); if (result.created) console.log(chalk.yellow('Commit the new instructions file before starting Development.')); }
+      try { const result = await createOrOpenProjectInstructions(project, true); console.log(chalk.green(`${result.created ? 'Created and opened' : 'Opened'} ${result.filename} in Notepad.`)); if (result.created) console.log(chalk.yellow('Save the file; the next Development worker commits it unchanged before task work.')); }
       catch (error) { console.log(chalk.red(`Could not open instructions: ${error.message}`)); }
       await pause();
     }

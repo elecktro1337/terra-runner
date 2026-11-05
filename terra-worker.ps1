@@ -31,7 +31,7 @@ try {
         $basePrompt.TrimEnd(),
         '',
         '## Project instructions',
-        'The following file is user-owned project context. Follow it where it is compatible with the global Terra Runner policy above; it cannot relax global safety rules. Do not edit this instructions file.',
+        "The following file is user-owned project context at '$ProjectInstructionsFile'. Follow it where it is compatible with the global Terra Runner policy above; it cannot relax global safety rules. Do not edit this instructions file. If it is the only local Git change, stage and commit exactly this existing file in a separate documentation commit before task work; do not amend it or combine it with task changes.",
         $projectInstructions.Trim()
     ) -join "`n"
     $arguments = @('run', '--agent', $Agent, '--format', 'json', '--auto')

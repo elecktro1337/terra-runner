@@ -113,8 +113,9 @@ try {
     Write-Host 'PASS: readable logs, tool errors, and daily reports.' -ForegroundColor Green
     Write-Host 'PASS: one iteration, TODO update, commit, push and project log.' -ForegroundColor Green
 
-    # Instructions are mandatory, tracked, and clean before a dry run or
-    # model launch. Restore each local probe before the remaining scenarios.
+    # Instructions are mandatory, but may be the only pending Git change: the
+    # development worker owns committing that existing user-authored file.
+    # Restore each local probe before the remaining scenarios.
     $instructions = Join-Path $repo 'PROJECT-INSTRUCTIONS.md'
     Move-Item -LiteralPath $instructions -Destination ($instructions + '.missing')
     $missingInstructions = $false
@@ -122,16 +123,21 @@ try {
     Move-Item -LiteralPath ($instructions + '.missing') -Destination $instructions
     if (-not $missingInstructions) { throw 'Missing project instructions did not block a dry run.' }
     Add-Content -LiteralPath $instructions -Value 'Uncommitted instruction change.'
-    $dirtyInstructions = $false
-    try { & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun } catch { $dirtyInstructions = $_.Exception.Message -match 'instructions file has uncommitted changes' }
+    $dirtyInstructionsAllowed = $true
+    try { & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun } catch { $dirtyInstructionsAllowed = $false }
     & git -C $repo checkout -- PROJECT-INSTRUCTIONS.md
-    if (-not $dirtyInstructions) { throw 'Dirty project instructions did not block a dry run.' }
+    if (-not $dirtyInstructionsAllowed) { throw 'Dirty project instructions unexpectedly blocked a dry run.' }
     & git -C $repo rm --cached -q PROJECT-INSTRUCTIONS.md
-    $untrackedInstructions = $false
-    try { & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun } catch { $untrackedInstructions = $_.Exception.Message -match 'instructions file must be committed' }
+    $untrackedInstructionsAllowed = $true
+    try { & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun } catch { $untrackedInstructionsAllowed = $false }
     & git -C $repo add PROJECT-INSTRUCTIONS.md
-    if (-not $untrackedInstructions) { throw 'Untracked project instructions did not block a dry run.' }
-    Write-Host 'PASS: project instructions must exist, be tracked, and be clean.' -ForegroundColor Green
+    if (-not $untrackedInstructionsAllowed) { throw 'Untracked project instructions unexpectedly blocked a dry run.' }
+    [IO.File]::WriteAllText((Join-Path $repo 'UNRELATED-LOCAL-CHANGE.md'),'must block development')
+    $unrelatedChangeBlocked = $false
+    try { & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun } catch { $unrelatedChangeBlocked = $_.Exception.Message -match 'working tree has uncommitted/untracked changes' }
+    Remove-Item -LiteralPath (Join-Path $repo 'UNRELATED-LOCAL-CHANGE.md') -Force
+    if (-not $unrelatedChangeBlocked) { throw 'An unrelated local change did not block a dry run.' }
+    Write-Host 'PASS: project instructions may be the only uncommitted Git change.' -ForegroundColor Green
 
     # The runner reads instructions afresh for every worker. A clean commit
     # made between iterations must appear in the next worker prompt.

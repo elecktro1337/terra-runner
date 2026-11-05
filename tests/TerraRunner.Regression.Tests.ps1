@@ -56,6 +56,9 @@ Describe 'Terra Runner safe command dispatch' {
         $worker | Should Match '\[Parameter\(Mandatory\)\]\[string\]\$ProjectInstructionsFile'
         $worker | Should Match 'Get-Content -LiteralPath \$ProjectInstructionsFile'
         $worker | Should Match 'cannot relax global safety rules'
+        $worker | Should Match 'stage and commit exactly this existing file'
+        $source = Get-Content -LiteralPath $runner -Raw
+        $source | Should Match 'function Test-OnlyProjectInstructionsChanges'
     }
     It 'does not start an agent for Report' {
         & $runner -Project safe-project -Config $script:config -Report
