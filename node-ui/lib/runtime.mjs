@@ -38,8 +38,7 @@ export function normalizeRuntime(settings) {
     if (!profile.authStoreId) profile.authStoreId = profile.policy === 'local' ? '' : 'legacy-shared';
     delete profile.parallelReservation;
   }
-  const valid = new Set((settings.openCode.profiles || []).map(profile => profile.id));
-  for (const project of settings.projects || []) if (!valid.has(project.defaultProfileId)) project.defaultProfileId = settings.openCode.activeProfileId && valid.has(settings.openCode.activeProfileId) ? settings.openCode.activeProfileId : '';
+  for (const project of settings.projects || []) delete project.defaultProfileId;
   return settings;
 }
 async function writeJson(filename, value) {

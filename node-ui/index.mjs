@@ -9,7 +9,7 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import figlet from 'figlet';
 import ora from 'ora';
-import { activeProfile, applyProfile, isLocalModel, migrateProfiles, profileFrom } from './lib/profiles.mjs';
+import { defaultApiLimits, isLocalModel, migrateProfiles, profileFrom } from './lib/profiles.mjs';
 import { normalizeProjects, validateProjectId } from './lib/projects.mjs';
 import { dailyReports, latestIterationSummary, iterationSummariesSince, projectDataRoot } from './lib/reports.mjs';
 import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, redactedRoute, validateProxyRoute } from './lib/proxy.mjs';
@@ -239,8 +239,8 @@ async function runWithTui(runnerArgs, settings, project, mode) {
     clearInterval(update); clearInterval(liveUpdate); cleanupControls(); if (footerAttached) process.stdout.off('resize', onResize); footer.clear(); if (footerAttached) process.stdout.write('\x1b[?25h'); console.log(chalk.red(`x Development runner could not start: ${error.message}`)); return false;
   }
 }
-async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [], activeAccountId: '', reasoning: {} }; settings.openCode.accounts ||= []; migrateProfiles(settings); normalizeRuntime(settings); normalizeProxy(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the setup wizard once or pass --config <file>. ${error.message}`); } }
-async function save(settings) { settings.schemaVersion = 8; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
+async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [] }; settings.openCode.accounts ||= []; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the setup wizard once or pass --config <file>. ${error.message}`); } }
+async function save(settings) { settings.schemaVersion = 9; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
 function parseModels(text) { return [...new Set(text.split(/\r?\n/).map(v => v.trim()).filter(v => /^[a-z0-9_.-]+\/.+/i.test(v)))]; }
 function storeEnvironment(storeId) { return storeId && storeId !== 'legacy-shared' ? { OPENCODE_DB: authStorePath(configPath, storeId) } : null; }
 function authStore(settings, id) { return (settings.openCode?.stores || []).find(store => store.id === id) || null; }
@@ -280,28 +280,22 @@ function profileKindLabel(profile) {
   return chalk.yellow('[API]');
 }
 function header(settings) {
-  clear(); const profile = activeProfile(settings);
-  console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' }))); console.log(chalk.gray('RUNNER  v2.2  ·  Local OpenCode development orchestrator')); console.log(rule);
-  const account = settings.openCode?.accounts?.find(item => item.id === settings.openCode?.activeAccountId); const snapshot = profile?.usageSource || {}; const unit = snapshot.unit === 'usd' ? 'USD' : '%';
-  const balance = profile?.policy === 'local' ? 'not applicable' : snapshot.remaining == null ? 'snapshot required' : `${snapshot.remaining} ${unit}`;
-  const age = snapshot.observedAt ? `${Math.max(0, (Date.now() - Date.parse(snapshot.observedAt)) / 60000).toFixed(0)} min ago` : 'not recorded';
-  console.log(`${chalk.bold('Account')}   ${account?.label || profile?.credentialLabel || 'not selected'}  ${chalk.gray('│')}  ${profileKindLabel(profile || {})}  ${chalk.gray('│')}  ${chalk.cyan(profile?.model || 'not selected')}  ${chalk.gray('│')}  Reasoning ${profile?.reasoningVariant || 'provider default'}`);
-  console.log(`${chalk.bold('Snapshot')}  ${balance}  ${chalk.gray(`│ ${age}`)}`); console.log(`${chalk.bold('Limits')}    ${chalk.yellow(limitSummary(profile))}`);
-  if (snapshot.costTracking?.enabled) console.log(`${chalk.bold('OpenCode')}  local cost estimate enabled`);
-  else if (profile?.policy === 'api' && snapshot.unit === 'usd') console.log(`${chalk.bold('OpenCode')}  local cost estimate is off`);
+  clear(); const route = activeProxyRoute(settings); const projects = normalizeProjects(settings); const profiles = migrateProfiles(settings);
+  console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' }))); console.log(chalk.gray('RUNNER  v2.3  ·  Local OpenCode development orchestrator')); console.log(rule);
+  console.log(`${chalk.bold('Workspace')} ${projects.length} project(s)  ${chalk.gray('│')}  ${profiles.length} profile(s)  ${chalk.gray('│')}  Proxy ${route ? route.name : 'Direct'}`);
   console.log(rule);
 }
 function numberValue(raw, fallback) { const parsed = Number(String(raw).trim().replace(',', '.')); return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback; }
 async function configureLimits(settings, profile) {
   if (profile.policy === 'local') { console.log(chalk.green('\nLocal profile: no balance or quota limits are shown or enforced.')); return pause(); }
   if (profile.policy === 'oauth-managed') { console.log(chalk.yellow('\nOAuth profile: usage, allowance and reset windows are managed by the provider.')); console.log(chalk.gray('No manual quota snapshot is stored or enforced by Terra Runner.')); return pause(); }
-  const limits = structuredClone(profile.limits || settings.budget || {}); limits.balance ||= {};
+  const limits = structuredClone(profile.limits || defaultApiLimits()); limits.balance ||= {};
   const mode = await pick('API spending policy', [{ name: 'Daily spending limit', value: 'daily' }, { name: 'Minimum balance floor', value: 'balance' }, { name: 'Daily limit and balance floor', value: 'hybrid' }, { name: 'Unlimited (requires confirmation)', value: 'unlimited' }]); if (!mode) return;
   if (mode === 'unlimited' && !(await yesNo('Disable local API spending limits for this profile?'))) return;
   limits.mode = mode; limits.allowUnlimited = mode === 'unlimited';
   if (mode === 'daily' || mode === 'hybrid') { limits.dailyUsd = numberValue(await input({ message: 'Daily limit (USD)', default: String(limits.dailyUsd ?? 5) }), Number(limits.dailyUsd ?? 5)); limits.reserveUsd = numberValue(await input({ message: 'Daily safety reserve (USD)', default: String(limits.reserveUsd ?? .5) }), Number(limits.reserveUsd ?? .5)); }
   if (mode === 'balance' || mode === 'hybrid') { limits.balance.minimumUsd = numberValue(await input({ message: 'Minimum balance (USD)', default: String(limits.balance.minimumUsd ?? 5) }), Number(limits.balance.minimumUsd ?? 5)); limits.balance.iterationReserveUsd = numberValue(await input({ message: 'Next-run reserve (USD)', default: String(limits.balance.iterationReserveUsd ?? .5) }), Number(limits.balance.iterationReserveUsd ?? .5)); }
-  profile.limits = limits; if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green('Profile limits saved.')); return pause();
+  profile.limits = limits; await save(settings); console.log(chalk.green('Profile limits saved.')); return pause();
 }
 async function configureSnapshot(settings, profile) {
   if (profile.policy === 'local') { console.log(chalk.green('\nLocal profile: snapshots and provider limits are not applicable.')); return pause(); }
@@ -313,7 +307,7 @@ async function configureSnapshot(settings, profile) {
   const maxAgeMinutes = numberValue(await input({ message: 'Snapshot refresh interval (minutes)', default: String(current.maxAgeMinutes ?? 120) }), Number(current.maxAgeMinutes ?? 120));
   if (maxAgeMinutes < 1) { console.log(chalk.yellow('Refresh interval must be at least one minute.')); return pause(); }
   profile.usageSource = { kind: 'snapshot', unit, remaining, reserve: current.reserve ?? 0, maxAgeMinutes, observedAt: new Date().toISOString(), costTracking: { enabled: false, baselineAllTimeCostUsd: null, baselineObservedAt: '' } };
-  if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings);
+  await save(settings);
   const persisted = JSON.parse(await fs.readFile(configPath, 'utf8')); const saved = persisted.openCode?.profiles?.find(item => item.id === profile.id)?.usageSource;
   if (!saved || Number(saved.remaining) !== remaining || saved.unit !== unit) throw new Error('Snapshot save verification failed. Reopen the profile before starting development.');
   console.log(chalk.green('Provider snapshot saved.')); if (current.costTracking?.enabled) console.log(chalk.gray('The local OpenCode cost estimate was reset; enable it again to establish a new baseline.')); return pause();
@@ -339,7 +333,6 @@ async function configureOpenCodeCostEstimate(settings, profile) {
     const cost = openCodeCostFromStats(JSON.parse(raw));
     if (cost == null) throw new Error('OpenCode did not return a usable lifetime cost.');
     profile.usageSource.costTracking = { enabled: true, baselineAllTimeCostUsd: cost, baselineObservedAt: new Date().toISOString() };
-    if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile);
     await save(settings); spinner.succeed(`Cost estimate enabled from local OpenCode baseline $${cost.toFixed(4)}.`);
   } catch (error) { spinner.fail('Cost estimate was not enabled.'); console.log(chalk.red(error.message)); }
   return pause();
@@ -365,7 +358,6 @@ async function refreshSnapshotBeforeRun(settings, profile, reason) {
   }
   profile.usageSource = { kind: 'snapshot', unit, remaining, reserve: current.reserve ?? 0, maxAgeMinutes: Number(current.maxAgeMinutes ?? 120), observedAt: new Date().toISOString(), costTracking: { enabled: false, baselineAllTimeCostUsd: null, baselineObservedAt: '' } };
   try {
-    if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile);
     await save(settings);
     const persisted = JSON.parse(await fs.readFile(configPath, 'utf8'));
     const saved = persisted.openCode?.profiles?.find(item => item.id === profile.id)?.usageSource;
@@ -395,9 +387,9 @@ async function configureLimitPolicy(settings, profile) {
     const reserveSuggested = Number(profile.limitPolicy?.reserve ?? profile.usageSource?.reserve ?? (unit === 'USD' ? 0.5 : 5));
     const reserve = numberValue(await input({ message: `Next-run reserve (${unit})`, default: String(reserveSuggested) }), reserveSuggested);
     if (unit === 'percent' && amount + reserve > 100) { console.log(chalk.yellow('Minimum plus reserve cannot exceed 100 percent.')); return pause(); }
-    profile.limitPolicy = { mode, amount, reserve, configured: true }; if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green(`Limit policy saved: minimum ${amount}, next-run reserve ${reserve}.`)); return pause();
+    profile.limitPolicy = { mode, amount, reserve, configured: true }; await save(settings); console.log(chalk.green(`Limit policy saved: minimum ${amount}, next-run reserve ${reserve}.`)); return pause();
   }
-  profile.limitPolicy = { mode, amount, reserve: null, configured: true }; if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green(`Limit policy saved: ${mode}.`)); return pause();
+  profile.limitPolicy = { mode, amount, reserve: null, configured: true }; await save(settings); console.log(chalk.green(`Limit policy saved: ${mode}.`)); return pause();
 }
 async function configureUsageSource(settings, profile) {
   if (profile.policy === 'local') { console.log(chalk.green('\nLocal profile: no provider usage or balance source is needed.')); return pause(); }
@@ -421,9 +413,9 @@ async function configureUsageSource(settings, profile) {
     const maxAgeMinutes = numberValue(await input({ message: 'Maximum reading age in minutes', default: String(profile.limits.balance.maxAgeMinutes ?? 5) }), Number(profile.limits.balance.maxAgeMinutes ?? 5));
     profile.usageSource = { kind: 'external-command', command, arguments: commandArgs }; profile.limits.balance = { ...profile.limits.balance, source: 'command', command, arguments: commandArgs, maxAgeMinutes };
   }
-  if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green('Usage data source saved.')); return pause();
+  await save(settings); console.log(chalk.green('Usage data source saved.')); return pause();
 }
-async function configureReasoning(settings, profile) { const variant = await pick('Reasoning level', [{ name: 'Provider default', value: '' }, ...['minimal', 'low', 'medium', 'high', 'xhigh'].map(value => ({ name: value, value }))]); if (variant === null) return; profile.reasoningVariant = variant; profile.showThinking = await yesNo('Show OpenCode thinking blocks during development?'); if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); }
+async function configureReasoning(settings, profile) { const variant = await pick('Reasoning level', [{ name: 'Provider default', value: '' }, ...['minimal', 'low', 'medium', 'high', 'xhigh'].map(value => ({ name: value, value }))]); if (variant === null) return; profile.reasoningVariant = variant; profile.showThinking = await yesNo('Show OpenCode thinking blocks during development?'); await save(settings); }
 async function pickAuthStore(settings, current = 'legacy-shared') { return pick('OpenCode authentication storage', (settings.openCode.stores || []).map(store => ({ name: `${store.id === current ? '● ' : ''}${store.name}${store.kind === 'legacy-shared' ? chalk.yellow('  legacy / single-project') : ''}`, value: store.id }))); }
 async function configureType(settings, profile) {
   const policy = await pick('Profile type', [{ name: 'API key — local spending limits', value: 'api' }, { name: 'OAuth — provider-managed usage', value: 'oauth-managed' }, { name: 'Local model — no limits', value: 'local' }]); if (!policy) return;
@@ -434,21 +426,20 @@ async function configureType(settings, profile) {
     const accounts = inventory.accounts.filter(account => account.provider.toLowerCase() === profile.provider); if (!accounts.length) { console.log(chalk.yellow(`No ${profile.provider} OpenCode credential is available.`)); return pause(); }
     const id = await pick('Credential', accounts.map(account => ({ name: `${account.label}  ${chalk.gray(`[${account.authMethod || 'unknown'}]`)}`, value: account.id }))); if (!id) return; const account = accounts.find(item => item.id === id); profile.policy = policy; profile.credentialId = account.credentialId; profile.credentialLabel = account.label; profile.authStoreId = storeId;
   }
-  if (profile.policy === 'api' && !profile.limits) profile.limits = structuredClone(settings.budget || {}); if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings);
+  if (profile.policy === 'api' && !profile.limits) profile.limits = defaultApiLimits(); await save(settings);
 }
 async function profileScreen(settings, profile) {
   while (true) {
     header(settings); console.log(chalk.bold('PROFILE DETAILS')); console.log(`  Model      ${chalk.cyan(profile.model)}`); console.log(`  Account    ${profile.credentialLabel || 'Not selected'}`); console.log(`  Storage    ${authStore(settings, profile.authStoreId)?.name || profile.authStoreId || 'not applicable'}`); console.log(`  Type       ${profile.policy}`); console.log(`  Reasoning  ${profile.reasoningVariant || 'provider default'}`); console.log(`  Limits     ${limitSummary(profile)} ${chalk.gray('(main-window runs only)')}`); console.log(`  Data       ${usageSourceSummary(profile)}\n`);
     const canDelete = settings.openCode.profiles.length > 1;
-    const actions = [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }];
+    const actions = [{ name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }];
     if (profile.policy !== 'local') actions.push({ name: 'Configure provider snapshot', value: 'snapshot' }, { name: 'Configure limits', value: 'policy' });
     if (profile.policy === 'api' && profile.usageSource?.unit === 'usd') actions.push({ name: 'Configure local OpenCode cost estimate', value: 'cost-estimate' });
     if (canDelete) actions.push({ name: chalk.red('Remove this profile'), value: 'remove' });
     const action = await pick('Profile actions', actions);
-    if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'snapshot') await configureSnapshot(settings, profile); if (action === 'policy') await configureLimitPolicy(settings, profile); if (action === 'cost-estimate') await configureOpenCodeCostEstimate(settings, profile);
+    if (!action) return; if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'snapshot') await configureSnapshot(settings, profile); if (action === 'policy') await configureLimitPolicy(settings, profile); if (action === 'cost-estimate') await configureOpenCodeCostEstimate(settings, profile);
     if (action === 'remove' && await yesNo(`Remove profile '${profile.model}'? This does not disconnect or delete the OpenCode account.`)) {
       settings.openCode.profiles = settings.openCode.profiles.filter(item => item.id !== profile.id);
-      if (settings.openCode.activeProfileId === profile.id) applyProfile(settings, settings.openCode.profiles[0]);
       await save(settings); console.log(chalk.green('Profile removed.')); await pause(); return;
     }
   }
@@ -458,11 +449,11 @@ async function createProfile(settings) {
   let inventory; try { inventory = await refreshOpenCode(settings, storeId); } catch (error) { console.log(chalk.red(error.message)); return pause(); }
   const filter = (await input({ message: 'Filter models (leave blank to browse)', default: '' })).toLowerCase(); const models = inventory.models.filter(model => !filter || model.toLowerCase().includes(filter)); const model = await pick('Choose model', models.slice(0, 120).map(value => ({ name: `${value}${isLocalModel(value) ? chalk.green('  local') : ''}`, value }))); if (!model) return;
   let account = null; if (!isLocalModel(model)) { const provider = model.split('/')[0].toLowerCase(); const accounts = inventory.accounts.filter(item => item.provider.toLowerCase() === provider); if (!accounts.length) { console.log(chalk.yellow(`No saved ${provider} credential is available.`)); return pause(); } const id = await pick('Choose account', accounts.map(item => ({ name: `${item.label}  ${chalk.gray(`[${item.authMethod || 'unknown'}]`)}`, value: item.id }))); if (!id) return; account = accounts.find(item => item.id === id); }
-  const profile = profileFrom(model, account); profile.authStoreId = profile.policy === 'local' ? '' : storeId; if (profile.policy === 'api') profile.limits = structuredClone(settings.budget || {}); settings.openCode.profiles.push(profile); await save(settings); await profileScreen(settings, profile);
+  const profile = profileFrom(model, account); profile.authStoreId = profile.policy === 'local' ? '' : storeId; if (profile.policy === 'api') profile.limits = defaultApiLimits(); settings.openCode.profiles.push(profile); await save(settings); await profileScreen(settings, profile);
 }
 async function profilesMenu(settings) {
   while (true) {
-    header(settings); console.log(chalk.bold('PROFILES')); const profiles = migrateProfiles(settings); const choice = await pick('Open a profile or create a new one', [...profiles.map(profile => ({ name: `${profile.id === settings.openCode.activeProfileId ? chalk.green('●') : ' '} ${profileKindLabel(profile)} ${profile.model}  ${chalk.gray(`— ${limitSummary(profile)}`)}`, value: profile.id })), { name: chalk.cyan('+ Create new profile'), value: '__create' }]);
+    header(settings); console.log(chalk.bold('PROFILES')); const profiles = migrateProfiles(settings); const choice = await pick('Open a profile or create a new one', [...profiles.map(profile => ({ name: `${profileKindLabel(profile)} ${profile.model}  ${chalk.gray(`— ${limitSummary(profile)}`)}`, value: profile.id })), { name: chalk.cyan('+ Create new profile'), value: '__create' }]);
     if (!choice) return; if (choice === '__create') await createProfile(settings); else await profileScreen(settings, profiles.find(profile => profile.id === choice));
   }
 }
@@ -497,12 +488,14 @@ async function chooseRunIterationLimit() {
 const coordinatorId = crypto.randomUUID();
 async function chooseProject(settings) {
   const projects = normalizeProjects(settings); if (!projects.length) return null;
-  const id = await pick('Project', projects.map(project => { const profile = (settings.openCode.profiles || []).find(item => item.id === project.defaultProfileId); return { name: `${project.id}  ${chalk.gray(`— ${profile?.model || 'default profile not assigned'}`)}`, value: project.id }; }));
+  const id = await pick('Project', projects.map(project => ({ name: project.id, value: project.id })));
   return projects.find(item => item.id === id) || null;
 }
 async function chooseDevelopmentProject(settings) {
-  const project = await chooseProject(settings); if (!project) return null; const profile = (settings.openCode.profiles || []).find(item => item.id === project.defaultProfileId);
-  if (!profile) { console.log(chalk.yellow(`Project '${project.id}' has no default profile. Assign one in Projects before development.`)); await pause(); return null; }
+  const project = await chooseProject(settings); if (!project) return null;
+  const profiles = migrateProfiles(settings); if (!profiles.length) { console.log(chalk.yellow('No profiles are configured. Create one in Models and accounts before development.')); await pause(); return null; }
+  const profileId = await pick('Profile', profiles.map(profile => ({ name: `${profileKindLabel(profile)} ${profile.model}  ${chalk.gray(`— ${profile.credentialLabel || profile.policy}; ${limitSummary(profile)}`)}`, value: profile.id })));
+  const profile = profiles.find(item => item.id === profileId); if (!profile) return null;
   return { project, profile };
 }
 async function chooseDevelopmentTarget() { return pick('Run mode', [{ name: 'Main window — limits and live control', value: 'main' }, { name: 'Dispatcher instance — separate terminal, no Terra limits', value: 'instance' }]); }
@@ -577,10 +570,7 @@ async function editProject(settings, project, isNew = false) {
   const branch = (await input({ message: 'Git branch', default: detected })).trim();
   const roadmap = (await input({ message: 'Roadmap filename', default: project.roadmap || 'ROADMAP.md' })).trim();
   const progress = (await input({ message: 'Progress filename', default: project.progress || 'PROGRESS.md' })).trim();
-  const profiles = settings.openCode.profiles || [];
-  const profileId = profiles.length ? await pick('Default profile for this project', profiles.map(profile => ({ name: `${profile.model}${profile.id === project.defaultProfileId ? '  (current)' : ''}`, value: profile.id }))) : '';
-  if (!profileId && profiles.length) return;
-  const updated = { id, path: projectPath, branch, roadmap, progress, defaultProfileId: profileId || '' };
+  const updated = { id, path: projectPath, branch, roadmap, progress };
   if (isNew) projects.push(updated); else Object.assign(project, updated);
   await save(settings); console.log(chalk.green(`Project '${id}' saved.`)); return pause();
 }
@@ -588,7 +578,7 @@ async function projectsMenu(settings) {
   while (true) {
     header(settings); console.log(chalk.bold('PROJECTS')); const projects = normalizeProjects(settings);
     const action = await pick('Manage project configuration', [
-      ...projects.map(project => { const profile = (settings.openCode.profiles || []).find(item => item.id === project.defaultProfileId); return { name: `${project.id}  ${chalk.gray(`— ${profile?.model || 'no default profile'}`)}`, value: `project:${project.id}` }; }),
+      ...projects.map(project => ({ name: project.id, value: `project:${project.id}` })),
       { name: chalk.cyan('+ Add project'), value: 'add' }
     ]);
     if (!action) return;

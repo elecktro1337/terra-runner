@@ -43,6 +43,28 @@ Describe 'Terra Runner safe command dispatch' {
         & $runner -Project safe-project -Config $script:config
         (Test-Path -LiteralPath $script:calls) | Should Be $false
     }
+    It 'requires an explicit profile for schema v9 development commands' {
+        $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable
+        $settings.schemaVersion = 9; $settings.Remove('model'); $settings.Remove('budget')
+        $settings['openCode'] = [ordered]@{ accounts=@(); profiles=@() }
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
+        $threw = $false; $message = ''
+        try { & $runner -Project safe-project -Config $script:config -DryRun } catch { $threw = $true; $message = $_.Exception.Message }
+        $threw | Should Be $true; $message | Should Match 'requires -ProfileId'
+        (Test-Path -LiteralPath $script:calls) | Should Be $false
+    }
+    It 'uses an explicit schema v9 profile for Status without starting OpenCode' {
+        $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable
+        $settings.schemaVersion = 9; $settings.Remove('model'); $settings.Remove('budget')
+        $settings['openCode'] = [ordered]@{ accounts=@(); profiles=@([ordered]@{
+            id='local-profile'; model='local/mock'; provider='local'; credentialId=''; credentialLabel=''
+            policy='local'; authStoreId=''; reasoningVariant=''; showThinking=$false
+            limitPolicy=[ordered]@{ mode='critical' }; usageSource=[ordered]@{ kind='none' }; runControls=[ordered]@{ maxIterations=0 }
+        }) }
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
+        & $runner -Project safe-project -Config $script:config -Status -ProfileId local-profile
+        (Test-Path -LiteralPath $script:calls) | Should Be $false
+    }
     It 'creates and clears only the selected project control files' {
         & $runner -Project safe-project -Config $script:config -Stop
         $projectData = Join-Path $script:state 'safe-project'
@@ -70,7 +92,7 @@ Describe 'Terra Runner safe command dispatch' {
         $instance = [ordered]@{ id=$id; projectId='safe-project'; profile=[ordered]@{ id='profile'; model='local/mock'; provider='local'; policy='local'; authStoreId=''; reasoningVariant=''; showThinking=$false }; launch=[ordered]@{ command='idle'; maxIterations=0 }; state='idle' }
         $instance | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $runtime "$id.json") -Encoding utf8
         $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable
-        $settings.schemaVersion = 8; $settings.budget.dailyUsd = 0
+        $settings.schemaVersion = 9; $settings.Remove('model'); $settings.Remove('budget'); $settings['openCode'] = [ordered]@{ accounts=@(); profiles=@() }
         $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
         $threw = $false
         try { & $runner -Project safe-project -Config $script:config -InstanceId $id -Status } catch { $threw = $true }

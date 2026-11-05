@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyProfile, isLocalModel, migrateProfiles, policyFor, profileFrom, splitModelVariant } from '../lib/profiles.mjs';
+import { defaultApiLimits, isLocalModel, migrateProfiles, policyFor, profileFrom, splitModelVariant } from '../lib/profiles.mjs';
 import { normalizeProjects, validateProjectId } from '../lib/projects.mjs';
 import { projectDataRoot } from '../lib/reports.mjs';
 import { DIRECT_ROUTE_ID, activeProxyRoute, noProxyValue, normalizeProxy, validateProxyRoute } from '../lib/proxy.mjs';
@@ -24,48 +24,20 @@ test('migrates a legacy selected OAuth account without a manual quota', () => {
   const profiles = migrateProfiles(settings);
   assert.equal(profiles[0].policy, 'oauth-managed');
   assert.equal(profiles[0].credentialId, 'c');
-});
-test('applying a local profile creates a local no-limit account', () => {
-  const settings = { openCode: { accounts: [], profiles: [] } };
-  const profile = profileFrom('ollama/qwen3-coder-64k:30b');
-  settings.openCode.profiles.push(profile);
-  applyProfile(settings, profile);
-  assert.equal(settings.openCode.accounts[0].usageKind, 'local');
-});
-test('applying a cloud profile uses the unified snapshot policy', () => {
-  const settings = { openCode: { accounts: [{ id: 'openai:c', provider: 'openai', credentialId: 'c', quota: { configured: true } }], profiles: [] } };
-  const profile = profileFrom('openai/gpt-5.6-terra', { provider: 'openai', credentialId: 'c', label: 'Codex', authMethod: 'oauth' });
-  settings.openCode.profiles.push(profile);
-  applyProfile(settings, profile);
-  assert.equal(settings.openCode.accounts[0].usageKind, 'quota');
-  assert.equal(settings.openCode.accounts[0].quota.configured, false);
-});
-test('applies a configured percentage snapshot to the active account', () => {
-  const settings = { openCode: { accounts: [{ id: 'openai:c', provider: 'openai', credentialId: 'c' }], profiles: [] } };
-  const profile = profileFrom('openai/gpt', { provider: 'openai', credentialId: 'c', authMethod: 'key' });
-  profile.usageSource = { kind: 'snapshot', unit: 'percent', remaining: 42, reserve: 5, maxAgeMinutes: 60, observedAt: '2026-11-04T12:00:00Z' };
-  settings.openCode.profiles.push(profile); applyProfile(settings, profile);
-  assert.equal(settings.openCode.accounts[0].quota.remaining, 42);
-  assert.equal(settings.openCode.accounts[0].quota.configured, true);
-});
-test('preserves the optional local OpenCode cost-estimate baseline', () => {
-  const settings = { openCode: { accounts: [{ id: 'openai:c', provider: 'openai', credentialId: 'c' }], profiles: [] } };
-  const profile = profileFrom('openai/gpt', { provider: 'openai', credentialId: 'c', authMethod: 'key' });
-  profile.usageSource = { kind: 'snapshot', unit: 'usd', remaining: 28.41, reserve: .5, maxAgeMinutes: 60, observedAt: '2026-11-05T12:00:00Z', costTracking: { enabled: true, baselineAllTimeCostUsd: 12.3456, baselineObservedAt: '2026-11-05T12:00:00Z' } };
-  settings.openCode.profiles.push(profile); applyProfile(settings, profile);
-  assert.equal(settings.openCode.accounts[0].quota.trackOpenCodeCosts, true);
-  assert.equal(settings.openCode.accounts[0].quota.costBaselineAllTimeUsd, 12.3456);
+  assert.equal('model' in settings, false);
+  assert.equal('activeAccountId' in settings.openCode, false);
+  assert.equal('reasoning' in settings.openCode, false);
 });
 test('keeps an open profile reference valid across dashboard normalization', () => {
   const profile = profileFrom('openai/gpt', { authMethod: 'key' });
-  const settings = { openCode: { activeProfileId: profile.id, profiles: [profile], accounts: [] } };
+  const settings = { openCode: { profiles: [profile], accounts: [] } };
   migrateProfiles(settings);
   profile.usageSource.remaining = 28.41;
   assert.equal(settings.openCode.profiles[0].usageSource.remaining, 28.41);
 });
-test('repairs an early profile snapshot from the saved active account', () => {
+test('repairs an early profile snapshot from the saved account inventory', () => {
   const profile = { id: 'p', model: 'openai/gpt', provider: 'openai', credentialId: 'c', policy: 'api', usageSource: { kind: 'snapshot', unit: 'percent', remaining: null } };
-  const settings = { openCode: { activeProfileId: 'p', profiles: [profile], accounts: [{ provider: 'openai', credentialId: 'c', quota: { configured: true, unit: 'usd', remaining: 28.41, reserve: .5, maxAgeMinutes: 60, observedAt: '2026-11-04T00:00:00Z' } }] } };
+  const settings = { openCode: { profiles: [profile], accounts: [{ provider: 'openai', credentialId: 'c', quota: { configured: true, unit: 'usd', remaining: 28.41, reserve: .5, maxAgeMinutes: 60, observedAt: '2026-11-04T00:00:00Z' } }] } };
   migrateProfiles(settings);
   assert.equal(profile.usageSource.remaining, 28.41);
   assert.equal(profile.usageSource.unit, 'usd');
@@ -75,11 +47,18 @@ test('migrates legacy API profiles with their existing budget limits', () => {
   const [profile] = migrateProfiles(settings);
   assert.equal(profile.limits.mode, 'balance');
   assert.equal(profile.limits.balance.minimumUsd, 5);
+  assert.equal('budget' in settings, false);
+  assert.equal('activeProfileId' in settings.openCode, false);
 });
 test('keeps a local run guard independently from provider usage', () => {
-  const settings = { openCode: { activeProfileId: 'oauth', profiles: [{ id: 'oauth', model: 'openai/gpt', policy: 'oauth-managed', runControls: { maxIterations: 7 } }], accounts: [] } };
+  const settings = { openCode: { profiles: [{ id: 'oauth', model: 'openai/gpt', policy: 'oauth-managed', runControls: { maxIterations: 7 } }], accounts: [] } };
   const [profile] = migrateProfiles(settings);
   assert.equal(profile.runControls.maxIterations, 7);
+});
+test('creates safe API limits without a global budget', () => {
+  const limits = defaultApiLimits();
+  assert.equal(limits.mode, 'daily');
+  assert.equal(limits.dailyUsd, 5);
 });
 test('creates snapshots for cloud profiles without storing credentials', () => {
   const oauth = profileFrom('openai/gpt', { authMethod: 'oauth' });

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Project-scoped Terra Runner 2.2 terminal. The central dispatcher creates this
+// Project-scoped Terra Runner 2.3 terminal. The central dispatcher creates this
 // process; it deliberately receives only an instance ID, never credentials.
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -24,7 +24,7 @@ function clear() { if (process.stdout.isTTY) process.stdout.write('\x1Bc'); }
 async function pick(message, choices) { try { return await select({ message, choices: [...choices, { name: '← Back', value: null }], loop: false }); } catch (error) { if (error?.name === 'ExitPromptError') return null; throw error; } }
 async function load() { const [settings, instance] = await Promise.all([fs.readFile(configPath, 'utf8').then(JSON.parse), readInstance(configPath, instanceId)]); if (!instance) throw new Error('The dispatcher instance record no longer exists.'); const project = (settings.projects || []).find(item => item.id === instance.projectId); if (!project) throw new Error(`Project '${instance.projectId}' was removed from the configuration.`); return { settings, instance, project }; }
 function show(instance, project) {
-  clear(); console.log(chalk.cyan.bold('TERRA RUNNER 2.2  ·  PROJECT INSTANCE')); console.log(rule);
+  clear(); console.log(chalk.cyan.bold('TERRA RUNNER 2.3  ·  PROJECT INSTANCE')); console.log(rule);
   console.log(`  Project   ${chalk.white(project.id)}  ${chalk.gray(project.path)}`);
   console.log(`  Model     ${chalk.cyan(instance.profile?.model || 'not configured')}`);
   console.log(`  State     ${instance.state}${instance.activity ? chalk.gray(` — ${instance.activity}`) : ''}`);

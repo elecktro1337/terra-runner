@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.0 - 2026-11-05
+
+- Removed global active profile/account state and project default profiles; every Development launch now explicitly selects a profile.
+- Made schema v9 execution and status CLI require `-ProfileId`, while non-execution commands remain profile-free.
+- Removed profile-specific header fields and simplified profile management to editing only.
+
 ## 2.2.0 - 2026-11-05
 
 - Removed the hidden global selected project; Development now owns project selection and Reports shows all projects.

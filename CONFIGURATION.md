@@ -1,15 +1,15 @@
 # Configuration reference
 
-Terra Runner 2.2 stores normal configuration and runtime state in `%LOCALAPPDATA%\TerraRunner`. Use `-Portable` to keep state beside the installation.
+Terra Runner 2.3 stores normal configuration and runtime state in `%LOCALAPPDATA%\TerraRunner`. Use `-Portable` to keep state beside the installation.
 
 ## Dispatcher runtime and isolated OpenCode storage
 
-Schema v8 includes `projects[].defaultProfileId` and `openCode.stores[]` with
+Schema v9 includes `openCode.stores[]` with
 `profiles[].authStoreId`. Runtime instance records, heartbeats and addressable
 controls live next to the configuration under `runtime/`; they contain no
 provider secrets or Terra budget/quota values.
 
-There is no global selected project. The legacy `activeProjectId` is removed on save; Development explicitly selects a project for each launch.
+There is no global selected project or profile. Legacy `activeProjectId`, active profile/account fields, global model/budget/reasoning values and `projects[].defaultProfileId` are removed on save; Development explicitly selects a project and profile for each launch.
 
 An isolated store's OpenCode SQLite database is kept under
 `opencode-stores/<store-id>/opencode.db` and is selected only through the

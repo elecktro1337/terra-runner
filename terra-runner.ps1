@@ -804,7 +804,7 @@ function Rotate-Reports([string]$DataDirectory, $Settings) {
 }
 
 $cfg = Get-Content -LiteralPath $Config -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 40
-if ([int]$cfg.schemaVersion -notin @(1,2,3,4,5,6,7,8)) { throw 'Unsupported terra-config.json schemaVersion.' }
+if ([int]$cfg.schemaVersion -notin @(1,2,3,4,5,6,7,8,9)) { throw 'Unsupported terra-config.json schemaVersion.' }
 $projectConfig = @($cfg.projects | Where-Object { $_.id -eq $Project })
 if ($projectConfig.Count -ne 1) { throw "Expected exactly one project with id '$Project'." }
 $projectConfig = $projectConfig[0]
@@ -821,6 +821,10 @@ $logsPath = Join-Path $projectData 'logs'
 $runtimeRoot = Join-Path (Split-Path -Parent $Config) 'runtime'
 $instance = $null
 $limitsEnabled = -not [bool]$InstanceId
+$requiresExplicitProfile = -not $InstanceId -and ($Once -or $Continuous -or $DryRun -or $Status -or $hasSetBalance)
+if ([int]$cfg.schemaVersion -ge 9 -and $requiresExplicitProfile -and [string]::IsNullOrWhiteSpace($ProfileId)) {
+    throw "schema v9 requires -ProfileId for this command. Select a profile in Terra Runner or pass -ProfileId <profile-id>."
+}
 if ($InstanceId -or $ProfileId) {
     if ($InstanceId -and $InstanceId -notmatch '^[a-fA-F0-9-]{36}$') { throw 'Unsafe instance ID.' }
     if ($InstanceId) {
@@ -888,37 +892,49 @@ if ($ClearStop -or $ClearControlFlags) {
     }
 }
 
+if ($Report) {
+    $date = if ($ReportDate) { $ReportDate } else { (Get-Date).ToString('yyyy-MM-dd') }
+    $reportFile = Write-EnglishDailyReport $projectData $date
+    Rotate-Reports $projectData $cfg.logs
+    Write-Host "Project daily report: $reportFile"
+    return
+}
+
 $usageKind = Get-OpenCodeUsageKind $cfg
 $activeOpenCodeAccount = Get-ActiveOpenCodeAccount $cfg
-$budgetMode = if ($limitsEnabled -and $usageKind -eq 'balance') { Get-BudgetMode $cfg.budget } elseif ($limitsEnabled) { $usageKind } else { 'disabled' }
-if ($limitsEnabled -and $usageKind -eq 'balance' -and -not [bool]$cfg.budget.requireGlobalOpenCodeStats) {
+$profileBudget = Read-Member $cfg 'budget'
+if ($limitsEnabled -and $usageKind -eq 'balance' -and $null -eq $profileBudget) {
+    throw "The selected profile is missing its API limit policy. Edit the profile before development."
+}
+$budgetMode = if ($limitsEnabled -and $usageKind -eq 'balance') { Get-BudgetMode $profileBudget } elseif ($limitsEnabled) { $usageKind } else { 'disabled' }
+if ($limitsEnabled -and $usageKind -eq 'balance' -and -not [bool]$profileBudget.requireGlobalOpenCodeStats) {
     throw 'The global OpenCode usage scope is required for reliable local accounting.'
 }
 if ($limitsEnabled -and $usageKind -eq 'balance' -and $budgetMode -in @('daily','hybrid')) {
-    Require-PositiveNumber $cfg.budget.dailyUsd 'budget.dailyUsd' | Out-Null
-    [void](Require-NonNegativeNumber $cfg.budget.reserveUsd 'budget.reserveUsd')
-    Require-PositiveNumber $cfg.budget.emergencyStopUsd 'budget.emergencyStopUsd' | Out-Null
-    if ([double]$cfg.budget.emergencyStopUsd -gt [double]$cfg.budget.dailyUsd) {
+    Require-PositiveNumber $profileBudget.dailyUsd 'budget.dailyUsd' | Out-Null
+    [void](Require-NonNegativeNumber $profileBudget.reserveUsd 'budget.reserveUsd')
+    Require-PositiveNumber $profileBudget.emergencyStopUsd 'budget.emergencyStopUsd' | Out-Null
+    if ([double]$profileBudget.emergencyStopUsd -gt [double]$profileBudget.dailyUsd) {
         throw 'emergencyStopUsd must not exceed dailyUsd.'
     }
-    if ([double]$cfg.budget.reserveUsd -ge [double]$cfg.budget.dailyUsd) {
+    if ([double]$profileBudget.reserveUsd -ge [double]$profileBudget.dailyUsd) {
         throw 'reserveUsd must be below dailyUsd.'
     }
 }
 if ($limitsEnabled -and $usageKind -eq 'balance' -and $budgetMode -eq 'hourly') {
-    Require-PositiveNumber $cfg.budget.hourlyUsd 'budget.hourlyUsd' | Out-Null
+    Require-PositiveNumber $profileBudget.hourlyUsd 'budget.hourlyUsd' | Out-Null
 }
 if ($limitsEnabled -and $usageKind -eq 'balance' -and $budgetMode -in @('balance','hybrid')) {
-    if ($null -eq (Read-Member $cfg.budget 'balance')) { throw 'budget.balance is required.' }
-    [void](Require-NonNegativeNumber $cfg.budget.balance.minimumUsd 'budget.balance.minimumUsd')
-    [void](Require-NonNegativeNumber $cfg.budget.balance.iterationReserveUsd 'budget.balance.iterationReserveUsd')
-    if ($cfg.budget.balance.source -eq 'snapshot') { [void](Get-BalanceStatePath $logRoot $cfg.budget.balance) }
-    elseif ($cfg.budget.balance.source -ne 'command') { throw 'budget.balance.source must be snapshot or command.' }
+    if ($null -eq (Read-Member $profileBudget 'balance')) { throw 'budget.balance is required.' }
+    [void](Require-NonNegativeNumber $profileBudget.balance.minimumUsd 'budget.balance.minimumUsd')
+    [void](Require-NonNegativeNumber $profileBudget.balance.iterationReserveUsd 'budget.balance.iterationReserveUsd')
+    if ($profileBudget.balance.source -eq 'snapshot') { [void](Get-BalanceStatePath $logRoot $profileBudget.balance) }
+    elseif ($profileBudget.balance.source -ne 'command') { throw 'budget.balance.source must be snapshot or command.' }
 }
 if ($hasSetBalance -and (-not $limitsEnabled -or $usageKind -ne 'balance' -or $budgetMode -notin @('balance','hybrid'))) {
     throw '-SetBalanceUsd is only available in balance/hybrid modes.'
 }
-if ($hasSetBalance -and $cfg.budget.balance.source -ne 'snapshot') {
+if ($hasSetBalance -and $profileBudget.balance.source -ne 'snapshot') {
     throw '-SetBalanceUsd is only available for balance.source=snapshot.'
 }
 Require-PositiveNumber $cfg.execution.pollSeconds 'execution.pollSeconds' | Out-Null
@@ -942,18 +958,11 @@ $maxCycles = if ($UnlimitedIterations) { [int]::MaxValue } elseif ($MaxIteration
 if ($Once) { $maxCycles = 1 }
 if ($maxCycles -lt 1) { throw 'No iterations configured.' }
 
-if ($Report) {
-    $date = if ($ReportDate) { $ReportDate } else { (Get-Date).ToString('yyyy-MM-dd') }
-    $reportFile = Write-EnglishDailyReport $projectData $date
-    Rotate-Reports $projectData $cfg.logs
-    Write-Host "Project daily report: $reportFile"
-    return
-}
 if ($Status) {
     if ($limitsEnabled) {
-        $snapshot = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot
-        Show-Usage $snapshot $cfg.budget
-        $reason = Get-BudgetStopReason $snapshot $cfg.budget $false
+        $snapshot = Get-BudgetSnapshot $openCode $repo $profileBudget $logRoot
+        Show-Usage $snapshot $profileBudget
+        $reason = Get-BudgetStopReason $snapshot $profileBudget $false
         if ($reason) { Write-Host "No new iteration allowed: $reason" }
     } else { Write-Host 'Terra limits and provider snapshots are disabled for this dispatcher instance.' }
     Write-Host "Project logs: $logsPath"
@@ -1023,8 +1032,8 @@ try {
         Write-Host "OpenCode account selected: $([string](Read-Member $activeOpenCodeAccount 'label')) ($usageKind)"
     }
     if ($hasSetBalance) {
-        $all = Get-Usage $openCode $repo $cfg.budget 'all'
-        $stateFile = Get-BalanceStatePath $logRoot $cfg.budget.balance
+        $all = Get-Usage $openCode $repo $profileBudget 'all'
+        $stateFile = Get-BalanceStatePath $logRoot $profileBudget.balance
         Set-BalanceSnapshot $stateFile ([double]$setBalanceAmount) $all ([bool]$ReconcileBalance)
         Write-Host ('Balance snapshot saved: {0}; OpenCode lifetime baseline ${1:N4}; file: {2}' -f (Format-TerraMoney $setBalanceAmount),$all.CostUSD,$stateFile)
         return
@@ -1032,13 +1041,13 @@ try {
     if ($DryRun) {
         # A dry run must not write logs or budgets, but it still verifies that
         # the selected account's usage data is internally consistent.
-        if ($limitsEnabled) { [void](Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot) }
+        if ($limitsEnabled) { [void](Get-BudgetSnapshot $openCode $repo $profileBudget $logRoot) }
         Write-Host "DRY RUN OK: project=$Project branch=$branch iterations=$maxCycles; would launch agent '$($cfg.agent)'."
         return
     }
     if ($null -ne $activeProxyRoute) { $proxyBridge = Start-TerraProxyBridge $activeProxyRoute; Write-Host "Proxy route enabled for this Terra run: $($proxyBridge.Display)" }
-    $initialUsage = if ($limitsEnabled) { Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot } else { New-UntrackedSnapshot }
-    if ($limitsEnabled) { Show-Usage $initialUsage $cfg.budget } else { Write-Host 'Terra budget, quota, and snapshot controls are disabled for this dispatcher instance.' }
+    $initialUsage = if ($limitsEnabled) { Get-BudgetSnapshot $openCode $repo $profileBudget $logRoot } else { New-UntrackedSnapshot }
+    if ($limitsEnabled) { Show-Usage $initialUsage $profileBudget } else { Write-Host 'Terra budget, quota, and snapshot controls are disabled for this dispatcher instance.' }
     Rotate-ProjectLogs $logsPath $cfg.logs
     Rotate-Reports $projectData $cfg.logs
     if (Test-Path -LiteralPath $stopPath) { throw "STOP flag exists: $stopPath. Use -ClearStop after review." }
@@ -1050,10 +1059,10 @@ try {
     for ($i = 1; $i -le $maxCycles; $i++) {
         if (Test-Path -LiteralPath $stopPath) { Write-Host 'STOP detected; exiting after previous iteration.'; break }
         if (Test-Path -LiteralPath $abortPath) { Write-Host 'ABORT detected; exiting.'; break }
-        $usageBefore = if ($limitsEnabled) { Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot } else { New-UntrackedSnapshot }
+        $usageBefore = if ($limitsEnabled) { Get-BudgetSnapshot $openCode $repo $profileBudget $logRoot } else { New-UntrackedSnapshot }
         if ($limitsEnabled) {
-            Show-Usage $usageBefore $cfg.budget
-            $budgetBlock = Get-BudgetStopReason $usageBefore $cfg.budget $false
+            Show-Usage $usageBefore $profileBudget
+            $budgetBlock = Get-BudgetStopReason $usageBefore $profileBudget $false
             if ($budgetBlock) { Write-Host "Cannot start next iteration: $budgetBlock"; break }
         }
         $pending = Count-Pending $roadmap $taskIdPattern
@@ -1103,8 +1112,8 @@ try {
                 Write-UiEvent 'iteration-heartbeat' @{ iteration=$i; elapsedSeconds=[Math]::Round($elapsed.TotalSeconds,0); eventBytes=$size }
                 if ($size -gt ([double]$cfg.execution.maxRawLogMiB * 1MB)) { $termination = 'raw-log-size-limit'; break }
                 if ($limitsEnabled) { try {
-                    $liveUsage = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot
-                    $liveBlock = Get-BudgetStopReason $liveUsage $cfg.budget $true
+                    $liveUsage = Get-BudgetSnapshot $openCode $repo $profileBudget $logRoot
+                    $liveBlock = Get-BudgetStopReason $liveUsage $profileBudget $true
                     if ($liveBlock) { $termination = "budget-emergency-stop: $liveBlock"; break }
                 } catch {
                     $termination = "budget-unverifiable: $($_.Exception.Message)"
@@ -1132,7 +1141,7 @@ try {
         }
         $usageAfter = $null
         $usageError = ''
-        if ($limitsEnabled) { try { $usageAfter = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot } catch { $usageError = $_.Exception.Message } } else { $usageAfter = New-UntrackedSnapshot }
+        if ($limitsEnabled) { try { $usageAfter = Get-BudgetSnapshot $openCode $repo $profileBudget $logRoot } catch { $usageError = $_.Exception.Message } } else { $usageAfter = New-UntrackedSnapshot }
         $headAfter = Get-Head $repo
         $doneAfter = Count-Completed $roadmap $taskIdPattern
         $eventErrors = 0
@@ -1170,7 +1179,7 @@ try {
         if ($limitsEnabled -and $null -ne $usageAfter -and
             $usageAfter.AllTime.Tokens -gt $usageBefore.AllTime.Tokens -and
             $usageAfter.AllTime.CostUSD -le $usageBefore.AllTime.CostUSD -and
-            [bool]$cfg.budget.stopOnZeroCostWithTokens -and -not $termination) {
+            $usageKind -eq 'balance' -and [bool]$profileBudget.stopOnZeroCostWithTokens -and -not $termination) {
             $termination = 'new-token-usage-without-recorded-cost'
         }
         $gitStatus = ''
@@ -1264,7 +1273,7 @@ try {
         Write-UiEvent 'iteration-finished' @{ iteration=$i; runId=$runId; summaryFile=$summaryPath; completedTaskIds=@($completedIds); completedCount=($doneAfter-$doneBefore); doneAfter=$doneAfter; totalRoadmap=($doneAfter + $summary.pendingAfter); pending=$summary.pendingAfter; elapsedSeconds=$summary.elapsedSeconds; costDeltaUSD=$summary.costDeltaUSD; commits=@($iterationCommits); toolErrors=$toolErrors; exitCode=$exitCode; stoppedReason=$termination }
         $reportPath = Write-EnglishDailyReport $projectData $begin.ToString('yyyy-MM-dd')
         Write-Host "Iteration finished: exit=$exitCode new completed tasks=$($doneAfter-$doneBefore) changedHEAD=$($headAfter -ne $headBefore) code=$($changedFiles.Code) tests=$($changedFiles.Tests) docs=$($changedFiles.Docs) toolErrors=$toolErrors"
-        if ($limitsEnabled -and $null -ne $usageAfter) { Show-Usage $usageAfter $cfg.budget }
+        if ($limitsEnabled -and $null -ne $usageAfter) { Show-Usage $usageAfter $profileBudget }
         Write-Host "Daily project report: $reportPath"
         Rotate-ProjectLogs $logsPath $cfg.logs
         Rotate-Reports $projectData $cfg.logs
@@ -1274,7 +1283,7 @@ try {
                 Write-Warning "Transient TLS/SSL failure retry limit ($maxTransientRetries) reached; stopping safely. See $summaryPath"
                 break
             }
-            if ($limitsEnabled -and -not (Wait-ForOpenCodeRecovery $openCode $repo $cfg.budget $logRoot $maxTransientRetries $transientRetryDelaySeconds)) {
+            if ($limitsEnabled -and -not (Wait-ForOpenCodeRecovery $openCode $repo $profileBudget $logRoot $maxTransientRetries $transientRetryDelaySeconds)) {
                 Write-Warning "OpenCode did not recover after $maxTransientRetries connection checks; stopping safely. See $summaryPath"
                 break
             }

@@ -7,13 +7,13 @@ import { authStorePath, clearInstanceControls, createInstance, instanceControlPa
 
 async function fixture() { return fs.mkdtemp(path.join(os.tmpdir(), 'terra-runtime-')); }
 
-test('v8 runtime migration assigns legacy auth storage, default project profile, and removes reservations', () => {
-  const settings = { openCode: { activeProfileId: 'p1', profiles: [{ id: 'p1', policy: 'api', usageSource: { reserve: 2 }, parallelReservation: 2 }] }, projects: [{ id: 'one' }] };
+test('v9 runtime migration assigns legacy auth storage and removes project profile defaults', () => {
+  const settings = { openCode: { profiles: [{ id: 'p1', policy: 'api', usageSource: { reserve: 2 }, parallelReservation: 2 }] }, projects: [{ id: 'one', defaultProfileId: 'p1' }] };
   normalizeRuntime(settings);
   assert.equal(settings.openCode.stores[0].id, 'legacy-shared');
   assert.equal(settings.openCode.profiles[0].authStoreId, 'legacy-shared');
   assert.equal(settings.openCode.profiles[0].parallelReservation, undefined);
-  assert.equal(settings.projects[0].defaultProfileId, 'p1');
+  assert.equal(settings.projects[0].defaultProfileId, undefined);
 });
 
 test('instance registry stores a command snapshot without profile limit fields', async () => {
