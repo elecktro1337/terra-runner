@@ -500,6 +500,39 @@ function Get-NextPendingRoadmapTask([string]$RoadmapFile, [string]$TaskIdPattern
     }
     return [pscustomobject]@{ Id=''; Title='' }
 }
+function Get-RoadmapTaskTitle([string]$RoadmapFile, [string]$TaskId) {
+    if ([string]::IsNullOrWhiteSpace($TaskId) -or -not (Test-Path -LiteralPath $RoadmapFile -PathType Leaf)) { return '' }
+    foreach ($line in [System.IO.File]::ReadAllLines($RoadmapFile)) {
+        if ($line -notmatch '^\s*-\s*\[[ xX]\]') { continue }
+        $title = ($line -replace '^\s*-\s*\[[ xX]\]\s*','' -replace '\s+',' ').Trim()
+        # A parent line can mention child IDs in its description. Match only
+        # the first conventional ID in the checkbox item's own title.
+        $firstId = [regex]::Match($title,'[A-Za-z][A-Za-z0-9_]{1,31}-\d{2,}')
+        if (-not $firstId.Success -or -not [string]::Equals($firstId.Value,$TaskId,[StringComparison]::OrdinalIgnoreCase)) { continue }
+        if ($title.Length -gt 140) { $title = $title.Substring(0,140) + '...' }
+        return $title
+    }
+    return ''
+}
+function Get-WorkerSelectedTaskId([string]$EventsFile) {
+    if (-not (Test-Path -LiteralPath $EventsFile -PathType Leaf)) { return '' }
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    foreach ($line in [System.IO.File]::ReadLines($EventsFile, $utf8)) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        try {
+            $event = ConvertFrom-Json -InputObject $line -AsHashtable -Depth 60
+            if ([string](Read-Member $event 'type') -ne 'text') { continue }
+            $part = Read-Member $event 'part'
+            $text = [string](Read-Member $part 'text')
+            if ([string]::IsNullOrWhiteSpace($text)) { $text = [string](Read-Member $event 'text') }
+            $match = [regex]::Match($text,'(?im)(?:^|\r?\n)\s*TERRA_SELECTED_TASK\s*:\s*([A-Z][A-Z0-9_-]*-\d{3,})\b')
+            if ($match.Success) { return $match.Groups[1].Value.ToUpperInvariant() }
+        } catch {
+            # Raw events may be incomplete while OpenCode is flushing output.
+        }
+    }
+    return ''
+}
 function Rotate-ProjectLogs([string]$LogsDirectory, $Settings) {
     if (-not (Test-Path -LiteralPath $LogsDirectory)) { return }
     $files = @(Get-ChildItem -LiteralPath $LogsDirectory -Recurse -File | Where-Object {
@@ -1374,6 +1407,19 @@ try {
         try { $changedFiles = Get-ChangedFiles $repo $headBefore $headAfter }
         catch { if (-not $termination) { $termination = "git-diff-review-error: $($_.Exception.Message)" } }
         if ($null -eq $changedFiles) { $changedFiles = [pscustomobject]@{ Code=0; Docs=0; Tests=0; Other=0; Paths=@() } }
+        # The first unchecked roadmap item is only a fallback. The worker may
+        # correctly select a later independent task when that first item is
+        # externally blocked. Persist the explicit marker and look up the
+        # matching roadmap line so UI history never pairs a later ID with the
+        # first item's title.
+        $selectedTaskId = Get-WorkerSelectedTaskId $eventsPath
+        $selectedTaskTitle = Get-RoadmapTaskTitle $roadmap $selectedTaskId
+        $displayTaskId = if ($completedIds.Count -gt 0) { [string]$completedIds[0] } elseif ($selectedTaskId) { $selectedTaskId } else { $plannedTask.Id }
+        $displayTaskTitle = Get-RoadmapTaskTitle $roadmap $displayTaskId
+        if (-not $displayTaskTitle) {
+            if ($displayTaskId -eq $selectedTaskId) { $displayTaskTitle = $selectedTaskTitle }
+            elseif ($displayTaskId -eq $plannedTask.Id) { $displayTaskTitle = $plannedTask.Title }
+        }
         $stateFile = Join-Path $projectData 'control-state.json'
         # A roadmap checkbox is the strongest completion signal, but it is not
         # the only useful output of an iteration. A verified, pushed code or
@@ -1402,6 +1448,8 @@ try {
             elapsedSeconds = [Math]::Round(($ended-$begin).TotalSeconds,1)
             branch = $branch; exitCode = $exitCode; stoppedReason = $termination
             plannedTaskId = $plannedTask.Id; plannedTaskTitle = $plannedTask.Title
+            selectedTaskId = $selectedTaskId; selectedTaskTitle = $selectedTaskTitle
+            displayTaskId = $displayTaskId; displayTaskTitle = $displayTaskTitle
             headBefore = $headBefore; headAfter = $headAfter
             pushVerified = $pushVerified; eventErrors = $eventErrors
             toolErrors = $toolErrors; toolErrorExamples = $toolErrorExamples
@@ -1452,7 +1500,7 @@ try {
             errorFile = [IO.Path]::GetFileName($stderrPath)
         }
         Save-Json $summaryPath $summary
-        Write-UiEvent 'iteration-finished' @{ iteration=$i; runId=$runId; summaryFile=$summaryPath; taskId=$plannedTask.Id; taskTitle=$plannedTask.Title; completedTaskIds=@($completedIds); completedCount=($doneAfter-$doneBefore); doneAfter=$doneAfter; totalRoadmap=($doneAfter + $summary.pendingAfter); pending=$summary.pendingAfter; elapsedSeconds=$summary.elapsedSeconds; costDeltaUSD=$summary.costDeltaUSD; commits=@($iterationCommits); toolErrors=$toolErrors; exitCode=$exitCode; stoppedReason=$termination }
+        Write-UiEvent 'iteration-finished' @{ iteration=$i; runId=$runId; summaryFile=$summaryPath; taskId=$displayTaskId; taskTitle=$displayTaskTitle; plannedTaskId=$plannedTask.Id; selectedTaskId=$selectedTaskId; completedTaskIds=@($completedIds); completedCount=($doneAfter-$doneBefore); doneAfter=$doneAfter; totalRoadmap=($doneAfter + $summary.pendingAfter); pending=$summary.pendingAfter; elapsedSeconds=$summary.elapsedSeconds; costDeltaUSD=$summary.costDeltaUSD; commits=@($iterationCommits); toolErrors=$toolErrors; exitCode=$exitCode; stoppedReason=$termination }
         $reportPath = Write-EnglishDailyReport $projectData $begin.ToString('yyyy-MM-dd')
         Write-Host "Iteration finished: exit=$exitCode new completed tasks=$($doneAfter-$doneBefore) changedHEAD=$($headAfter -ne $headBefore) code=$($changedFiles.Code) tests=$($changedFiles.Tests) docs=$($changedFiles.Docs) toolErrors=$toolErrors"
         if ($limitsEnabled -and $null -ne $usageAfter) { Show-Usage $usageAfter $profileBudget }

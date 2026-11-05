@@ -10,6 +10,7 @@
 - Temporary OpenCode and Git TLS/network failures now keep the instance waiting for reconnection instead of ending the development run; Stop and Abort remain available during the wait.
 - Completed instance records now show the same final report as their project window in **Development → Active instances**. Terminal records no longer display disabled Stop, Abort, or stalled-finalization actions.
 - Fixed Development opening existing project instructions on every launch. **Projects** now has explicit actions to open instructions, roadmap, and progress files.
+- Iteration history now pairs a completed or worker-selected task ID with that task's own roadmap title, instead of reusing the first unchecked item's title when an external blocker caused a later task to be selected.
 
 ## 2.4.0 - 2026-11-05
 
