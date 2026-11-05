@@ -16,7 +16,7 @@ import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, red
 import { authStorePath, canFinalizeStalledInstance, cleanupLegacyReservations, clearTerminalInstances, createInstance, deleteTerminalInstance, isTerminalInstance, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
 import { LiveFooter, LiveHeaderBlock, LiveStatusBlock } from './lib/live-footer.mjs';
 import { selectedRoadmapTaskFromEvent } from './lib/task-selection.mjs';
-import { developmentHeaderRows } from './lib/run-display.mjs';
+import { developmentHeaderRows, elapsedSecondsSince } from './lib/run-display.mjs';
 import { readRoadmapProgress } from './lib/roadmap.mjs';
 import { instanceTerminalLauncher } from './lib/instance-launcher.mjs';
 import { ensureProjectAuthStore, isProjectManagedStore, removeProjectAuthStore } from './lib/project-auth-stores.mjs';
@@ -170,7 +170,7 @@ async function runWithTui(runnerArgs, settings, project, profile, mode, header) 
   const spinnerFrames = ['-', '\\', '|', '/']; let frame = 0;
   const statusText = () => `${chalk.cyan(spinnerFrames[frame++ % spinnerFrames.length])} ${stage} · ${durationText(Date.now() - iterationStarted)}`;
   const renderStatus = () => status.render(statusText(), checkpoint, completedIterations, controlNotice);
-  const renderHeader = () => liveHeader.render([...developmentHeaderRows({ project, profile, command: header.command, roadmap: liveRoadmap, limitText: limitSummary(profile), run: { elapsedSeconds: (Date.now() - started) / 1000, lastTask, lastCommit } }), rule]);
+  const renderHeader = () => liveHeader.render([...developmentHeaderRows({ project, profile, command: header.command, roadmap: liveRoadmap, limitText: limitSummary(profile), run: { elapsedSeconds: elapsedSecondsSince(started), lastTask, lastCommit } }), rule]);
   const footerAttached = footer.enabled;
   const statusAttached = status.enabled;
   const liveAttached = footerAttached && statusAttached;

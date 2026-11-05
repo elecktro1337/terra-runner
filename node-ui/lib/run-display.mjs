@@ -13,6 +13,10 @@ function durationText(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
   return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
 }
+export function elapsedSecondsSince(startedAt, now = Date.now()) {
+  const started = typeof startedAt === 'number' ? startedAt : Date.parse(String(startedAt || ''));
+  return Number.isFinite(started) ? Math.max(0, (now - started) / 1000) : 0;
+}
 function compact(value, maximum = 44) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > maximum ? `${text.slice(0, Math.max(0, maximum - 1)).trimEnd()}…` : text;

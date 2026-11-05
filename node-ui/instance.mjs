@@ -12,7 +12,7 @@ import figlet from 'figlet';
 import { clearInstanceControls, instanceRunnerFailure, readCoordinatorHeartbeat, readInstance, requestInstanceControl, updateInstance } from './lib/runtime.mjs';
 import { activeProxyRoute } from './lib/proxy.mjs';
 import { LiveFooter, LiveHeaderBlock, LiveStatusBlock } from './lib/live-footer.mjs';
-import { developmentHeaderRows } from './lib/run-display.mjs';
+import { developmentHeaderRows, elapsedSecondsSince } from './lib/run-display.mjs';
 import { readRoadmapProgress } from './lib/roadmap.mjs';
 import { completedIterationText } from './lib/iteration-history.mjs';
 import { instanceOutcome, instanceReportRows } from './lib/instance-outcome.mjs';
@@ -93,7 +93,7 @@ async function run(mode, limit = 1) {
   const liveAttached = footer.enabled && status.enabled; let frame = 0; const frames = ['-', '\\', '|', '/']; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration'; let detail = 'Waiting for runner events…'; let iterationStarted = Date.now(); let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let selectedTask = ''; let control = ''; let controlNotice = ''; let liveRoadmap = roadmap; let lastTask = ''; let lastCommit = null; const completedIterations = [];
   const statusText = () => `${chalk.cyan(frames[frame++ % frames.length])} ${stage} · ${durationText(Date.now() - iterationStarted)}`;
   const renderStatus = () => status.render(statusText(), detail, completedIterations, controlNotice);
-  const renderHeader = () => liveHeader.render([...developmentHeaderRows({ project, profile: instance.profile || {}, command: header.command, roadmap: liveRoadmap, includeTerraLimits: false, run: { elapsedSeconds: (Date.now() - runStartedAt) / 1000, lastTask, lastCommit } }), rule]);
+  const renderHeader = () => liveHeader.render([...developmentHeaderRows({ project, profile: instance.profile || {}, command: header.command, roadmap: liveRoadmap, includeTerraLimits: false, run: { elapsedSeconds: elapsedSecondsSince(runStartedAt), lastTask, lastCommit } }), rule]);
   if (liveAttached) { process.stdout.write('\x1b[?25l'); renderHeader(); renderStatus(); footer.render(); }
   else { console.log(`  ${statusText()}`); console.log(`  ${controls}`); }
   const paint = liveAttached ? setInterval(renderStatus, 180) : null;
