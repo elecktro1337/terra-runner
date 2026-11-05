@@ -4,6 +4,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
+import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
@@ -12,6 +13,7 @@ import ora from 'ora';
 import { activeProfile, applyProfile, isLocalModel, migrateProfiles, profileFrom } from './lib/profiles.mjs';
 import { activeProject, normalizeProjects, validateProjectId } from './lib/projects.mjs';
 import { dailyReports, latestIterationSummary, iterationSummariesSince, projectDataRoot } from './lib/reports.mjs';
+import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, redactedRoute, validateProxyRoute } from './lib/proxy.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -19,6 +21,7 @@ const valueOf = name => { const i = args.indexOf(name); return i < 0 ? '' : args
 const configPath = valueOf('--config') || (args.includes('--portable') ? path.join(root, 'terra-config.json') : path.join(process.env.LOCALAPPDATA || process.env.APPDATA || root, 'TerraRunner', 'terra-config.json'));
 const rule = chalk.gray('─'.repeat(78));
 const input = options => inquirer.prompt([{ type: 'input', name: 'value', ...options }]).then(answer => answer.value);
+const secretInput = options => inquirer.prompt([{ type: 'password', name: 'value', mask: '*', ...options }]).then(answer => answer.value);
 const confirm = options => inquirer.prompt([{ type: 'confirm', name: 'value', ...options }]).then(answer => answer.value);
 const select = options => inquirer.prompt([{ type: 'list', name: 'value', ...options }]).then(answer => answer.value);
 function clear() { if (process.stdout.isTTY) process.stdout.write('\x1Bc'); }
@@ -55,6 +58,9 @@ async function execute(name, commandArgs, cwd = root, inherited = false) {
     if (!inherited) { child.stdout.on('data', data => stdout += data); child.stderr.on('data', data => stderr += data); }
     child.once('error', reject); child.once('close', code => code === 0 ? resolve(stdout) : reject(new Error(`${executable} exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`)));
   });
+}
+async function protectSecret(value) {
+  return new Promise((resolve, reject) => { const child = spawn('pwsh.exe', ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-secret.ps1'), '-Action', 'Protect'], { stdio: ['pipe', 'pipe', 'pipe'] }); let out = '', err = ''; child.stdout.on('data', data => out += data); child.stderr.on('data', data => err += data); child.once('error', reject); child.once('close', code => code === 0 ? resolve(out.trim()) : reject(new Error(err.trim() || 'Could not protect proxy password.'))); child.stdin.end(value); });
 }
 function durationText(milliseconds) {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -224,8 +230,8 @@ async function runWithTui(runnerArgs, settings, project, mode) {
     clearInterval(update); clearInterval(liveUpdate); cleanupControls(); spinner.fail('Development runner could not start.'); console.log(chalk.red(error.message)); return false;
   }
 }
-async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [], activeAccountId: '', reasoning: {} }; settings.openCode.accounts ||= []; migrateProfiles(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the legacy setup wizard once or pass --config <file>. ${error.message}`); } }
-async function save(settings) { await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
+async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [], activeAccountId: '', reasoning: {} }; settings.openCode.accounts ||= []; migrateProfiles(settings); normalizeProxy(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the legacy setup wizard once or pass --config <file>. ${error.message}`); } }
+async function save(settings) { settings.schemaVersion = 5; normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
 function parseModels(text) { return [...new Set(text.split(/\r?\n/).map(v => v.trim()).filter(v => /^[a-z0-9_.-]+\/.+/i.test(v)))]; }
 async function refreshOpenCode(settings) {
   const spinner = ora('Reading OpenCode accounts and models…').start();
@@ -574,8 +580,39 @@ async function reportsMenu(settings) {
   const flag = action === 'report' ? '-Report' : '-Status'; const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, flag];
   try { await execute('pwsh.exe', runnerArgs, root, true); } catch (error) { console.log(chalk.yellow(`Report command ended: ${error.message}`)); } return pause();
 }
+async function editProxyRoute(settings, route = null) {
+  const current = route || { id: crypto.randomUUID(), name: '', protocol: 'http', host: '', port: 8080, username: '', passwordProtected: '', caFile: '', noProxy: [] };
+  current.name = String(await input({ message: 'Route name', default: current.name })).trim();
+  current.protocol = await pick('Upstream protocol', PROXY_PROTOCOLS.map(value => ({ name: value.toUpperCase(), value }))) || current.protocol;
+  current.host = String(await input({ message: 'Proxy host or IP', default: current.host })).trim();
+  current.port = Number(String(await input({ message: 'Port', default: String(current.port || '') })).trim());
+  current.username = String(await input({ message: 'Username (blank for none)', default: current.username })).trim();
+  const password = await secretInput({ message: current.passwordProtected ? 'Password (blank keeps existing; enter ! to clear)' : 'Password (blank for none)' });
+  if (password === '!') current.passwordProtected = ''; else if (password) current.passwordProtected = await protectSecret(password);
+  current.caFile = String(await input({ message: 'PEM CA file (blank for system trust)', default: current.caFile })).trim();
+  if (current.caFile) { try { if (!(await fs.stat(current.caFile)).isFile()) throw new Error(); } catch { console.log(chalk.red('PEM CA file was not found.')); return pause(); } }
+  current.noProxy = String(await input({ message: 'Additional NO_PROXY entries, comma-separated', default: current.noProxy.join(',') })).split(',').map(value => value.trim()).filter(Boolean);
+  const error = validateProxyRoute(current); if (error) { console.log(chalk.red(error)); return pause(); }
+  const proxy = normalizeProxy(settings); if (!route) proxy.routes.push(current); await save(settings); console.log(chalk.green(`Proxy route '${current.name}' saved.`)); return pause();
+}
+async function proxyRoutesMenu(settings) {
+  while (true) {
+    const proxy = normalizeProxy(settings); const active = activeProxyRoute(settings);
+    header(settings); console.log(chalk.bold('PROXY ROUTES')); console.log(`  Active  ${active ? redactedRoute(active) : 'Direct (no proxy)'}\n`);
+    const choice = await pick('Select or manage a route', [{ name: `${proxy.activeRouteId === DIRECT_ROUTE_ID ? '●' : ' '} Direct`, value: DIRECT_ROUTE_ID }, ...proxy.routes.map(route => ({ name: `${route.id === proxy.activeRouteId ? '●' : ' '} ${route.name}  ${chalk.gray(redactedRoute(route))}`, value: route.id })), { name: chalk.cyan('+ Add proxy route'), value: 'add' }, { name: 'Test active route', value: 'test' }]);
+    if (!choice) return;
+    if (choice === 'add') { await editProxyRoute(settings); continue; }
+    if (choice === 'test') { const project = selectedProject(settings); const args = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-ProxyTest']; try { await execute('pwsh.exe', args, root, true); } catch (error) { console.log(chalk.red(error.message)); } await pause(); continue; }
+    if (choice === DIRECT_ROUTE_ID) { proxy.activeRouteId = DIRECT_ROUTE_ID; await save(settings); console.log(chalk.green('Direct route selected.')); await pause(); continue; }
+    const route = proxy.routes.find(item => item.id === choice); const action = await pick(`Proxy route: ${route.name}`, [{ name: 'Use this route', value: 'use' }, { name: 'Edit route', value: 'edit' }, { name: chalk.red('Delete route'), value: 'delete' }]);
+    if (action === 'use') { proxy.activeRouteId = route.id; await save(settings); console.log(chalk.green(`Selected ${route.name}.`)); await pause(); }
+    if (action === 'edit') await editProxyRoute(settings, route);
+    if (action === 'delete' && await yesNo(`Delete '${route.name}'?`)) { proxy.routes = proxy.routes.filter(item => item.id !== route.id); if (proxy.activeRouteId === route.id) proxy.activeRouteId = DIRECT_ROUTE_ID; await save(settings); }
+  }
+}
 async function systemMenu(settings) {
-  const action = await pick('System', [{ name: 'Run diagnostics (read-only)', value: 'diagnostics' }, { name: 'Refresh OpenCode accounts and models', value: 'refresh' }, { name: 'Show configuration path', value: 'config' }]); if (!action) return;
+  const action = await pick('System', [{ name: 'Proxy routes', value: 'proxy' }, { name: 'Run diagnostics (read-only)', value: 'diagnostics' }, { name: 'Refresh OpenCode accounts and models', value: 'refresh' }, { name: 'Show configuration path', value: 'config' }]); if (!action) return;
+  if (action === 'proxy') return proxyRoutesMenu(settings);
   if (action === 'config') { console.log(`\n${configPath}`); return pause(); }
   if (action === 'diagnostics') {
     header(settings); console.log(chalk.bold('SYSTEM DIAGNOSTICS')); const project = selectedProject(settings); const checks = [];

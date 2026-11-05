@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { applyProfile, isLocalModel, migrateProfiles, policyFor, profileFrom, splitModelVariant } from '../lib/profiles.mjs';
 import { activeProject, validateProjectId } from '../lib/projects.mjs';
 import { projectDataRoot } from '../lib/reports.mjs';
+import { DIRECT_ROUTE_ID, activeProxyRoute, noProxyValue, normalizeProxy, validateProxyRoute } from '../lib/proxy.mjs';
 
 test('recognizes local model providers', () => {
   assert.equal(isLocalModel('ollama/qwen3-coder-64k:30b'), true);
@@ -96,4 +97,13 @@ test('keeps an explicit active project and validates project IDs', () => {
 });
 test('derives an isolated project data root from the stable project ID', () => {
   assert.match(projectDataRoot({ logs: { root: './data/projects' } }, { id: 'alpha' }, 'C:/Tools/Terra/terra-config.json'), /data[\\/]projects[\\/]alpha$/);
+});
+test('migrates proxy settings to a direct route without exposing a secret', () => {
+  const settings = {}; const proxy = normalizeProxy(settings);
+  assert.equal(proxy.activeRouteId, DIRECT_ROUTE_ID); assert.equal(activeProxyRoute(settings), null);
+});
+test('validates proxy routes and retains loopback exclusions', () => {
+  const route = { name: 'LAN', protocol: 'socks5', host: '192.168.0.124', port: 1080, noProxy: ['internal.test'] };
+  assert.equal(validateProxyRoute(route), ''); assert.match(noProxyValue(route), /127\.0\.0\.1/); assert.match(noProxyValue(route), /internal\.test/);
+  assert.match(validateProxyRoute({ ...route, port: 0 }), /Port/);
 });

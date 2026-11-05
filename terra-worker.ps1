@@ -8,6 +8,9 @@ param(
     [Parameter(Mandatory)][string]$ErrorFile,
     [Parameter(Mandatory)][string]$Agent,
     [string]$Model = '',
+    [string]$ProxyUrl = '',
+    [string]$NoProxy = '',
+    [string]$CaFile = '',
     [switch]$ShowThinking
 )
 Set-StrictMode -Version Latest
@@ -22,6 +25,12 @@ try {
     Set-Location -LiteralPath $ProjectPath
     $prompt = Get-Content -LiteralPath $PromptFile -Raw -Encoding UTF8
     $arguments = @('run', '--agent', $Agent, '--format', 'json', '--auto')
+    if ($ProxyUrl) {
+        $arguments += '--standalone'
+        $env:HTTP_PROXY=$ProxyUrl; $env:HTTPS_PROXY=$ProxyUrl; $env:http_proxy=$ProxyUrl; $env:https_proxy=$ProxyUrl
+        $env:NO_PROXY=$NoProxy; $env:no_proxy=$NoProxy
+        if ($CaFile) { $env:NODE_EXTRA_CA_CERTS=$CaFile }
+    }
     if (-not [string]::IsNullOrWhiteSpace($Model)) { $arguments += @('--model', $Model) }
     if ($ShowThinking) { $arguments += '--thinking' }
     $arguments += $prompt

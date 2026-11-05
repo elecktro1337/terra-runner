@@ -29,6 +29,8 @@ param(
     [switch]$ClearStop,
     [switch]$ClearControlFlags,
     [switch]$Report,
+    [switch]$ProxyStatus,
+    [switch]$ProxyTest,
     [string]$ReportDate = '',
     [string]$SetBalanceUsd = '',
     [switch]$ReconcileBalance,
@@ -74,6 +76,30 @@ function Read-Member($Value, [string]$Name) {
     if ($null -ne $p) { return $p.Value }
     return $null
 }
+function Get-ActiveProxyRoute($Config) {
+    $proxy = Read-Member $Config 'proxy'
+    if ($null -eq $proxy -or [string](Read-Member $proxy 'activeRouteId') -in @('','direct')) { return $null }
+    $id = [string](Read-Member $proxy 'activeRouteId')
+    $route = @((Read-Member $proxy 'routes') | Where-Object { [string](Read-Member $_ 'id') -eq $id }) | Select-Object -First 1
+    if ($null -eq $route) { throw "Configured proxy route '$id' was not found." }
+    $protocol = [string](Read-Member $route 'protocol'); $host = [string](Read-Member $route 'host'); $port = [int](Read-Member $route 'port')
+    if ($protocol -notin @('http','https','socks4','socks4a','socks5','socks5h') -or [string]::IsNullOrWhiteSpace($host) -or $host -match '[\s/@]' -or $port -lt 1 -or $port -gt 65535) { throw 'Configured proxy route is invalid.' }
+    return $route
+}
+function Get-ProxyNoProxy($Route) { return (@('localhost','127.0.0.1','::1') + @((Read-Member $Route 'noProxy')) | Where-Object { $_ } | Select-Object -Unique) -join ',' }
+function Start-TerraProxyBridge($Route) {
+    $node = Get-Command node.exe -ErrorAction SilentlyContinue; if ($null -eq $node) { $node = Get-Command node -ErrorAction SilentlyContinue }; if ($null -eq $node) { throw 'Node.js 20+ is required for a configured proxy route.' }
+    $bridge = Join-Path $ScriptDir 'node-ui/proxy-bridge.mjs'; if (-not (Test-Path -LiteralPath $bridge)) { throw 'Proxy bridge file is missing.' }
+    $cipher = [string](Read-Member $Route 'passwordProtected'); $password = if ($cipher) { Unprotect-TerraSecret $cipher } else { '' }
+    $payload = [ordered]@{ protocol=[string](Read-Member $Route 'protocol'); host=[string](Read-Member $Route 'host'); port=[int](Read-Member $Route 'port'); username=[string](Read-Member $Route 'username'); password=$password } | ConvertTo-Json -Compress
+    $psi = [Diagnostics.ProcessStartInfo]::new(); $psi.FileName = $node.Source; $psi.UseShellExecute = $false; $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    $ca = [string](Read-Member $Route 'caFile'); if ($ca) { if (-not (Test-Path -LiteralPath $ca -PathType Leaf)) { throw 'Configured proxy CA file was not found.' }; $psi.Environment['NODE_EXTRA_CA_CERTS'] = $ca }
+    [void]$psi.ArgumentList.Add($bridge); $process = [Diagnostics.Process]::Start($psi); $process.StandardInput.Write($payload); $process.StandardInput.Close(); $line = $process.StandardOutput.ReadLine()
+    try { $port = [int](($line | ConvertFrom-Json -AsHashtable).port) } catch { $detail = $process.StandardError.ReadToEnd(); $process.Dispose(); throw "Proxy bridge failed to start: $detail" }
+    if ($port -lt 1 -or $port -gt 65535) { $process.Kill($true); $process.Dispose(); throw 'Proxy bridge returned an invalid port.' }
+    return [pscustomobject]@{ Process=$process; Url="http://127.0.0.1:$port"; NoProxy=(Get-ProxyNoProxy $Route); CaFile=$ca; Display="$([string](Read-Member $Route 'protocol'))://$([string](Read-Member $Route 'host')):$([int](Read-Member $Route 'port'))" }
+}
+function Stop-TerraProxyBridge($Bridge) { if ($null -eq $Bridge) { return }; try { if (-not $Bridge.Process.HasExited) { $Bridge.Process.Kill($true); $Bridge.Process.WaitForExit(5000) | Out-Null } } finally { $Bridge.Process.Dispose() } }
 function Write-UiEvent([string]$Type, [hashtable]$Data = @{}) {
     if (-not $UiEvents) { return }
     $payload = [ordered]@{ type=$Type; at=(Get-Date).ToUniversalTime().ToString('o') }
@@ -769,7 +795,7 @@ function Rotate-Reports([string]$DataDirectory, $Settings) {
 }
 
 $cfg = Get-Content -LiteralPath $Config -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 40
-if ([int]$cfg.schemaVersion -notin @(1,2,3,4)) { throw 'Unsupported terra-config.json schemaVersion.' }
+if ([int]$cfg.schemaVersion -notin @(1,2,3,4,5)) { throw 'Unsupported terra-config.json schemaVersion.' }
 $projectConfig = @($cfg.projects | Where-Object { $_.id -eq $Project })
 if ($projectConfig.Count -ne 1) { throw "Expected exactly one project with id '$Project'." }
 $projectConfig = $projectConfig[0]
@@ -787,6 +813,14 @@ $stopPath = Join-Path $projectData 'STOP'
 $abortPath = Join-Path $projectData 'ABORT'
 Ensure-Directory $projectData
 Ensure-Directory $logsPath
+$activeProxyRoute = Get-ActiveProxyRoute $cfg
+if ($ProxyStatus) { if ($null -eq $activeProxyRoute) { Write-Host 'Proxy route: Direct (disabled).' } else { Write-Host "Proxy route: $([string](Read-Member $activeProxyRoute 'name')) ($([string](Read-Member $activeProxyRoute 'protocol'))://$([string](Read-Member $activeProxyRoute 'host')):$([int](Read-Member $activeProxyRoute 'port')))" }; return }
+if ($ProxyTest) {
+    if ($null -eq $activeProxyRoute) { Write-Host 'Proxy test: Direct route is selected; no proxy is configured.'; return }
+    $testBridge = $null
+    try { $testBridge = Start-TerraProxyBridge $activeProxyRoute; $null = & curl.exe --proxy $testBridge.Url --connect-timeout 8 --max-time 20 --silent --show-error --head https://example.com/ 2>&1; if ($LASTEXITCODE -ne 0) { throw 'HTTPS CONNECT test failed.' }; Write-Host "Proxy test succeeded through $($testBridge.Display)." } finally { Stop-TerraProxyBridge $testBridge }
+    return
+}
 
 if ($Stop) {
     [System.IO.File]::WriteAllText($stopPath,"stop requested at $(Get-Date -Format o)")
@@ -889,6 +923,7 @@ $globalLockPath = Join-Path $logRoot 'global-runner.lock'
 Ensure-Directory (Split-Path -Parent $globalLockPath)
 $lock = $null
 $activeChild = $null
+$proxyBridge = $null
 try {
     try {
         $lock = [System.IO.File]::Open($globalLockPath,[System.IO.FileMode]::OpenOrCreate,
@@ -948,6 +983,7 @@ try {
         Write-Host "DRY RUN OK: project=$Project branch=$branch iterations=$maxCycles; would launch agent '$($cfg.agent)'."
         return
     }
+    if ($null -ne $activeProxyRoute) { $proxyBridge = Start-TerraProxyBridge $activeProxyRoute; Write-Host "Proxy route enabled for this Terra run: $($proxyBridge.Display)" }
     $initialUsage = Get-BudgetSnapshot $openCode $repo $cfg.budget $logRoot
     Show-Usage $initialUsage $cfg.budget
     Rotate-ProjectLogs $logsPath $cfg.logs
@@ -995,6 +1031,7 @@ try {
             $argsList = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$workerFile,
                 '-OpenCodeCommand',$openCode,'-ProjectPath',$repo,'-PromptFile',$promptFile,
                 '-EventsFile',$eventsPath,'-ErrorFile',$stderrPath,'-Agent',([string]$cfg.agent),'-Model',([string]$cfg.model))
+            if ($null -ne $proxyBridge) { $argsList += @('-ProxyUrl',$proxyBridge.Url,'-NoProxy',$proxyBridge.NoProxy,'-CaFile',$proxyBridge.CaFile) }
             $reasoning = Read-Member (Read-Member $cfg 'openCode') 'reasoning'
             if ($null -ne $reasoning -and [bool](Read-Member $reasoning 'showThinking')) { $argsList += '-ShowThinking' }
             foreach ($item in $argsList) { [void]$psi.ArgumentList.Add([string]$item) }
@@ -1221,5 +1258,6 @@ try {
 }
 finally {
     if ($null -ne $activeChild) { Stop-Child $activeChild; $activeChild.Dispose() }
+    Stop-TerraProxyBridge $proxyBridge
     if ($null -ne $lock) { $lock.Dispose() }
 }

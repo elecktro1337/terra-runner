@@ -86,6 +86,12 @@ function Ensure-OpenCodeSettings($Settings) {
     if ($null -eq (Read-SettingMember $openCode 'reasoning')) { $openCode['reasoning'] = [ordered]@{ variant=''; showThinking=$false } }
     return $openCode
 }
+function Ensure-ProxySettings($Settings) {
+    if ($null -eq (Read-SettingMember $Settings 'proxy')) { $Settings['proxy'] = [ordered]@{ activeRouteId='direct'; routes=@() } }
+    if ($null -eq (Read-SettingMember $Settings.proxy 'activeRouteId')) { $Settings.proxy['activeRouteId']='direct' }
+    if ($null -eq (Read-SettingMember $Settings.proxy 'routes')) { $Settings.proxy['routes']=@() }
+    return $Settings.proxy
+}
 function Invoke-OpenCodeText([string[]]$Arguments) {
     $command = [string]$script:Settings.openCodeCommand
     if ([string]::IsNullOrWhiteSpace($command)) { throw 'OpenCode command is not configured.' }
@@ -237,8 +243,8 @@ function Save-Settings {
     if (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf) {
         Copy-Item -LiteralPath $script:ConfigFile -Destination (Join-Path $backupDir ('terra-config-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.json')) -Force
     }
-    Ensure-OpenCodeSettings $script:Settings | Out-Null
-    $script:Settings.schemaVersion = 4
+    Ensure-OpenCodeSettings $script:Settings | Out-Null; Ensure-ProxySettings $script:Settings | Out-Null
+    $script:Settings.schemaVersion = 5
     $json = ConvertTo-Json -InputObject $script:Settings -Depth 60
     $validated = ConvertFrom-Json -InputObject $json -AsHashtable -Depth 60
     if (-not $validated.projects -or -not $validated.budget -or -not $validated.execution -or -not $validated.logs) { throw 'Configuration validation failed.' }
@@ -283,15 +289,15 @@ function Load-Settings {
         $script:Settings = Get-Content -LiteralPath $script:ConfigFile -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable -Depth 60
     }
     if (-not (Test-SettingsShape $script:Settings)) { throw 'Configuration is incomplete.' }
-    if ([int]$script:Settings.schemaVersion -lt 4) { $script:Settings.schemaVersion = 4 }
-    Ensure-OpenCodeSettings $script:Settings | Out-Null
+    if ([int]$script:Settings.schemaVersion -lt 5) { $script:Settings.schemaVersion = 5 }
+    Ensure-OpenCodeSettings $script:Settings | Out-Null; Ensure-ProxySettings $script:Settings | Out-Null
     if (-not $script:ProjectId -or @($script:Settings.projects | Where-Object { $_.id -eq $script:ProjectId }).Count -ne 1) { $script:ProjectId = [string]$script:Settings.projects[0].id }
 }
 
 function New-DefaultSettings([string]$ProjectId,[string]$ProjectPath,[string]$Branch,[string]$Roadmap,[string]$Progress,[string]$OpenCode,[string]$TaskIdPattern = '') {
     $root = Get-ConfigRoot
     return [ordered]@{
-        schemaVersion=4; openCodeCommand=$OpenCode; agent='build'; model=''; openCode=[ordered]@{ accounts=@(); activeAccountId=''; reasoning=[ordered]@{ variant=''; showThinking=$false } }
+        schemaVersion=5; openCodeCommand=$OpenCode; agent='build'; model=''; openCode=[ordered]@{ accounts=@(); activeAccountId=''; reasoning=[ordered]@{ variant=''; showThinking=$false } }; proxy=[ordered]@{ activeRouteId='direct'; routes=@() }
         projects=@([ordered]@{ id=$ProjectId; path=$ProjectPath; branch=$Branch; roadmap=$Roadmap; progress=$Progress; prompt='terra-prompt.md'; taskIdPattern=$TaskIdPattern })
         budget=[ordered]@{ mode='daily'; dailyUsd=5.0; reserveUsd=0.5; emergencyStopUsd=4.95; allowUnlimited=$false; requireGlobalOpenCodeStats=$true; stopOnZeroCostWithTokens=$true; balance=[ordered]@{ source='snapshot'; id='default-account'; minimumUsd=5.0; iterationReserveUsd=0.5; maxAgeMinutes=5; command=''; arguments=@() } }
         execution=[ordered]@{ pollSeconds=20; maxIterationMinutes=45; maxIterationsPerRun=500; maxConsecutiveNoProgress=3; maxConsecutiveDocumentationOnly=12; maxToolErrorsPerIteration=15; maxTransientRetries=3; transientRetryDelaySeconds=30; maxPushRetries=3; pushRetryDelaySeconds=30; pauseBetweenIterationsSeconds=3; maxRawLogMiB=80 }
@@ -561,7 +567,7 @@ function Show-ProjectsMenu {
 function Show-SettingsMenu {
     while ($true) {
         Show-Header; $e=$script:Settings.execution; $l=$script:Settings.logs
-        Write-Line 'Settings' 'White'; Write-Line '  1  OpenCode command and model'; Write-Line '  2  Iteration limits and timeout'; Write-Line '  3  Logging and retention'; Write-Line '  4  Run setup wizard again'; Write-Line '  5  OpenCode accounts and reasoning'; Write-Line '  0  Back'
+        Write-Line 'Settings' 'White'; Write-Line '  1  OpenCode command and model'; Write-Line '  2  Iteration limits and timeout'; Write-Line '  3  Logging and retention'; Write-Line '  4  Run setup wizard again'; Write-Line '  5  OpenCode accounts and reasoning'; Write-Line '  6  Proxy routes'; Write-Line '  0  Back'
         switch (Read-Choice 'Choose an option') {
             '0' { return }
             '1' { $script:Settings.openCodeCommand=Read-Text 'OpenCode command' $script:Settings.openCodeCommand $true; $script:Settings.model=Read-Text 'Model (optional)' $script:Settings.model; $script:Settings.agent=Read-Text 'Agent' $script:Settings.agent $true; Save-Settings }
@@ -569,8 +575,23 @@ function Show-SettingsMenu {
             '3' { $l.retainDays=Read-Integer 'Log retention in days' $l.retainDays 1; $l.maxIterationsPerProject=Read-Integer 'Maximum saved iterations' $l.maxIterationsPerProject 1; $l.maxTotalMiBPerProject=Read-Integer 'Maximum project log size in MiB' $l.maxTotalMiBPerProject 1; Save-Settings }
             '4' { if (Confirm 'Replace current settings through setup?') { if (Start-SetupWizard) { Load-Settings } } }
             '5' { Show-OpenCodeAccountsMenu }
+            '6' { Show-ProxyMenu }
             default { Write-Line 'Unknown option.' 'Yellow'; Pause-Menu }
         }
+    }
+}
+function Show-ProxyMenu {
+    while ($true) {
+        $proxy=Ensure-ProxySettings $script:Settings; Show-Header; Write-Line 'Proxy routes' 'White'; Write-Line "  D  $(if ($proxy.activeRouteId -eq 'direct') {'* '} else {'  '})Direct"
+        $i=0; foreach($route in @($proxy.routes)) { $i++; $mark=if($proxy.activeRouteId -eq $route.id){'*'}else{' '}; Write-Line "  $i  $mark $($route.name) ($($route.protocol)://$($route.host):$($route.port))" }
+        Write-Line '  A  Add route'; Write-Line '  X  Delete a route'; Write-Line '  T  Test active route'; Write-Line '  0  Back'
+        $choice=Read-Choice 'Choose an option'; if($choice -eq '0'){return}; if($choice -eq 'd'){$proxy.activeRouteId='direct';Save-Settings;continue}; if($choice -match '^\d+$' -and [int]$choice -ge 1 -and [int]$choice -le $i){$proxy.activeRouteId=$proxy.routes[[int]$choice-1].id;Save-Settings;continue}
+        if($choice -eq 'x'){ $n=Read-Integer 'Route number to delete' 0 1 $i; $route=$proxy.routes[$n-1]; if(Confirm "Delete $($route.name)?"){$proxy.routes=@($proxy.routes|Where-Object id -ne $route.id);if($proxy.activeRouteId -eq $route.id){$proxy.activeRouteId='direct'};Save-Settings};continue }
+        if($choice -eq 't'){ Invoke-RunnerCommand @{ ProxyTest=$true };continue }
+        if($choice -eq 'a'){
+            $name=Read-Text 'Route name' '' $true; $protocol=Read-Text 'Protocol (http, https, socks4, socks4a, socks5, socks5h)' 'http' $true; if($protocol -notin @('http','https','socks4','socks4a','socks5','socks5h')){Write-Line 'Unsupported protocol.' 'Yellow';Pause-Menu;continue}; $host=Read-Text 'Proxy host or IP' '' $true; $port=Read-Integer 'Port' 8080 1 65535; $username=Read-Text 'Username (optional)'; $secure=Read-Host 'Password (optional)' -AsSecureString; $password=''; if($secure.Length){$ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure);try{$password=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr)}finally{[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)}}; $ca=Read-Text 'PEM CA file (optional)';if($ca -and -not(Test-Path -LiteralPath $ca -PathType Leaf)){Write-Line 'CA file not found.' 'Yellow';Pause-Menu;continue};$noProxy=(Read-Text 'Additional NO_PROXY entries (comma-separated)') -split ','|ForEach-Object Trim|Where-Object{$_};$proxy.routes+=,[ordered]@{id=[guid]::NewGuid().ToString();name=$name;protocol=$protocol;host=$host;port=$port;username=$username;passwordProtected=$(if($password){Protect-TerraSecret $password}else{''});caFile=$ca;noProxy=@($noProxy)};$proxy.activeRouteId=$proxy.routes[-1].id;Save-Settings;continue
+        }
+        Write-Line 'Unknown option.' 'Yellow'; Pause-Menu
     }
 }
 function Show-ReportsMenu {

@@ -55,4 +55,20 @@ function Resolve-TerraConfigPath {
     return $modern
 }
 
-Export-ModuleMember -Function ConvertTo-TerraMoney,Format-TerraMoney,Get-TerraAppDataRoot,Resolve-TerraConfigPath
+function Protect-TerraSecret {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$PlainText)
+    $bytes = [Text.Encoding]::UTF8.GetBytes($PlainText)
+    return [Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($bytes,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))
+}
+
+function Unprotect-TerraSecret {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$CipherText)
+    try {
+        $bytes = [Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($CipherText),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)
+        return [Text.Encoding]::UTF8.GetString($bytes)
+    } catch { throw 'The proxy password cannot be decrypted for this Windows user. Enter it again.' }
+}
+
+Export-ModuleMember -Function ConvertTo-TerraMoney,Format-TerraMoney,Get-TerraAppDataRoot,Resolve-TerraConfigPath,Protect-TerraSecret,Unprotect-TerraSecret
