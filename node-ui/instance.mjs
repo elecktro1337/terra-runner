@@ -90,7 +90,7 @@ async function run(mode, limit = 1) {
   const roadmap = await readRoadmapProgress(project);
   const header = renderRunHeader(settings, project, instance.profile || {}, command, roadmap);
   const footer = new LiveFooter(process.stdout, controls); const status = new LiveStatusBlock(process.stdout, header.statusRow, 1); const liveHeader = new LiveHeaderBlock(process.stdout, header.liveHeaderRow);
-  const liveAttached = footer.enabled && status.enabled; let frame = 0; const frames = ['-', '\\', '|', '/']; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration'; let detail = 'Waiting for runner events…'; let iterationStarted = Date.now(); let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let selectedTask = ''; let control = ''; let controlNotice = ''; let liveRoadmap = roadmap; let lastTask = ''; let lastCommit = null; const completedIterations = [];
+  const liveAttached = footer.enabled && status.enabled; let frame = 0; const frames = ['-', '\\', '|', '/']; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration'; let detail = ''; let iterationStarted = Date.now(); let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let selectedTask = ''; let control = ''; let controlNotice = ''; let liveRoadmap = roadmap; let lastTask = ''; let lastCommit = null; const completedIterations = [];
   const statusText = () => `${chalk.cyan(frames[frame++ % frames.length])} ${stage} · ${durationText(Date.now() - iterationStarted)}`;
   const renderStatus = () => status.render(statusText(), detail, completedIterations, controlNotice);
   const renderHeader = () => liveHeader.render([...developmentHeaderRows({ project, profile: instance.profile || {}, command: header.command, roadmap: liveRoadmap, includeTerraLimits: false, run: { elapsedSeconds: elapsedSecondsSince(runStartedAt), lastTask, lastCommit } }), rule]);
@@ -104,9 +104,9 @@ async function run(mode, limit = 1) {
     if (!eventFile) return;
     try {
       const lines = (await fs.readFile(eventFile, 'utf8')).split(/\r?\n/).filter(Boolean);
-      for (const line of lines.slice(eventLines)) { try { const event = JSON.parse(line); const task = selectedRoadmapTaskFromEvent(event); if (task) { selectedTask = task; detail = `Task: ${task}`; } const next = activityFromEvent(event); if (next) { toolCount++; if (next === 'Running verification') checkCount++; activity = next; } } catch { } }
+      for (const line of lines.slice(eventLines)) { try { const event = JSON.parse(line); const task = selectedRoadmapTaskFromEvent(event); if (task) { selectedTask = task; detail = ''; } const next = activityFromEvent(event); if (next) { toolCount++; if (next === 'Running verification') checkCount++; activity = next; } } catch { } }
       eventLines = lines.length;
-      if (activity) stage = `${iterationLabel ? `${iterationLabel} | ` : ''}${activity}${toolCount ? ` | tools ${toolCount}${checkCount ? ` | checks ${checkCount}` : ''}` : ''}`;
+      if (activity) stage = `${iterationLabel ? `${iterationLabel} | ` : ''}${selectedTask ? `${selectedTask} | ` : ''}${activity}${toolCount ? ` | tools ${toolCount}${checkCount ? ` | checks ${checkCount}` : ''}` : ''}`;
     } catch { }
   }, 900);
   const runnerArgs = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', instance.projectId, '-Config', configPath, '-InstanceId', instanceId, '-UiEvents', '-ClearControlFlags', mode === 'continuous' ? '-Continuous' : '-Once'];
@@ -121,7 +121,7 @@ async function run(mode, limit = 1) {
       if (!line.startsWith('__TERRA_UI__')) continue;
       try {
         const event = JSON.parse(line.slice('__TERRA_UI__'.length));
-        if (event.type === 'iteration-started') { eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; selectedTask = ''; iterationStarted = Date.now(); iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`; stage = `${iterationLabel} | selecting actionable task | ${event.pending} tasks pending`; detail = 'Selecting next actionable roadmap task…'; }
+        if (event.type === 'iteration-started') { eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; selectedTask = ''; iterationStarted = Date.now(); iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`; stage = `${iterationLabel} | selecting actionable task | ${event.pending} tasks pending`; detail = ''; }
         if (event.type === 'recovery-finished') { stage = 'Recovered interrupted Terra work'; detail = `Recovery commit ${event.recoveryCommit || 'created and pushed'}`; }
         if (event.type === 'network-waiting') { stage = `Waiting for ${event.source || 'network'} connection`; detail = `Retry ${event.attempt || 1}; next check in ${event.delaySeconds || '?'}s`; }
         if (event.type === 'iteration-heartbeat') { stage = `Iteration ${event.iteration} | working`; }

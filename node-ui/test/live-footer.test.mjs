@@ -4,20 +4,18 @@ import { footerRows, LiveFooter, LiveStatusBlock, liveStatusRows } from '../lib/
 
 test('formats one pinned controls row and a separate status block', () => {
   assert.deepEqual(footerRows('Controls: [S] stop'), ['  Controls: [S] stop']);
-  assert.deepEqual(liveStatusRows('Preparing iteration', 'Waiting for runner events…'), [
-    '  Preparing iteration', '  Waiting for runner events…'
-  ]);
+  assert.deepEqual(liveStatusRows('Preparing iteration'), ['  Preparing iteration']);
 });
 
 test('keeps completed iteration history below the changing live status', () => {
   assert.deepEqual(liveStatusRows('Iteration 3 | tools', '', ['✓ Iteration 1 complete', '✓ Iteration 2 complete']), [
-    '  Iteration 3 | tools', '  Waiting for runner events…', '  ✓ Iteration 1 complete', '  ✓ Iteration 2 complete'
+    '  Iteration 3 | tools', '  ✓ Iteration 1 complete', '  ✓ Iteration 2 complete'
   ]);
 });
 
-test('keeps the current task visible and pins a separate graceful-stop notice', () => {
-  assert.deepEqual(liveStatusRows('Iteration 3 | Running verification', 'Task: NTD-0010', [], '! Stop requested. The current iteration will finish.'), [
-    '  Iteration 3 | Running verification', '  Task: NTD-0010', '  ! Stop requested. The current iteration will finish.'
+test('keeps the current task in the main status and pins a separate graceful-stop notice', () => {
+  assert.deepEqual(liveStatusRows('Iteration 3 | NTD-0010 | Running verification', '', [], '! Stop requested. The current iteration will finish.'), [
+    '  Iteration 3 | NTD-0010 | Running verification', '  ! Stop requested. The current iteration will finish.'
   ]);
 });
 
@@ -25,8 +23,8 @@ test('reserves a visible row for a control notice before iteration history', () 
   let written = '';
   const stream = { isTTY: true, rows: 16, write(value) { written += value; return true; } };
   const status = new LiveStatusBlock(stream, 10);
-  status.render('Iteration 3 | tools', 'Task: ERP-0001', ['✓ Iteration 1', '✓ Iteration 2'], '! Stop requested.');
-  assert.match(written, /Task: ERP-0001/);
+  status.render('Iteration 3 | ERP-0001 | tools', '', ['✓ Iteration 1', '✓ Iteration 2'], '! Stop requested.');
+  assert.match(written, /Iteration 3 \| ERP-0001 \| tools/);
   assert.match(written, /! Stop requested\./);
 });
 

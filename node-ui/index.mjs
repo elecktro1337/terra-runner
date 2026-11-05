@@ -188,13 +188,13 @@ async function runWithTui(runnerArgs, settings, project, profile, mode, header) 
         try {
           const event = JSON.parse(line);
           const task = selectedRoadmapTaskFromEvent(event);
-          if (task) { selectedTask = task; checkpoint = `Task: ${task}`; }
+          if (task) { selectedTask = task; checkpoint = ''; }
           const next = activityFromEvent(event); if (next) { toolCount++; if (next === 'Running verification') checkCount++; activity = next; }
         } catch { }
       }
       eventLines = lines.length;
       const counters = toolCount ? ` | tools ${toolCount}${checkCount ? ` | checks ${checkCount}` : ''}` : '';
-      if (activity) stage = `${iterationLabel ? `${iterationLabel} | ` : ''}${activity}${counters}`;
+      if (activity) stage = `${iterationLabel ? `${iterationLabel} | ` : ''}${selectedTask ? `${selectedTask} | ` : ''}${activity}${counters}`;
     } catch { }
   }, 900);
   const requestControl = async kind => {
@@ -224,7 +224,7 @@ async function runWithTui(runnerArgs, settings, project, profile, mode, header) 
             if (event.type === 'iteration-started') {
               eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; selectedTask = ''; iterationStarted = Date.now();
               iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`;
-              checkpoint = 'Selecting next actionable roadmap task…';
+              checkpoint = '';
               stage = `${iterationLabel} | selecting actionable task | ${event.pending} tasks pending`;
             }
               if (event.type === 'recovery-finished') { checkpoint = `Recovered interrupted work: ${event.recoveryCommit || 'checkpoint committed and pushed'}`; stage = 'Recovered interrupted Terra work'; }
