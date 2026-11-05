@@ -11,6 +11,7 @@ param(
     [string]$ProxyUrl = '',
     [string]$NoProxy = '',
     [string]$CaFile = '',
+    [switch]$Standalone,
     [switch]$ShowThinking
 )
 Set-StrictMode -Version Latest
@@ -25,8 +26,10 @@ try {
     Set-Location -LiteralPath $ProjectPath
     $prompt = Get-Content -LiteralPath $PromptFile -Raw -Encoding UTF8
     $arguments = @('run', '--agent', $Agent, '--format', 'json', '--auto')
-    if ($ProxyUrl) {
+    if ($Standalone -or $ProxyUrl) {
         $arguments += '--standalone'
+    }
+    if ($ProxyUrl) {
         $env:HTTP_PROXY=$ProxyUrl; $env:HTTPS_PROXY=$ProxyUrl; $env:http_proxy=$ProxyUrl; $env:https_proxy=$ProxyUrl
         $env:NO_PROXY=$NoProxy; $env:no_proxy=$NoProxy
         if ($CaFile) { $env:NODE_EXTRA_CA_CERTS=$CaFile }

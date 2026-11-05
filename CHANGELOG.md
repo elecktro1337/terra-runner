@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.0 - 2026-11-05
+
+- Added the central dispatcher, separate project terminals and the instances dashboard.
+- Added profile-scoped OpenCode authentication stores, immutable launch snapshots and addressable instance controls.
+- Replaced the long-held global runner lock with a project-worktree lock and parallel reservation ledger.
+
 ## 1.6.0 - 2026-11-05
 
 ### Terminal UI and profiles

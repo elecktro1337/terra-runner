@@ -30,6 +30,8 @@ export function profileFrom(model, account = null, reasoningVariant = '', showTh
     provider: modelProvider(parsed.model),
     credentialId: policy === 'local' ? '' : String(account?.credentialId || ''),
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(account?.label || ''),
+    authStoreId: policy === 'local' ? '' : 'legacy-shared',
+    parallelReservation: policy === 'local' ? 0 : 5,
     policy, reasoningVariant: variant, limits: null, limitPolicy: { mode: 'critical', amount: null, reserve: null }, runControls: { maxIterations: 0 },
     usageSource: policy === 'local' ? { kind: 'none' } : { kind: 'snapshot', unit: 'percent', remaining: null, reserve: 5, maxAgeMinutes: 120, observedAt: '', costTracking: { enabled: false, baselineAllTimeCostUsd: null, baselineObservedAt: '' } },
     showThinking: Boolean(showThinking)
@@ -45,6 +47,8 @@ export function normalizeProfile(profile) {
     id: String(profile?.id || crypto.randomUUID()), model, provider: modelProvider(model),
     credentialId: policy === 'local' ? '' : String(profile?.credentialId || ''),
     credentialLabel: policy === 'local' ? 'No credential (local inference)' : String(profile?.credentialLabel || ''),
+    authStoreId: policy === 'local' ? '' : String(profile?.authStoreId || 'legacy-shared'),
+    parallelReservation: Math.max(0, Number(profile?.parallelReservation ?? (policy === 'local' ? 0 : profile?.usageSource?.reserve ?? 5)) || 0),
     policy, reasoningVariant: String(profile?.reasoningVariant || parsed.reasoningVariant || ''),
     limits: profile?.limits && typeof profile.limits === 'object' ? structuredClone(profile.limits) : null,
     limitPolicy: { mode: String(profile?.limitPolicy?.mode || 'critical'), amount: profile?.limitPolicy?.amount ?? null, reserve: profile?.limitPolicy?.reserve ?? profile?.usageSource?.reserve ?? null, configured: Boolean(profile?.limitPolicy?.configured) },

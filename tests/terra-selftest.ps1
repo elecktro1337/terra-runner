@@ -65,15 +65,15 @@ try {
     $cfg.schemaVersion = 2
     $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
     Write-Host 'PASS: local and OAuth quota profiles do not invoke money accounting.' -ForegroundColor Green
-    # The global accounting lock blocks concurrent runners before they can launch an agent.
-    $lockPath = Join-Path $tempRoot 'project-data/global-runner.lock'
+    # A project worktree lock blocks a duplicate runner without blocking another project.
+    $lockPath = Join-Path $tempRoot 'project-data/mock-project/project-runner.lock'
     $lock = [IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
     try {
         $locked = $false
         try { & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun } catch { $locked = $true }
-        if (-not $locked) { throw 'Runner did not reject a held global accounting lock.' }
+        if (-not $locked) { throw 'Runner did not reject a held project lock.' }
     } finally { $lock.Dispose() }
-    Write-Host 'PASS: global accounting lock blocks concurrent runner starts.' -ForegroundColor Green
+    Write-Host 'PASS: project lock blocks duplicate runner starts.' -ForegroundColor Green
     $cfg.logs.maxIterationsPerProject = 150
     $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
     $env:TERRA_MOCK_COST = '0.15'

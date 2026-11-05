@@ -1,6 +1,20 @@
 # Configuration reference
 
-Terra Runner 1.6 stores normal configuration and runtime state in `%LOCALAPPDATA%\TerraRunner`. Use `-Portable` to keep state beside the installation.
+Terra Runner 2.0 stores normal configuration and runtime state in `%LOCALAPPDATA%\TerraRunner`. Use `-Portable` to keep state beside the installation.
+
+## Dispatcher runtime and isolated OpenCode storage
+
+Schema v6 adds `projects[].defaultProfileId`, `openCode.stores[]`,
+`profiles[].authStoreId`, and `profiles[].parallelReservation`. Runtime
+instance records, heartbeats, addressable controls and reservation ledgers live
+next to the configuration under `runtime/`; they contain no provider secrets.
+
+An isolated store's OpenCode SQLite database is kept under
+`opencode-stores/<store-id>/opencode.db` and is selected only through the
+process environment variable `OPENCODE_DB`. Terra never serializes its tokens
+or passwords into `terra-config.json`. Existing profiles migrate to the
+`legacy-shared` store and should be reassigned after authenticating a new
+isolated store.
 
 ## Projects
 

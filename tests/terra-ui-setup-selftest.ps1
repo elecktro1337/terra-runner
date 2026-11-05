@@ -22,7 +22,7 @@ try {
     & (Join-Path $root 'terra-ui.ps1') -Config $config
     if ($answers.Count -ne 0) { throw 'The setup wizard did not consume the expected inputs.' }
     $saved = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json -AsHashtable
-    if ([int]$saved.schemaVersion -ne 4 -or $saved.projects[0].id -ne 'wizard-project' -or $saved.projects[0].path -ne $repo) {
+    if ([int]$saved.schemaVersion -ne 5 -or $saved.projects[0].id -ne 'wizard-project' -or $saved.projects[0].path -ne $repo) {
         throw 'The setup wizard did not write the expected isolated configuration.'
     }
     Write-Host 'PASS: first-run Setup Wizard saves an isolated configuration.' -ForegroundColor Green

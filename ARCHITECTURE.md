@@ -1,4 +1,18 @@
-# Architecture overview
+# Terra Runner 2.0 architecture
+
+## Dispatcher and project workspaces
+
+`node-ui/index.mjs` is the central dispatcher. It owns a heartbeat and a
+non-secret runtime registry beside `terra-config.json`. Opening a project
+writes an immutable instance snapshot and starts `node-ui/instance.mjs` in a
+separate terminal. The project workspace owns runner output and its addressable
+`STOP`/`ABORT` controls.
+
+An instance uses its frozen profile, proxy route and OpenCode authentication
+store. Isolated stores are set through `OPENCODE_DB`; workers use
+`opencode run --standalone`, leaving Windows settings and OpenCode's shared
+service unchanged. A project-scoped runner lock protects a Git worktree while
+allowing different projects to run concurrently.
 
 Terra Runner separates presentation, execution, and persistent project evidence.
 

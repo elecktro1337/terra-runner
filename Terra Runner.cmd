@@ -11,13 +11,16 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-title Terra Runner 1.6
+title Terra Runner 2.0
 if "%~1"=="" (
   where node.exe >nul 2>nul
   if errorlevel 1 (
     echo.
-    echo Node.js 20 or newer was not found. Starting the legacy PowerShell interface.
-    pwsh.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0terra-ui.ps1"
+    echo Terra Runner 2.0 requires Node.js 20 or newer for the central dispatcher.
+    echo Install Node.js 20+, then start Terra Runner again.
+    echo.
+    pause
+    exit /b 1
   ) else (
     node.exe "%~dp0node-ui\index.mjs"
   )

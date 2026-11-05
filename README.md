@@ -1,12 +1,17 @@
-# Terra Runner 1.6
+# Terra Runner 2.0
 
-Terra Runner is a local Windows orchestrator for controlled OpenCode development. It runs one selected project at a time, checks Git and safety rules, records project-scoped evidence, and keeps OpenCode execution explicit.
+Terra Runner is a local Windows orchestrator for controlled OpenCode development. The central dispatcher manages projects, profiles, models, proxy routes and running workspaces; each opened project receives its own terminal window and process-scoped execution environment.
+
+- A project has one active workspace, preventing concurrent edits to the same Git worktree.
+- Different projects can run in parallel with independent logs, controls and OpenCode environments.
+- Isolated OpenCode credential stores use `OPENCODE_DB`; the legacy shared store remains available only for safe single-cloud-workspace migration.
+- Closing the dispatcher requests a graceful Stop for every project workspace. The dashboard exposes an explicit emergency Abort.
 
 ## Start
 
 Double-click `Terra Runner.cmd`.
 
-The primary interface is the Node.js terminal UI (Node.js 20+). PowerShell 7 remains the execution engine. If Node.js is unavailable, the launcher opens the compatible PowerShell UI. Setup and profile editing never start OpenCode.
+The primary interface is the Node.js terminal UI (Node.js 20+), which is required for the dispatcher. PowerShell 7 remains the execution engine. Setup and profile editing never start OpenCode.
 
 Normal settings and state live in `%LOCALAPPDATA%\TerraRunner`. `-Portable` keeps them beside the installation instead. Existing configuration is migrated with a timestamped backup; project logs and historical state are preserved.
 
@@ -79,7 +84,13 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester .\tests\TerraRun
 
 The test suites use local mocks and temporary repositories. They make no paid OpenCode requests.
 
-## Upgrade to 1.6
+## Upgrade to 2.0
+
+On first dispatcher start, configuration is migrated to schema v6. Existing
+profiles are attached to a `Legacy shared OpenCode` storage and selected as the
+default profile for existing projects. Create an isolated authentication storage,
+sign in through the dispatcher, then assign it to each cloud profile before
+running multiple cloud projects in parallel.
 
 Start Terra Runner once through the launcher. Existing configuration is migrated in place and legacy profile values are preserved. Review each cloud profile, set a fresh provider snapshot, and optionally enable the local OpenCode cost estimate for USD API snapshots. No project repository or OpenCode credential is modified by migration.
 

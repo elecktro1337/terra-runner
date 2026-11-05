@@ -14,6 +14,7 @@ import { activeProfile, applyProfile, isLocalModel, migrateProfiles, profileFrom
 import { activeProject, normalizeProjects, validateProjectId } from './lib/projects.mjs';
 import { dailyReports, latestIterationSummary, iterationSummariesSince, projectDataRoot } from './lib/reports.mjs';
 import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, redactedRoute, validateProxyRoute } from './lib/proxy.mjs';
+import { authStorePath, createInstance, isTerminalInstance, listInstances, normalizeRuntime, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -43,7 +44,7 @@ async function resolveCommand(name) {
   });
   return locations.split(/\r?\n/).map(line => line.trim()).find(Boolean);
 }
-async function execute(name, commandArgs, cwd = root, inherited = false) {
+async function execute(name, commandArgs, cwd = root, inherited = false, extraEnv = null) {
   const executable = await resolveCommand(name);
   return new Promise((resolve, reject) => {
     const batch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable);
@@ -52,8 +53,8 @@ async function execute(name, commandArgs, cwd = root, inherited = false) {
     const quote = value => `"${String(value).replace(/"/g, '""')}"`;
     const commandLine = `"${quote(executable)} ${commandArgs.map(quote).join(' ')}"`;
     const child = batch
-      ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', commandLine], { cwd, shell: false, windowsVerbatimArguments: true, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'] })
-      : spawn(executable, commandArgs, { cwd, shell: false, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'] });
+      ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', commandLine], { cwd, shell: false, windowsVerbatimArguments: true, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'], env: extraEnv ? { ...process.env, ...extraEnv } : process.env })
+      : spawn(executable, commandArgs, { cwd, shell: false, stdio: inherited ? 'inherit' : ['ignore', 'pipe', 'pipe'], env: extraEnv ? { ...process.env, ...extraEnv } : process.env });
     let stdout = '', stderr = '';
     if (!inherited) { child.stdout.on('data', data => stdout += data); child.stderr.on('data', data => stderr += data); }
     child.once('error', reject); child.once('close', code => code === 0 ? resolve(stdout) : reject(new Error(`${executable} exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`)));
@@ -230,15 +231,17 @@ async function runWithTui(runnerArgs, settings, project, mode) {
     clearInterval(update); clearInterval(liveUpdate); cleanupControls(); spinner.fail('Development runner could not start.'); console.log(chalk.red(error.message)); return false;
   }
 }
-async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [], activeAccountId: '', reasoning: {} }; settings.openCode.accounts ||= []; migrateProfiles(settings); normalizeProxy(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the legacy setup wizard once or pass --config <file>. ${error.message}`); } }
-async function save(settings) { settings.schemaVersion = 5; normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
+async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [], activeAccountId: '', reasoning: {} }; settings.openCode.accounts ||= []; migrateProfiles(settings); normalizeRuntime(settings); normalizeProxy(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the setup wizard once or pass --config <file>. ${error.message}`); } }
+async function save(settings) { settings.schemaVersion = 6; migrateProfiles(settings); normalizeRuntime(settings); normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
 function parseModels(text) { return [...new Set(text.split(/\r?\n/).map(v => v.trim()).filter(v => /^[a-z0-9_.-]+\/.+/i.test(v)))]; }
-async function refreshOpenCode(settings) {
+function storeEnvironment(storeId) { return storeId && storeId !== 'legacy-shared' ? { OPENCODE_DB: authStorePath(configPath, storeId) } : null; }
+function authStore(settings, id) { return (settings.openCode?.stores || []).find(store => store.id === id) || null; }
+async function refreshOpenCode(settings, storeId = 'legacy-shared') {
   const spinner = ora('Reading OpenCode accounts and models…').start();
   try {
-    const executable = settings.openCodeCommand || 'opencode'; const raw = await execute(executable, ['auth', 'list', '--format', 'json']); const providers = JSON.parse(raw); const accounts = [];
+    const executable = settings.openCodeCommand || 'opencode'; const env = storeEnvironment(storeId); const raw = await execute(executable, ['auth', 'list', '--format', 'json'], root, false, env); const providers = JSON.parse(raw); const accounts = [];
     for (const provider of providers) for (const credential of provider.connections || []) accounts.push({ id: `${provider.id}:${credential.id}`, provider: provider.id, credentialId: credential.id, label: credential.label || provider.name || provider.id, authMethod: credential.method || '', usageKind: credential.method === 'oauth' ? 'oauth' : 'balance' });
-    const models = parseModels(await execute(executable, ['models'])); settings.openCode.accounts = [...accounts, ...settings.openCode.accounts.filter(account => account.authMethod === 'local')];
+    const models = parseModels(await execute(executable, ['models'], root, false, env)); if (storeId === 'legacy-shared') settings.openCode.accounts = [...accounts, ...settings.openCode.accounts.filter(account => account.authMethod === 'local')];
     spinner.succeed(`OpenCode refreshed: ${accounts.length} account(s), ${models.length} model(s).`); return { accounts, models };
   } catch (error) { spinner.fail('OpenCode refresh failed.'); throw error; }
 }
@@ -446,26 +449,29 @@ async function configureUsageSource(settings, profile) {
   if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); console.log(chalk.green('Usage data source saved.')); return pause();
 }
 async function configureReasoning(settings, profile) { const variant = await pick('Reasoning level', [{ name: 'Provider default', value: '' }, ...['minimal', 'low', 'medium', 'high', 'xhigh'].map(value => ({ name: value, value }))]); if (variant === null) return; profile.reasoningVariant = variant; profile.showThinking = await yesNo('Show OpenCode thinking blocks during development?'); if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings); }
+async function pickAuthStore(settings, current = 'legacy-shared') { return pick('OpenCode authentication storage', (settings.openCode.stores || []).map(store => ({ name: `${store.id === current ? '● ' : ''}${store.name}${store.kind === 'legacy-shared' ? chalk.yellow('  legacy / single-project') : ''}`, value: store.id }))); }
 async function configureType(settings, profile) {
   const policy = await pick('Profile type', [{ name: 'API key — local spending limits', value: 'api' }, { name: 'OAuth — provider-managed usage', value: 'oauth-managed' }, { name: 'Local model — no limits', value: 'local' }]); if (!policy) return;
   if (policy === 'local') { profile.policy = 'local'; profile.credentialId = ''; profile.credentialLabel = 'No credential (local inference)'; }
   else {
-    let inventory; try { inventory = await refreshOpenCode(settings); } catch (error) { console.log(chalk.red(error.message)); return pause(); }
+    const storeId = await pickAuthStore(settings, profile.authStoreId); if (!storeId) return;
+    let inventory; try { inventory = await refreshOpenCode(settings, storeId); } catch (error) { console.log(chalk.red(error.message)); return pause(); }
     const accounts = inventory.accounts.filter(account => account.provider.toLowerCase() === profile.provider); if (!accounts.length) { console.log(chalk.yellow(`No ${profile.provider} OpenCode credential is available.`)); return pause(); }
-    const id = await pick('Credential', accounts.map(account => ({ name: `${account.label}  ${chalk.gray(`[${account.authMethod || 'unknown'}]`)}`, value: account.id }))); if (!id) return; const account = accounts.find(item => item.id === id); profile.policy = policy; profile.credentialId = account.credentialId; profile.credentialLabel = account.label;
+    const id = await pick('Credential', accounts.map(account => ({ name: `${account.label}  ${chalk.gray(`[${account.authMethod || 'unknown'}]`)}`, value: account.id }))); if (!id) return; const account = accounts.find(item => item.id === id); profile.policy = policy; profile.credentialId = account.credentialId; profile.credentialLabel = account.label; profile.authStoreId = storeId;
   }
   if (profile.policy === 'api' && !profile.limits) profile.limits = structuredClone(settings.budget || {}); if (profile.id === settings.openCode.activeProfileId) applyProfile(settings, profile); await save(settings);
 }
 async function profileScreen(settings, profile) {
   while (true) {
-    header(settings); console.log(chalk.bold('PROFILE DETAILS')); console.log(`  Model      ${chalk.cyan(profile.model)}`); console.log(`  Account    ${profile.credentialLabel || 'Not selected'}`); console.log(`  Type       ${profile.policy}`); console.log(`  Reasoning  ${profile.reasoningVariant || 'provider default'}`); console.log(`  Limits     ${limitSummary(profile)}`); console.log(`  Data       ${usageSourceSummary(profile)}\n`);
+    header(settings); console.log(chalk.bold('PROFILE DETAILS')); console.log(`  Model      ${chalk.cyan(profile.model)}`); console.log(`  Account    ${profile.credentialLabel || 'Not selected'}`); console.log(`  Storage    ${authStore(settings, profile.authStoreId)?.name || profile.authStoreId || 'not applicable'}`); console.log(`  Type       ${profile.policy}`); console.log(`  Reasoning  ${profile.reasoningVariant || 'provider default'}`); console.log(`  Limits     ${limitSummary(profile)}`); console.log(`  Hold       ${profile.parallelReservation || 0} per active iteration`); console.log(`  Data       ${usageSourceSummary(profile)}\n`);
     const canDelete = settings.openCode.profiles.length > 1;
     const actions = [{ name: profile.id === settings.openCode.activeProfileId ? '● Active profile' : 'Use this profile', value: 'use' }, { name: 'Configure account type', value: 'type' }, { name: 'Configure reasoning', value: 'reasoning' }];
-    if (profile.policy !== 'local') actions.push({ name: 'Configure provider snapshot', value: 'snapshot' }, { name: 'Configure limits', value: 'policy' });
+    if (profile.policy !== 'local') actions.push({ name: 'Configure provider snapshot', value: 'snapshot' }, { name: 'Configure limits', value: 'policy' }, { name: 'Set parallel iteration reservation', value: 'reservation' });
     if (profile.policy === 'api' && profile.usageSource?.unit === 'usd') actions.push({ name: 'Configure local OpenCode cost estimate', value: 'cost-estimate' });
     if (canDelete) actions.push({ name: chalk.red('Remove this profile'), value: 'remove' });
     const action = await pick('Profile actions', actions);
     if (!action) return; if (action === 'use') { applyProfile(settings, profile); await save(settings); console.log(chalk.green('Active profile updated.')); await pause(); } if (action === 'type') await configureType(settings, profile); if (action === 'reasoning') await configureReasoning(settings, profile); if (action === 'snapshot') await configureSnapshot(settings, profile); if (action === 'policy') await configureLimitPolicy(settings, profile); if (action === 'cost-estimate') await configureOpenCodeCostEstimate(settings, profile);
+    if (action === 'reservation') { const value = Number(String(await input({ message: 'Maximum reservation per active iteration', default: String(profile.parallelReservation ?? profile.usageSource?.reserve ?? 0) })).trim()); if (!Number.isFinite(value) || value < 0) { console.log(chalk.red('Enter a non-negative number.')); await pause(); } else { profile.parallelReservation = value; await save(settings); } }
     if (action === 'remove' && await yesNo(`Remove profile '${profile.model}'? This does not disconnect or delete the OpenCode account.`)) {
       settings.openCode.profiles = settings.openCode.profiles.filter(item => item.id !== profile.id);
       if (settings.openCode.activeProfileId === profile.id) applyProfile(settings, settings.openCode.profiles[0]);
@@ -474,15 +480,37 @@ async function profileScreen(settings, profile) {
   }
 }
 async function createProfile(settings) {
-  let inventory; try { inventory = await refreshOpenCode(settings); } catch (error) { console.log(chalk.red(error.message)); return pause(); }
+  const storeId = await pickAuthStore(settings); if (!storeId) return;
+  let inventory; try { inventory = await refreshOpenCode(settings, storeId); } catch (error) { console.log(chalk.red(error.message)); return pause(); }
   const filter = (await input({ message: 'Filter models (leave blank to browse)', default: '' })).toLowerCase(); const models = inventory.models.filter(model => !filter || model.toLowerCase().includes(filter)); const model = await pick('Choose model', models.slice(0, 120).map(value => ({ name: `${value}${isLocalModel(value) ? chalk.green('  local') : ''}`, value }))); if (!model) return;
   let account = null; if (!isLocalModel(model)) { const provider = model.split('/')[0].toLowerCase(); const accounts = inventory.accounts.filter(item => item.provider.toLowerCase() === provider); if (!accounts.length) { console.log(chalk.yellow(`No saved ${provider} credential is available.`)); return pause(); } const id = await pick('Choose account', accounts.map(item => ({ name: `${item.label}  ${chalk.gray(`[${item.authMethod || 'unknown'}]`)}`, value: item.id }))); if (!id) return; account = accounts.find(item => item.id === id); }
-  const profile = profileFrom(model, account); if (profile.policy === 'api') profile.limits = structuredClone(settings.budget || {}); settings.openCode.profiles.push(profile); await save(settings); await profileScreen(settings, profile);
+  const profile = profileFrom(model, account); profile.authStoreId = profile.policy === 'local' ? '' : storeId; if (profile.policy === 'api') profile.limits = structuredClone(settings.budget || {}); settings.openCode.profiles.push(profile); await save(settings); await profileScreen(settings, profile);
 }
 async function profilesMenu(settings) {
   while (true) {
     header(settings); console.log(chalk.bold('PROFILES')); const profiles = migrateProfiles(settings); const choice = await pick('Open a profile or create a new one', [...profiles.map(profile => ({ name: `${profile.id === settings.openCode.activeProfileId ? chalk.green('●') : ' '} ${profileKindLabel(profile)} ${profile.model}  ${chalk.gray(`— ${limitSummary(profile)}`)}`, value: profile.id })), { name: chalk.cyan('+ Create new profile'), value: '__create' }]);
     if (!choice) return; if (choice === '__create') await createProfile(settings); else await profileScreen(settings, profiles.find(profile => profile.id === choice));
+  }
+}
+async function authStoresMenu(settings) {
+  while (true) {
+    header(settings); console.log(chalk.bold('OPENCODE AUTHENTICATION STORAGES')); console.log(chalk.gray('Credentials remain in OpenCode databases, never in Terra configuration.'));
+    const stores = settings.openCode.stores || [];
+    const choice = await pick('Open or create storage', [...stores.map(store => ({ name: `${store.name}  ${chalk.gray(`[${store.id}]${store.kind === 'legacy-shared' ? ' legacy / shared' : ''}`)}`, value: store.id })), { name: chalk.cyan('+ Create isolated storage'), value: '__create' }]);
+    if (!choice) return;
+    if (choice === '__create') {
+      const id = String(await input({ message: 'Storage ID (letters, digits, dot, underscore, hyphen)' })).trim(); const name = String(await input({ message: 'Display name', default: id })).trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(id) || stores.some(store => store.id === id)) { console.log(chalk.red('Storage ID is invalid or already exists.')); await pause(); continue; }
+      settings.openCode.stores.push({ id, name: name || id, kind: 'isolated' }); await fs.mkdir(path.dirname(authStorePath(configPath, id)), { recursive: true }); await save(settings); console.log(chalk.green(`Storage '${name || id}' created. Use Authenticate before assigning it to a profile.`)); await pause(); continue;
+    }
+    const store = authStore(settings, choice); if (!store) continue;
+    const action = await pick(`Storage: ${store.name}`, [
+      { name: 'Authenticate / add OpenCode account', value: 'login' }, { name: 'Refresh accounts and models', value: 'refresh' },
+      ...(store.kind === 'legacy-shared' ? [] : [{ name: chalk.yellow('Unlink from Terra configuration (credentials stay on disk)'), value: 'unlink' }])
+    ]);
+    if (action === 'login') { try { if (store.kind !== 'legacy-shared') await fs.mkdir(path.dirname(authStorePath(configPath, store.id)), { recursive: true }); await execute(settings.openCodeCommand || 'opencode', ['auth', 'login'], root, true, storeEnvironment(store.id)); } catch (error) { console.log(chalk.red(error.message)); } await pause(); }
+    if (action === 'refresh') { try { await refreshOpenCode(settings, store.id); console.log(chalk.green('Storage refreshed.')); } catch (error) { console.log(chalk.red(error.message)); } await pause(); }
+    if (action === 'unlink' && await yesNo(`Unlink '${store.name}'? Existing profiles using it must be reassigned first.`)) { if ((settings.openCode.profiles || []).some(profile => profile.authStoreId === store.id)) { console.log(chalk.yellow('Reassign or remove the profiles using this storage first.')); await pause(); } else { settings.openCode.stores = stores.filter(item => item.id !== store.id); await save(settings); } }
   }
 }
 async function runPreflight(settings) { header(settings); console.log(chalk.bold('PROJECT PREFLIGHT')); const project = selectedProject(settings); const profile = activeProfile(settings); const checks = [];
@@ -527,6 +555,38 @@ async function runRunner(settings, mode) {
   return pause();
 }
 async function developmentMenu(settings) { const action = await pick('Development', [{ name: 'Run one iteration', value: 'once' }, { name: 'Run continuously', value: 'continuous' }, { name: 'Project preflight (no agent)', value: 'preflight' }]); if (action === 'preflight') await runPreflight(settings); else if (action) await runRunner(settings, action); }
+const coordinatorId = crypto.randomUUID();
+async function openProjectWorkspace(settings) {
+  const project = selectedProject(settings); if (!project) { console.log(chalk.yellow('Create and select a project first.')); return pause(); }
+  const profile = (settings.openCode.profiles || []).find(item => item.id === project.defaultProfileId);
+  if (!profile) { console.log(chalk.yellow(`Project '${project.id}' has no default profile. Assign one in Projects.`)); return pause(); }
+  const running = await listInstances(configPath);
+  if (running.some(instance => instance.projectId === project.id && !isTerminalInstance(instance))) { console.log(chalk.yellow(`Project '${project.id}' already has an active workspace.`)); return pause(); }
+  if (profile.policy !== 'local' && profile.authStoreId === 'legacy-shared' && running.some(instance => !isTerminalInstance(instance) && instance.profile?.policy !== 'local')) { console.log(chalk.yellow('The legacy shared OpenCode storage is global. Create an isolated authentication storage before running multiple cloud projects.')); return pause(); }
+  if (profile.policy !== 'local' && profile.authStoreId !== 'legacy-shared') { try { await fs.access(authStorePath(configPath, profile.authStoreId)); } catch { console.log(chalk.yellow(`Authentication storage '${profile.authStoreId}' is not initialized. Open System → OpenCode authentication storages and sign in.`)); return pause(); } }
+  const route = activeProxyRoute(settings); const instance = await createInstance(configPath, project, profile, route, coordinatorId);
+  const command = `"${process.execPath}" "${path.join(root, 'node-ui', 'instance.mjs')}" --config "${configPath}" --instance "${instance.id}"`;
+  const launcher = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `start "Terra ${project.id}" cmd.exe /d /k "${command}"`], { cwd: root, detached: true, stdio: 'ignore', windowsHide: false });
+  launcher.unref(); await updateInstance(configPath, instance.id, { state: 'launching', activity: 'Opening project terminal' });
+  console.log(chalk.green(`Project workspace '${project.id}' is opening in a separate terminal.`)); return pause();
+}
+async function instancesMenu() {
+  while (true) {
+    const instances = await listInstances(configPath); clear(); console.log(chalk.bold('ACTIVE AND RECENT PROJECT INSTANCES')); console.log(rule);
+    if (!instances.length) console.log(chalk.gray('  No project windows have been opened yet.'));
+    const choice = await pick('Open an instance', instances.map(instance => ({ name: `${isTerminalInstance(instance) ? chalk.gray('○') : chalk.green('●')} ${instance.projectId}  ${chalk.gray(instance.profile?.model || '')}  ${instance.state}${instance.activity ? ` — ${instance.activity}` : ''}`, value: instance.id })));
+    if (!choice) return; const instance = instances.find(item => item.id === choice); if (!instance) continue;
+    const action = await pick(`Instance: ${instance.projectId}`, [
+      { name: 'Request graceful stop', value: 'stop', disabled: isTerminalInstance(instance) }, { name: chalk.red('Emergency abort'), value: 'abort', disabled: isTerminalInstance(instance) }, { name: 'Refresh', value: 'refresh' }
+    ]);
+    if (action === 'stop' || action === 'abort') { const kind = action === 'abort' ? 'ABORT' : 'STOP'; await requestInstanceControl(configPath, instance.id, kind); await updateInstance(configPath, instance.id, { state: action === 'abort' ? 'aborting' : 'stopping', activity: action === 'abort' ? 'Emergency abort requested by dispatcher' : 'Graceful stop requested by dispatcher' }); }
+  }
+}
+async function stopAllInstances() {
+  const instances = await listInstances(configPath); const active = instances.filter(instance => !isTerminalInstance(instance));
+  for (const instance of active) { await requestInstanceControl(configPath, instance.id, 'STOP'); await updateInstance(configPath, instance.id, { state: 'stopping', activity: 'Dispatcher is shutting down' }); }
+  if (active.length) console.log(chalk.yellow(`Graceful Stop requested for ${active.length} project instance(s). They will also stop if the dispatcher heartbeat expires.`));
+}
 async function readProjectId(message, projects, currentId = '') {
   while (true) { const id = (await input({ message, default: currentId })).trim(); const error = validateProjectId(id, projects, currentId); if (!error) return id; console.log(chalk.yellow(error)); }
 }
@@ -542,7 +602,10 @@ async function editProject(settings, project, isNew = false) {
   const branch = (await input({ message: 'Git branch', default: detected })).trim();
   const roadmap = (await input({ message: 'Roadmap filename', default: project.roadmap || 'ROADMAP.md' })).trim();
   const progress = (await input({ message: 'Progress filename', default: project.progress || 'PROGRESS.md' })).trim();
-  const updated = { id, path: projectPath, branch, roadmap, progress };
+  const profiles = settings.openCode.profiles || [];
+  const profileId = profiles.length ? await pick('Default profile for this project', profiles.map(profile => ({ name: `${profile.model}${profile.id === project.defaultProfileId ? '  (current)' : ''}`, value: profile.id }))) : '';
+  if (!profileId && profiles.length) return;
+  const updated = { id, path: projectPath, branch, roadmap, progress, defaultProfileId: profileId || '' };
   if (isNew) projects.push(updated); else Object.assign(project, updated);
   settings.activeProjectId = id; await save(settings); console.log(chalk.green(`Project '${id}' saved and selected.`)); return pause();
 }
@@ -550,7 +613,7 @@ async function projectsMenu(settings) {
   while (true) {
     header(settings); console.log(chalk.bold('PROJECTS')); const projects = normalizeProjects(settings);
     const action = await pick('Select a project or manage its configuration', [
-      ...projects.map(project => ({ name: `${project.id === settings.activeProjectId ? chalk.green('●') : ' '} ${project.id}  ${chalk.gray(`— ${project.path}`)}`, value: `project:${project.id}` })),
+      ...projects.map(project => { const profile = (settings.openCode.profiles || []).find(item => item.id === project.defaultProfileId); return { name: `${project.id === settings.activeProjectId ? chalk.green('●') : ' '} ${project.id}  ${chalk.gray(`— ${profile?.model || 'no default profile'}`)}`, value: `project:${project.id}` }; }),
       { name: chalk.cyan('+ Add project'), value: 'add' }
     ]);
     if (!action) return;
@@ -611,7 +674,8 @@ async function proxyRoutesMenu(settings) {
   }
 }
 async function systemMenu(settings) {
-  const action = await pick('System', [{ name: 'Proxy routes', value: 'proxy' }, { name: 'Run diagnostics (read-only)', value: 'diagnostics' }, { name: 'Refresh OpenCode accounts and models', value: 'refresh' }, { name: 'Show configuration path', value: 'config' }]); if (!action) return;
+  const action = await pick('System', [{ name: 'OpenCode authentication storages', value: 'auth-stores' }, { name: 'Proxy routes', value: 'proxy' }, { name: 'Run diagnostics (read-only)', value: 'diagnostics' }, { name: 'Refresh legacy OpenCode accounts and models', value: 'refresh' }, { name: 'Show configuration path', value: 'config' }]); if (!action) return;
+  if (action === 'auth-stores') return authStoresMenu(settings);
   if (action === 'proxy') return proxyRoutesMenu(settings);
   if (action === 'config') { console.log(`\n${configPath}`); return pause(); }
   if (action === 'diagnostics') {
@@ -628,5 +692,19 @@ async function systemMenu(settings) {
   }
   try { await refreshOpenCode(settings); await save(settings); } catch (error) { console.log(chalk.red(error.message)); } return pause();
 }
-async function main() { const settings = await load(); while (true) { header(settings); const action = await pick('Main menu', [{ name: 'Development', value: 'development' }, { name: 'Profiles', value: 'profiles' }, { name: 'Projects', value: 'projects' }, { name: 'Reports', value: 'reports' }, { name: 'System', value: 'system' }, { name: 'Save configuration and exit', value: 'exit' }]); if (!action || action === 'exit') { await save(settings); return; } if (action === 'development') await developmentMenu(settings); if (action === 'profiles') await profilesMenu(settings); if (action === 'projects') await projectsMenu(settings); if (action === 'reports') await reportsMenu(settings); if (action === 'system') await systemMenu(settings); } }
+async function main() {
+  const settings = await load(); await save(settings); await writeCoordinatorHeartbeat(configPath, coordinatorId);
+  const heartbeat = setInterval(() => void writeCoordinatorHeartbeat(configPath, coordinatorId), 5000);
+  try {
+    while (true) {
+      header(settings); const project = selectedProject(settings); const action = await pick('Central dispatcher', [
+        { name: `Open project workspace${project ? `: ${project.id}` : ''}`, value: 'open' }, { name: 'Instances dashboard', value: 'instances' },
+        { name: 'Profiles and models', value: 'profiles' }, { name: 'Projects', value: 'projects' }, { name: 'Reports', value: 'reports' }, { name: 'System', value: 'system' }, { name: 'Stop all and exit', value: 'exit' }
+      ]);
+      if (!action || action === 'exit') { await save(settings); await stopAllInstances(); return; }
+      if (action === 'open') await openProjectWorkspace(settings); if (action === 'instances') await instancesMenu(); if (action === 'profiles') await profilesMenu(settings); if (action === 'projects') await projectsMenu(settings); if (action === 'reports') await reportsMenu(settings); if (action === 'system') await systemMenu(settings);
+    }
+  } finally { clearInterval(heartbeat); await removeCoordinatorHeartbeat(configPath, coordinatorId); }
+}
+process.on('SIGINT', () => { process.exitCode = 0; });
 main().catch(error => { console.error(chalk.red(`\nTerra Runner could not start: ${error.message}`)); process.exitCode = 1; });
