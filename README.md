@@ -14,13 +14,13 @@ Double-click `Terra Runner.cmd`.
 
 The primary interface is the Node.js terminal UI (Node.js 20+), which is required for the dispatcher. PowerShell 7 remains the execution engine. Setup and profile editing never start OpenCode.
 
-Normal settings and state live in `%LOCALAPPDATA%\TerraRunner`. `-Portable` keeps them beside the installation instead. Existing configuration is migrated with a timestamped backup; project logs and historical state are preserved.
+Normal settings and state live in `%LOCALAPPDATA%\TerraRunner`. `-Portable` keeps them beside the installation instead. Project logs, reports, and control state are kept separately from disposable terminal-instance records.
 
 ## What the UI shows
 
 The central header contains only global application information. Development explicitly selects a project and profile for each launch; Reports is an all-project read-only summary.
 
-During a run, Terra Runner shows the selected roadmap task, safe live activity (inspection, file changes, Git, or verification), elapsed time for the current iteration, tool/check counts, and a checkpoint after every completed iteration. It does not display model reasoning text.
+During a run, Terra Runner shows roadmap completion and percentage, the selected roadmap task, safe live activity (inspection, file changes, Git, or verification), elapsed time for the current iteration, tool/check counts, and a bounded live journal of completed iterations. It does not display model reasoning text. In dispatcher-instance mode, only the frozen project/profile context is shown: Terra snapshot, budget, and cost-estimate fields are deliberately omitted because they are not enforced there.
 
 ## Profiles, snapshots, and limits
 
@@ -43,6 +43,8 @@ This is explicitly an estimate, not the provider's actual balance. It may includ
 ## Running development
 
 The main menu is **Development**, **Projects**, **Models & accounts**, **Reports**, **System**, and **Exit**. In **Development**, choose **One iteration**, **Dry run**, **Continuous**, **Active instances**, or **Proxy test**. A development launch always follows command → project → profile → run mode → (continuous parameters) → confirmation.
+
+`← Back` always returns one menu level: an instance list returns to Development, proxy/auth-storage pages return to System, profile selection returns to project selection, run-mode selection returns to profile selection, and a blank continuous-iteration field returns to run-mode selection. Completed, failed, stopped, aborted, and orphaned records can be removed from **Development → Active instances**; this removes only the runtime record and its stale control files, never a project repository, log, report, or active instance.
 
 Choose **Development → One iteration** for one explicit agent run. **Main window** keeps live progress and the selected profile's normal safety limits. **Dispatcher instance** opens the project in a separate terminal immediately with the selected command snapshot; it retains project locks, isolated OpenCode storage and proxy scope, but intentionally has no Terra budget, quota, or reservation checks.
 

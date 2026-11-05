@@ -20,7 +20,7 @@ Terra Runner separates presentation, execution, and persistent project evidence.
 
 ## Components
 
-- `Terra Runner.cmd` selects the Node.js UI when Node.js 20+ is available and falls back to PowerShell UI otherwise.
+- `Terra Runner.cmd` requires Node.js 20+ and starts the Node.js dispatcher; PowerShell 7 remains the execution engine and CLI host.
 - `node-ui/index.mjs` is the primary terminal UI. It manages projects and profiles, gathers safe OpenCode inventory, renders run telemetry, and starts PowerShell with named parameters.
 - `node-ui/lib/profiles.mjs` normalises and applies non-secret profile settings.
 - `node-ui/lib/reports.mjs` reads isolated project summaries and reports.
@@ -36,13 +36,15 @@ Terra Runner separates presentation, execution, and persistent project evidence.
 4. The runner emits compact `__TERRA_UI__` telemetry records only when requested by the Node UI.
 5. Node reads safe tool-event metadata from the raw JSONL stream to render activity and verification counts. It does not render model reasoning content.
 6. The runner writes immutable per-iteration JSON summaries and raw/readable event logs under the stable project ID.
-7. Node renders the selected run context and live status below the header, pins only Stop/Abort controls to the terminal bottom, and aggregates new summaries at completion.
+7. Node renders the selected run context and a bounded journal of completed iterations below the header, pins only Stop/Abort controls to the terminal bottom, and aggregates new summaries at completion.
 
 ## State boundaries
 
 Application installation contains scripts, templates, and the Node UI. Application configuration and state live under `%LOCALAPPDATA%\TerraRunner` unless portable mode is selected. Each project receives a separate data directory, so projects with identical display names cannot mix logs or financial state.
 
 OpenCode credentials remain owned by OpenCode. Terra Runner stores only account IDs, labels, profile policy, and user-entered provider observations. A local OpenCode cost estimate is stored separately from the provider snapshot and is always labelled as an estimate.
+
+Terminal instance records are runtime metadata, not historical evidence. `Development → Active instances` can remove one terminal record or clear all terminal records; it never removes an active, starting, stopping, or aborting instance. Logs, reports, and project control state remain separate and are not removed by this action.
 
 ## Safety boundaries
 

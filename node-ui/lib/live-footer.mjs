@@ -4,8 +4,8 @@ export function footerRows(controls) {
   return [`  ${controls}`];
 }
 
-export function liveStatusRows(status, detail = '') {
-  return [`  ${status}`, `  ${detail || 'Waiting for runner events…'}`];
+export function liveStatusRows(status, detail = '', history = []) {
+  return [`  ${status}`, `  ${detail || 'Waiting for runner events…'}`, ...history.map(item => `  ${item}`)];
 }
 
 class FixedRows {
@@ -70,11 +70,14 @@ export class LiveFooter extends FixedRows {
 }
 
 export class LiveStatusBlock extends FixedRows {
-  constructor(stream, row) {
+  constructor(stream, row, reservedRows = 0) {
     super(stream, row, Number(row) + 3);
+    this.reservedRows = Math.max(0, Number(reservedRows) || 0);
   }
 
-  render(status, detail = '') {
-    return this.renderRows(liveStatusRows(status, detail), this.row);
+  render(status, detail = '', history = []) {
+    const available = Math.max(2, Number(this.stream?.rows || 0) - this.row - this.reservedRows);
+    const previous = Array.isArray(history) ? history.slice(-(available - 2)) : [];
+    return this.renderRows(liveStatusRows(status, detail, previous), this.row);
   }
 }

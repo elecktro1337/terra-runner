@@ -9,6 +9,8 @@ Schema v9 includes `openCode.stores[]` with
 controls live next to the configuration under `runtime/`; they contain no
 provider secrets or Terra budget/quota values.
 
+Finished, failed, stopped, aborted, and orphaned instance manifests are disposable runtime records. Use **Development → Active instances** to remove one record or clear all terminal records. The cleanup also removes only that record's `STOP`/`ABORT` directory. It never removes active instance records, project logs, reports, control-state, OpenCode stores, or the configuration.
+
 There is no global selected project or profile. Legacy `activeProjectId`, active profile/account fields, global model/budget/reasoning values and `projects[].defaultProfileId` are removed on save; Development explicitly selects a project and profile for each launch.
 
 An isolated store's OpenCode SQLite database is kept under

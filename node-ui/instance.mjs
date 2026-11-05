@@ -81,10 +81,10 @@ async function run(mode, limit = 1) {
   const command = mode === 'continuous' ? `Run continuously${limit ? ` for up to ${limit} iteration(s)` : ''}` : 'Run one iteration';
   const roadmap = await readRoadmapProgress(project);
   const statusRow = renderRunHeader(settings, project, instance.profile || {}, command, roadmap);
-  const footer = new LiveFooter(process.stdout, controls); const status = new LiveStatusBlock(process.stdout, statusRow);
-  const liveAttached = footer.enabled && status.enabled; let frame = 0; const frames = ['-', '\\', '|', '/']; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration'; let detail = roadmap.nextTask ? `Next task: ${roadmap.nextTask}` : 'Waiting for runner events…'; let iterationStarted = Date.now(); let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let notice = ''; let control = '';
+  const footer = new LiveFooter(process.stdout, controls); const status = new LiveStatusBlock(process.stdout, statusRow, 1);
+  const liveAttached = footer.enabled && status.enabled; let frame = 0; const frames = ['-', '\\', '|', '/']; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration'; let detail = roadmap.nextTask ? `Next task: ${roadmap.nextTask}` : 'Waiting for runner events…'; let iterationStarted = Date.now(); let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let notice = ''; let control = ''; const completedIterations = [];
   const statusText = () => `${chalk.cyan(frames[frame++ % frames.length])} ${stage} · ${durationText(Date.now() - iterationStarted)}`;
-  const renderStatus = () => status.render(statusText(), notice || detail);
+  const renderStatus = () => status.render(statusText(), notice || detail, completedIterations);
   if (liveAttached) { process.stdout.write('\x1b[?25l'); renderStatus(); footer.render(); }
   else { console.log(`  ${statusText()}`); console.log(`  ${controls}`); }
   const paint = liveAttached ? setInterval(renderStatus, 180) : null;
@@ -113,7 +113,7 @@ async function run(mode, limit = 1) {
         const event = JSON.parse(line.slice('__TERRA_UI__'.length));
         if (event.type === 'iteration-started') { eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; iterationStarted = Date.now(); iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`; stage = `${iterationLabel} | ${event.taskId || 'next roadmap task'} | ${event.pending} tasks pending`; detail = event.taskTitle ? `Task: ${event.taskTitle}` : ''; }
         if (event.type === 'iteration-heartbeat') { stage = `Iteration ${event.iteration} | working`; }
-        if (event.type === 'iteration-finished') { stage = 'Finalizing iteration'; detail = `${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} Iteration ${event.iteration} complete | ${event.completedCount ? `+${event.completedCount} task(s)` : 'no roadmap task completed'} | ${event.pending} pending`; }
+        if (event.type === 'iteration-finished') { completedIterations.push(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} Iteration ${event.iteration} complete | ${event.completedCount ? `+${event.completedCount} task(s)` : 'no roadmap task completed'} | ${event.pending} pending`); stage = 'Preparing next iteration'; detail = ''; }
         await safeUpdate({ state: 'running', activity: event.type === 'iteration-heartbeat' ? `Iteration ${event.iteration}: ${event.elapsedSeconds}s` : event.type, iteration: event.iteration ?? null });
       } catch { }
     }

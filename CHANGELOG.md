@@ -7,6 +7,8 @@
 - Removed profile-specific header fields and simplified profile management to editing only.
 - Stabilized the main-window Development display: the selected profile context appears during a run, live status stays below it, and only controls are pinned to the terminal bottom.
 - Fixed dispatcher-instance terminal launch quoting, terminal Stop/Abort states, stale-instance finalization, and the shared header in Development/System screens.
+- Made Back navigation return to the immediate parent menu, retained a bounded live journal of completed continuous iterations, compacted and colorized active-run context, and hid non-enforced Terra limit/snapshot fields in dispatcher instances.
+- Added safe removal of terminal instance records and retired the unused PowerShell TUI and its legacy UI self-tests.
 
 ## 2.2.0 - 2026-11-05
 

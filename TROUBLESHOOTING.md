@@ -14,7 +14,7 @@ Use **Development → Project preflight** to check the project path, branch, roa
 
 ## A previous stop blocks a new run
 
-The UI clears old `STOP` and `ABORT` control files when the user explicitly starts a new run. If you use the legacy PowerShell CLI directly, run `-ClearStop` after reviewing the prior run.
+The UI clears old `STOP` and `ABORT` control files when the user explicitly starts a new run. If you use the PowerShell CLI directly, run `-ClearStop` after reviewing the prior run.
 
 ## S or Ctrl+C does not exit immediately
 
@@ -30,8 +30,8 @@ Install OpenCode 2.x, ensure `opencode` is available on `PATH`, then run preflig
 
 ## Terminal display or hotkeys look wrong
 
-Use Windows Terminal or a current PhpStorm terminal with Node.js 20+ and PowerShell 7. The Node UI uses ANSI rendering where supported. If terminal input does not support raw key handling, use the legacy runner control commands instead.
+Use Windows Terminal or a current PhpStorm terminal with Node.js 20+ and PowerShell 7. The Node UI uses ANSI rendering where supported. If terminal input does not support raw key handling, use the runner control commands instead.
 
 ## Configuration is invalid
 
-Start the UI. It offers the newest valid backup. Declining recovery leaves existing files unchanged; review `config-backups` and the timestamped `.corrupt-*` copy.
+Do not overwrite the active file. Keep a copy for diagnosis, correct the JSON or restore a known-good configuration copy, then start the dispatcher again.

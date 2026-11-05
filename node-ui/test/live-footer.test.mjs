@@ -9,6 +9,12 @@ test('formats one pinned controls row and a separate status block', () => {
   ]);
 });
 
+test('keeps completed iteration history below the changing live status', () => {
+  assert.deepEqual(liveStatusRows('Iteration 3 | tools', '', ['✓ Iteration 1 complete', '✓ Iteration 2 complete']), [
+    '  Iteration 3 | tools', '  Waiting for runner events…', '  ✓ Iteration 1 complete', '  ✓ Iteration 2 complete'
+  ]);
+});
+
 test('footer clears its former row before drawing at a resized terminal bottom', () => {
   let written = '';
   const stream = { isTTY: true, rows: 24, write(value) { written += value; return true; } };
