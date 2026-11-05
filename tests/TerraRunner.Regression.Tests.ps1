@@ -39,6 +39,17 @@ Describe 'Terra Runner safe command dispatch' {
         & $runner -Project safe-project -Config $script:config -ProxyTest
         (Test-Path -LiteralPath $script:calls) | Should Be $false
     }
+    It 'validates a configured proxy route without overwriting the Host automatic variable' {
+        $settings = Get-Content -LiteralPath $script:config -Raw | ConvertFrom-Json -AsHashtable
+        $settings.proxy = [ordered]@{ activeRouteId='invalid-proxy'; routes=@([ordered]@{ id='invalid-proxy'; name='Invalid'; protocol='http'; host='127.0.0.1'; port=0 }) }
+        $settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $script:config -Encoding utf8
+        $threw = $false; $message = ''
+        try { & $runner -Project safe-project -Config $script:config -ProxyTest } catch { $threw = $true; $message = $_.Exception.Message }
+        $threw | Should Be $true
+        $message | Should Match 'Configured proxy route is invalid'
+        $message | Should Not Match 'перезаписать переменную Host|overwrite.*Host'
+        (Test-Path -LiteralPath $script:calls) | Should Be $false
+    }
     It 'does not start an agent when no execution command is selected' {
         & $runner -Project safe-project -Config $script:config
         (Test-Path -LiteralPath $script:calls) | Should Be $false

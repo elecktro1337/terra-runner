@@ -43,7 +43,7 @@ This is explicitly an estimate, not the provider's actual balance. It may includ
 
 ## Running development
 
-The main menu is **Development**, **Projects**, **Models & accounts**, **Reports**, **System**, and **Exit**. In **Development**, choose **One iteration**, **Dry run**, **Continuous**, **Active instances**, or **Proxy test**. A development launch always follows command → project → profile → run mode → (continuous parameters) → confirmation.
+The main menu is **Development**, **Projects**, **Models & accounts**, **Reports**, **System**, and **Exit**. In **Development**, choose **One iteration**, **Dry run**, **Continuous**, or **Active instances**. A development launch always follows command → project → profile → run mode → (continuous parameters) → confirmation. **System → Run diagnostics** checks configuration, project folders, PowerShell, Node.js, the OpenCode command, and—when a route is active—one isolated HTTPS CONNECT through its temporary loopback bridge. It never starts OpenCode or a development run.
 
 `← Back` always returns one menu level: an instance list returns to Development, proxy/auth-storage pages return to System, profile selection returns to project selection, run-mode selection returns to profile selection, and a blank continuous-iteration field returns to run-mode selection. Completed, failed, stopped, aborted, and orphaned records can be removed from **Development → Active instances**; this removes only the runtime record and its stale control files, never a project repository, log, report, or active instance.
 

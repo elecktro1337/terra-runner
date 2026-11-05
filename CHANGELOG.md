@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.3.3 - 2026-11-05
+
+- Moved the active-route HTTPS CONNECT check from Development into System diagnostics, alongside configuration, project-folder, PowerShell, Node.js, and OpenCode checks; diagnostics never start a model.
+- Fixed PowerShell proxy-route validation attempting to assign to the read-only automatic `$Host` variable.
+
 ## 2.3.2 - 2026-11-05
 
 - Added durable interrupted-run recovery markers and automatic non-force recovery commits for matching Terra-owned dirty worktrees.

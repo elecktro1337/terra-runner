@@ -85,8 +85,10 @@ function Get-ActiveProxyRoute($Config) {
     $id = [string](Read-Member $proxy 'activeRouteId')
     $route = @((Read-Member $proxy 'routes') | Where-Object { [string](Read-Member $_ 'id') -eq $id }) | Select-Object -First 1
     if ($null -eq $route) { throw "Configured proxy route '$id' was not found." }
-    $protocol = [string](Read-Member $route 'protocol'); $host = [string](Read-Member $route 'host'); $port = [int](Read-Member $route 'port')
-    if ($protocol -notin @('http','https','socks4','socks4a','socks5','socks5h') -or [string]::IsNullOrWhiteSpace($host) -or $host -match '[\s/@]' -or $port -lt 1 -or $port -gt 65535) { throw 'Configured proxy route is invalid.' }
+    # $Host is a built-in read-only PowerShell automatic variable. Variable names
+    # are case-insensitive, so never use $host for an upstream endpoint here.
+    $protocol = [string](Read-Member $route 'protocol'); $upstreamHost = [string](Read-Member $route 'host'); $port = [int](Read-Member $route 'port')
+    if ($protocol -notin @('http','https','socks4','socks4a','socks5','socks5h') -or [string]::IsNullOrWhiteSpace($upstreamHost) -or $upstreamHost -match '[\s/@]' -or $port -lt 1 -or $port -gt 65535) { throw 'Configured proxy route is invalid.' }
     return $route
 }
 function Get-ProxyNoProxy($Route) { return (@('localhost','127.0.0.1','::1') + @((Read-Member $Route 'noProxy')) | Where-Object { $_ } | Select-Object -Unique) -join ',' }

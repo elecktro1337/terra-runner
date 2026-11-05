@@ -579,20 +579,12 @@ async function runInMainWindow(settings, command, project, profile, maxIteration
   const statusRow = renderDevelopmentHeader(project, profile, label, roadmap);
   await runWithTui(args, settings, project, command, statusRow); return pause();
 }
-async function testProxyForProject(settings, project) {
-  if (!(await yesNo(`Test the active proxy route for '${project.id}' without starting a model?`))) return;
-  header(settings); console.log(chalk.bold('PROXY TEST')); console.log(rule); console.log(`  Project  ${project.id}`); console.log(chalk.gray('  Testing HTTPS CONNECT through the active route…')); console.log(rule);
-  const args = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', project.id, '-Config', configPath, '-ProxyTest'];
-  try { await execute('pwsh.exe', args, root, true); } catch (error) { console.log(chalk.red(error.message)); }
-  return pause();
-}
 async function developmentMenu(settings) {
   while (true) {
     header(settings); console.log(chalk.bold('DEVELOPMENT')); console.log(rule);
-    const command = await pick('Development', [{ name: 'One iteration', value: 'once' }, { name: 'Dry run', value: 'dry-run' }, { name: 'Continuous', value: 'continuous' }, { name: 'Active instances', value: 'instances' }, { name: 'Proxy test', value: 'proxy-test' }]);
+    const command = await pick('Development', [{ name: 'One iteration', value: 'once' }, { name: 'Dry run', value: 'dry-run' }, { name: 'Continuous', value: 'continuous' }, { name: 'Active instances', value: 'instances' }]);
     if (!command) return;
     if (command === 'instances') { await instancesMenu(settings); continue; }
-    if (command === 'proxy-test') { const project = await chooseProject(settings); if (project) await testProxyForProject(settings, project); continue; }
     const selected = await chooseDevelopmentLaunch(settings, command); if (!selected) continue;
     const launch = { command, maxIterations: selected.maxIterations };
     if (selected.target === 'instance') { if (await yesNo(`Open '${selected.project.id}' in a separate terminal and start ${command}?`)) await startDispatcherInstance(settings, selected.project, selected.profile, launch); continue; }
@@ -711,22 +703,50 @@ async function proxyRoutesMenu(settings) {
     if (action === 'delete' && await yesNo(`Delete '${route.name}'?`)) { proxy.routes = proxy.routes.filter(item => item.id !== route.id); if (proxy.activeRouteId === route.id) proxy.activeRouteId = DIRECT_ROUTE_ID; await save(settings); }
   }
 }
+function diagnosticText(value) {
+  return String(value || '')
+    .replace(/:\/\/[^\s/@:]+(?::[^\s/@]*)?@/g, '://***@')
+    .replace(/\s+/g, ' ').trim().slice(0, 220);
+}
+async function systemDiagnostics(settings) {
+  header(settings); console.log(chalk.bold('SYSTEM DIAGNOSTICS')); console.log(rule);
+  const checks = [];
+  const projects = normalizeProjects(settings);
+  checks.push({ label: 'Configuration', ok: true, detail: configPath });
+  checks.push({ label: 'Configured projects', ok: projects.length > 0, detail: `${projects.length}` });
+  for (const project of projects) {
+    try { const state = await fs.stat(project.path); checks.push({ label: `Project ${project.id}`, ok: state.isDirectory(), detail: project.path }); }
+    catch { checks.push({ label: `Project ${project.id}`, ok: false, detail: `Directory is unavailable: ${project.path}` }); }
+  }
+  try { const executable = await resolveCommand('pwsh.exe'); checks.push({ label: 'PowerShell', ok: true, detail: executable }); } catch (error) { checks.push({ label: 'PowerShell', ok: false, detail: diagnosticText(error.message) }); }
+  try { const executable = await resolveCommand('node.exe'); checks.push({ label: 'Node.js', ok: true, detail: executable }); } catch (error) { checks.push({ label: 'Node.js', ok: false, detail: diagnosticText(error.message) }); }
+  try { const executable = await resolveCommand(settings.openCodeCommand || 'opencode'); checks.push({ label: 'OpenCode command', ok: true, detail: executable }); } catch (error) { checks.push({ label: 'OpenCode command', ok: false, detail: diagnosticText(error.message) }); }
+  const route = activeProxyRoute(settings);
+  if (!route) {
+    checks.push({ label: 'Proxy route', ok: true, detail: 'Direct selected (no proxy connection is required).' });
+  } else if (!projects.length) {
+    checks.push({ label: 'Proxy HTTPS CONNECT', ok: false, detail: 'No configured project is available for the isolated bridge check.' });
+  } else {
+    const args = ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', projects[0].id, '-Config', configPath, '-ProxyTest'];
+    try {
+      const output = await execute('pwsh.exe', args, root);
+      checks.push({ label: 'Proxy HTTPS CONNECT', ok: true, detail: diagnosticText(output) || `Succeeded through ${redactedRoute(route)}` });
+    } catch (error) {
+      checks.push({ label: 'Proxy HTTPS CONNECT', ok: false, detail: diagnosticText(error.message) || `Failed through ${redactedRoute(route)}` });
+    }
+  }
+  for (const check of checks) console.log(`  ${check.ok ? chalk.green('✓') : chalk.red('×')} ${chalk.bold(check.label)}  ${check.detail}`);
+  console.log(rule); console.log(chalk.gray('  Diagnostics do not start OpenCode or a development run. A proxy check starts a temporary loopback bridge and performs one HTTPS CONNECT request.'));
+  await pause();
+}
 async function systemMenu(settings) {
   while (true) {
     header(settings); console.log(chalk.bold('SYSTEM')); console.log(rule);
-    const action = await pick('System', [{ name: 'OpenCode authentication storages', value: 'auth-stores' }, { name: 'Proxy routes', value: 'proxy' }, { name: 'Run diagnostics (read-only)', value: 'diagnostics' }, { name: 'Refresh legacy OpenCode accounts and models', value: 'refresh' }, { name: 'Show configuration path', value: 'config' }]); if (!action) return;
+    const action = await pick('System', [{ name: 'OpenCode authentication storages', value: 'auth-stores' }, { name: 'Proxy routes', value: 'proxy' }, { name: 'Run diagnostics (including active proxy, no model)', value: 'diagnostics' }, { name: 'Refresh legacy OpenCode accounts and models', value: 'refresh' }, { name: 'Show configuration path', value: 'config' }]); if (!action) return;
     if (action === 'auth-stores') { await authStoresMenu(settings); continue; }
     if (action === 'proxy') { await proxyRoutesMenu(settings); continue; }
     if (action === 'config') { console.log(`\n${configPath}`); await pause(); continue; }
-    if (action === 'diagnostics') {
-      header(settings); console.log(chalk.bold('SYSTEM DIAGNOSTICS')); const checks = [];
-      checks.push({ label: 'Configuration', ok: true, detail: configPath });
-      checks.push({ label: 'Configured projects', ok: normalizeProjects(settings).length > 0, detail: `${normalizeProjects(settings).length}` });
-      try { const executable = await resolveCommand('pwsh.exe'); checks.push({ label: 'PowerShell', ok: true, detail: executable }); } catch (error) { checks.push({ label: 'PowerShell', ok: false, detail: error.message }); }
-      try { const executable = await resolveCommand(settings.openCodeCommand || 'opencode'); checks.push({ label: 'OpenCode command', ok: true, detail: executable }); } catch (error) { checks.push({ label: 'OpenCode command', ok: false, detail: error.message }); }
-      for (const check of checks) console.log(`  ${check.ok ? chalk.green('✓') : chalk.red('×')} ${chalk.bold(check.label)}  ${check.detail}`);
-      await pause(); continue;
-    }
+    if (action === 'diagnostics') { await systemDiagnostics(settings); continue; }
     try { await refreshOpenCode(settings); await save(settings); } catch (error) { console.log(chalk.red(error.message)); } await pause();
   }
 }
