@@ -6,13 +6,16 @@ const project = { id: 'example-project' };
 
 test('formats complete API run context with snapshot and cost state', () => {
   const profile = { policy: 'api', model: 'openai/gpt', credentialLabel: 'OpenAI (API)', reasoningVariant: 'high', limits: { mode: 'daily' }, usageSource: { unit: 'usd', remaining: 12.5, observedAt: '2026-11-05T09:00:00.000Z', costTracking: { enabled: true } } };
-  const rows = developmentHeaderRows({ project, profile, command: 'Run continuously', limitText: 'Daily cap $5', now: Date.parse('2026-11-05T09:30:00.000Z') });
+  const rows = developmentHeaderRows({ project, profile, command: 'Run continuously', roadmap: { available: true, completed: 12, pending: 4, total: 16 }, limitText: 'Daily cap $5', now: Date.parse('2026-11-05T09:30:00.000Z') });
   assert.match(rows.join('\n'), /Project   example-project/);
+  assert.match(rows.join('\n'), /Roadmap   12\/16 complete.*4 pending/);
   assert.match(rows.join('\n'), /OpenAI \(API\)/);
   assert.match(rows.join('\n'), /openai\/gpt/);
   assert.match(rows.join('\n'), /12.5 USD.*30 min ago/);
   assert.match(rows.join('\n'), /Daily cap \$5/);
   assert.match(rows.join('\n'), /local cost estimate enabled/);
+  assert.match(rows.join('\n'), /Model     openai\/gpt/);
+  assert.match(rows.join('\n'), /Reasoning high/);
 });
 
 test('formats OAuth and local context without API budget assumptions', () => {

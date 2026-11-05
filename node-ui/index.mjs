@@ -16,6 +16,7 @@ import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, red
 import { authStorePath, canFinalizeStalledInstance, cleanupLegacyReservations, createInstance, isTerminalInstance, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
 import { LiveFooter, LiveStatusBlock } from './lib/live-footer.mjs';
 import { developmentHeaderRows } from './lib/run-display.mjs';
+import { readRoadmapProgress } from './lib/roadmap.mjs';
 import { instanceTerminalLauncher } from './lib/instance-launcher.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -290,13 +291,13 @@ function header(settings) {
   console.log(`${chalk.bold('Workspace')} ${projects.length} project(s)  ${chalk.gray('│')}  ${profiles.length} profile(s)  ${chalk.gray('│')}  Proxy ${route ? route.name : 'Direct'}`);
   console.log(rule);
 }
-function renderDevelopmentHeader(project, profile, command) {
+function renderDevelopmentHeader(project, profile, command, roadmap) {
   clear();
   const rows = [
     chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' })),
     chalk.gray('RUNNER  v2.3  ·  Active development run'),
     rule,
-    ...developmentHeaderRows({ project, profile, command, limitText: limitSummary(profile) }),
+    ...developmentHeaderRows({ project, profile, command, roadmap, limitText: limitSummary(profile) }),
     rule
   ];
   for (const row of rows) console.log(row);
@@ -524,7 +525,7 @@ async function startDispatcherInstance(settings, project, profile, launch) {
   const route = activeProxyRoute(settings); const instance = await createInstance(configPath, project, profile, route, coordinatorId, launch);
   await updateInstance(configPath, instance.id, { state: 'launching', activity: 'Opening project terminal' });
   const launcherSpec = instanceTerminalLauncher({ comSpec: process.env.ComSpec || 'cmd.exe', title: `Terra ${project.id}`, nodePath: process.execPath, instancePath: path.join(root, 'node-ui', 'instance.mjs'), configPath, instanceId: instance.id });
-  const launcher = spawn(launcherSpec.command, launcherSpec.args, { cwd: root, detached: true, stdio: 'ignore', windowsHide: false });
+  const launcher = spawn(launcherSpec.command, launcherSpec.args, { cwd: root, detached: true, stdio: 'ignore', windowsHide: false, env: { ...process.env, ...launcherSpec.env } });
   const markLaunchFailure = async error => {
     const current = await readInstance(configPath, instance.id);
     if (current?.state === 'launching') await updateInstance(configPath, instance.id, { state: 'failed', activity: '', error: `Project terminal could not open: ${error.message}`, stopReason: 'launch failed' });
@@ -541,7 +542,8 @@ async function runInMainWindow(settings, command, project, profile, maxIteration
   if (command === 'dry-run') args.push('-DryRun'); else { args.push('-UiEvents', '-ClearControlFlags', command === 'continuous' ? '-Continuous' : '-Once'); if (command === 'continuous') args.push(maxIterations > 0 ? '-MaxIterations' : '-UnlimitedIterations', ...(maxIterations > 0 ? [String(maxIterations)] : [])); }
   const label = command === 'dry-run' ? 'Run a dry run' : command === 'continuous' ? `Run continuously${maxIterations ? ` for up to ${maxIterations} iteration(s)` : ''}` : 'Run one iteration';
   if (!(await yesNo(`${label} for '${project.id}' in the main window?`))) return;
-  const statusRow = renderDevelopmentHeader(project, profile, label);
+  const roadmap = await readRoadmapProgress(project);
+  const statusRow = renderDevelopmentHeader(project, profile, label, roadmap);
   await runWithTui(args, settings, project, command, statusRow); return pause();
 }
 async function testProxyForProject(settings, project) {
