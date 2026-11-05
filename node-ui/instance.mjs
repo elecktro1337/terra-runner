@@ -139,9 +139,10 @@ async function run(mode, limit = 1) {
   await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }).then(async code => {
     const current = await readInstance(configPath, instanceId); const aborted = current?.state === 'aborting'; const stopped = current?.state === 'stopping';
     const failed = !aborted && !stopped && code !== 0;
-    const roadmapAfter = await readRoadmapProgress(project);
-    const normalReason = roadmapAfter.available && roadmapAfter.pending === 0 ? `Roadmap complete — all ${roadmapAfter.total} task(s) are done.` : '';
-    await safeUpdate({ state: aborted ? 'aborted' : stopped ? 'stopped' : code === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', error: failed ? instanceRunnerFailure(stderr, code) : '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? 'Graceful stop completed.' : code === 0 ? normalReason : `runner exit ${code}` });
+    const [roadmapAfter, summaryAfter] = await Promise.all([readRoadmapProgress(project), latestIterationSummary(settings, project, configPath)]);
+    const normalReason = roadmapAfter.available && roadmapAfter.pending === 0 ? `Roadmap complete — all ${roadmapAfter.total} task(s) are done.` : String(summaryAfter?.stoppedReason || '');
+    const safetyStopped = code === 0 && Boolean(summaryAfter?.stoppedReason) && summaryAfter.stoppedReason !== 'roadmap-complete';
+    await safeUpdate({ state: aborted ? 'aborted' : stopped || safetyStopped ? 'stopped' : code === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', error: failed ? instanceRunnerFailure(stderr, code) : '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? 'Graceful stop completed.' : code === 0 ? normalReason : `runner exit ${code}` });
   }).catch(async error => { await safeUpdate({ state: 'failed', runnerPid: null, error: error.message, activity: '' }); }).finally(() => {
     if (paint) clearInterval(paint); clearInterval(eventWatch); if (liveAttached) process.stdout.off('resize', onResize); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h');
   });

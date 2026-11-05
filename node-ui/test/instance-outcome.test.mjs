@@ -22,3 +22,13 @@ test('explains normal completion with remaining work and preserves failures', ()
   const failed = instanceOutcome({ state: 'failed', error: 'runner exit 1' });
   assert.equal(failed.reason, 'runner exit 1');
 });
+
+test('labels no-roadmap-progress as a safety stop instead of normal completion', () => {
+  const outcome = instanceOutcome(
+    { state: 'finished' },
+    { stoppedReason: 'no-roadmap-progress: 3 consecutive iteration(s) completed no roadmap task' },
+    { available: true, completed: 12, pending: 3, total: 15 }
+  );
+  assert.equal(outcome.kind, 'stopped');
+  assert.match(outcome.reason, /^Safety stop — 3 consecutive iteration/);
+});

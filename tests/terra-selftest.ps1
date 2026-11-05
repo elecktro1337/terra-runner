@@ -208,7 +208,7 @@ try {
     $afterTls = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
     if ($afterTls.Count -ne ($beforeTls + 2)) { throw 'TLS interruption was not retried as the same iteration.' }
     $tlsSummary = @($afterTls | ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json } | Where-Object { $_.transientNetworkFailure } | Select-Object -Last 1)
-    if ($tlsSummary.Count -ne 1 -or $tlsSummary[0].consecutiveNoProgress -ne 1) { throw 'TLS interruption was not classified or incorrectly counted as no progress.' }
+    if ($tlsSummary.Count -ne 1 -or $tlsSummary[0].consecutiveNoProgress -ne 0) { throw 'TLS interruption was not classified or incorrectly counted as no progress.' }
     if ((Get-Content -Raw -LiteralPath (Join-Path $repo 'NTD-ROADMAP.md')) -notmatch '\[x\]') { throw 'Recovered TLS retry did not complete the pending task.' }
     Write-Host 'PASS: TLS failure waits for a connection check and retries the same iteration.' -ForegroundColor Green
 

@@ -11,6 +11,17 @@ function latestCommit(summary = {}) {
   return hash ? `${String(hash).slice(0, 12)}${subject ? `  ${subject}` : ''}` : '';
 }
 
+function formatSafetyReason(value) {
+  const reason = String(value || '');
+  const noProgress = reason.match(/^no-roadmap-progress:\s*(\d+)/i);
+  if (noProgress) return `Safety stop — ${noProgress[1]} consecutive iteration(s) completed no roadmap task.`;
+  if (/^no-actionable-roadmap-task$/i.test(reason)) return 'Safety stop — OpenCode reported no actionable roadmap task.';
+  if (/^roadmap-complete$/i.test(reason)) return 'Roadmap complete.';
+  const docsOnly = reason.match(/^documentation-only-progress:\s*(\d+)/i);
+  if (docsOnly) return `Safety stop — ${docsOnly[1]} consecutive iteration(s) changed no code or tests.`;
+  return reason;
+}
+
 export function instanceOutcome(instance = {}, summary = null, roadmap = {}) {
   const state = String(instance.state || '');
   if (!['finished', 'failed', 'stopped', 'aborted'].includes(state)) return null;
@@ -20,7 +31,7 @@ export function instanceOutcome(instance = {}, summary = null, roadmap = {}) {
   if (state === 'finished') {
     if (roadmap.available && pending === 0) { kind = 'complete'; reason = `Roadmap complete — all ${total || completed} task(s) are done.`; }
     else if (summary?.noActionableTasksReported) { kind = 'paused'; reason = 'OpenCode reported no actionable roadmap task.'; }
-    else if (summary?.stoppedReason) { kind = 'stopped'; reason = String(summary.stoppedReason); }
+    else if (summary?.stoppedReason) { kind = 'stopped'; reason = formatSafetyReason(summary.stoppedReason); }
     else if (!reason) reason = pending > 0 ? `Runner completed normally; ${pending} roadmap task(s) remain.` : 'Runner completed normally.';
   }
   if (state === 'failed') reason ||= String(instance.error || 'Runner failed.');

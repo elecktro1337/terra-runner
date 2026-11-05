@@ -1057,7 +1057,11 @@ try {
     if (Test-Path -LiteralPath $stopPath) { throw "STOP flag exists: $stopPath. Use -ClearStop after review." }
     if (Test-Path -LiteralPath $abortPath) { throw "ABORT flag exists: $abortPath. Use -ClearStop after review." }
 
+    # These safety counters deliberately apply to one explicit development
+    # launch. A prior, completed launch must not make a newly requested
+    # Continuous run stop after its first iteration.
     $noProgress = 0
+    $docsOnly = 0
     $transientFailures = 0
     $activeChild = $null
     for ($i = 1; $i -le $maxCycles; $i++) {
@@ -1211,15 +1215,22 @@ try {
         catch { if (-not $termination) { $termination = "git-diff-review-error: $($_.Exception.Message)" } }
         if ($null -eq $changedFiles) { $changedFiles = [pscustomobject]@{ Code=0; Docs=0; Tests=0; Other=0; Paths=@() } }
         $stateFile = Join-Path $projectData 'control-state.json'
-        $state = @{ noProgress=0; documentationOnly=0 }
-        if (Test-Path -LiteralPath $stateFile) {
-            $state = Get-Content -LiteralPath $stateFile -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable
-        }
         $noProgressNow = ($doneAfter -le $doneBefore) -and -not $transientNetworkFailure
-        $noProgress = if ($transientNetworkFailure) { [int]$state.noProgress } elseif ($noProgressNow) { [int]$state.noProgress + 1 } else { 0 }
+        $noProgress = if ($transientNetworkFailure) { $noProgress } elseif ($noProgressNow) { $noProgress + 1 } else { 0 }
         $docsOnlyNow = ($changedFiles.Docs -gt 0 -and $changedFiles.Code -eq 0 -and $changedFiles.Tests -eq 0)
-        $docsOnly = if ($docsOnlyNow) { [int]$state.documentationOnly + 1 } else { 0 }
+        $docsOnly = if ($docsOnlyNow) { $docsOnly + 1 } else { 0 }
         Save-Json $stateFile ([ordered]@{ noProgress=$noProgress; documentationOnly=$docsOnly; lastRunId=$runId; updatedAt=(Get-Date).ToString('o') })
+        $docsLimit = if ($null -ne (Read-Member $cfg.execution 'maxConsecutiveDocumentationOnly')) { [int]$cfg.execution.maxConsecutiveDocumentationOnly } else { 12 }
+        if (-not $termination -and $noTasksReported) {
+            $pendingAfter = Count-Pending $roadmap $taskIdPattern
+            $termination = if ($pendingAfter -eq 0) { 'roadmap-complete' } else { 'no-actionable-roadmap-task' }
+        }
+        elseif (-not $termination -and $noProgress -ge [int]$cfg.execution.maxConsecutiveNoProgress) {
+            $termination = "no-roadmap-progress: $noProgress consecutive iteration(s) completed no roadmap task"
+        }
+        elseif (-not $termination -and $docsOnly -ge $docsLimit) {
+            $termination = "documentation-only-progress: $docsOnly consecutive iteration(s) changed no code or tests"
+        }
         $summary = [ordered]@{
             project = $Project; id = $runId; started = $begin.ToString('o'); ended = $ended.ToString('o')
             elapsedSeconds = [Math]::Round(($ended-$begin).TotalSeconds,1)
@@ -1296,27 +1307,6 @@ try {
         }
         if ($termination -or $exitCode -ne 0 -or $usageError) {
             Write-Warning "Stopped on error or safety condition. Reason=$termination exit=$exitCode usage=$usageError; see $summaryPath"
-            break
-        }
-        if ($noTasksReported) {
-            $pendingAfter = Count-Pending $roadmap $taskIdPattern
-            if ($pendingAfter -eq 0) {
-                Write-Host 'Agent reported NO_ACTIONABLE_TASKS and no roadmap checkbox tasks remain; stopping.'
-                break
-            }
-            $shortMessage = ($noTaskMessage -replace '\s+',' ').Trim()
-            if ($shortMessage.Length -gt 600) { $shortMessage = $shortMessage.Substring(0,600) + '…' }
-            Write-Warning "OpenCode could not select safe work while $pendingAfter roadmap checkbox task(s) remain. Development is paused to avoid a spend loop."
-            if ($shortMessage) { Write-Host "Blocker report: $shortMessage" }
-            break
-        }
-        if ($noProgress -ge [int]$cfg.execution.maxConsecutiveNoProgress) {
-            Write-Warning "$noProgress consecutive iterations without completed TODO. Stopping to avoid a spend loop."
-            break
-        }
-        $docsLimit = if ($null -ne (Read-Member $cfg.execution 'maxConsecutiveDocumentationOnly')) { [int]$cfg.execution.maxConsecutiveDocumentationOnly } else { 12 }
-        if ($docsOnly -ge $docsLimit) {
-            Write-Warning "$docsOnly consecutive documentation-only iterations. Stopping for a code-progress review."
             break
         }
         $transientFailures = 0
