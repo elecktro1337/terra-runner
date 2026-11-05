@@ -15,6 +15,7 @@ import { dailyReports, latestIterationSummary, iterationSummariesSince, projectD
 import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, redactedRoute, validateProxyRoute } from './lib/proxy.mjs';
 import { authStorePath, canFinalizeStalledInstance, cleanupLegacyReservations, clearTerminalInstances, createInstance, deleteTerminalInstance, isTerminalInstance, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
 import { LiveFooter, LiveStatusBlock } from './lib/live-footer.mjs';
+import { selectedRoadmapTaskFromEvent } from './lib/task-selection.mjs';
 import { developmentHeaderRows } from './lib/run-display.mjs';
 import { readRoadmapProgress } from './lib/roadmap.mjs';
 import { instanceTerminalLauncher } from './lib/instance-launcher.mjs';
@@ -179,7 +180,12 @@ async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
     try {
       const lines = (await fs.readFile(eventFile, 'utf8')).split(/\r?\n/).filter(Boolean);
       for (const line of lines.slice(eventLines)) {
-        try { const next = activityFromEvent(JSON.parse(line)); if (next) { toolCount++; if (next === 'Running verification') checkCount++; activity = next; } } catch { }
+        try {
+          const event = JSON.parse(line);
+          const task = selectedRoadmapTaskFromEvent(event);
+          if (task) checkpoint = `Task: ${task}`;
+          const next = activityFromEvent(event); if (next) { toolCount++; if (next === 'Running verification') checkCount++; activity = next; }
+        } catch { }
       }
       eventLines = lines.length;
       const counters = toolCount ? ` | tools ${toolCount}${checkCount ? ` | checks ${checkCount}` : ''}` : '';
@@ -213,8 +219,8 @@ async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
             if (event.type === 'iteration-started') {
               eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; iterationStarted = Date.now();
               iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`;
-              checkpoint = event.taskTitle ? `Task: ${event.taskTitle}` : event.taskId ? `Task: ${event.taskId}` : '';
-              stage = `${iterationLabel} | ${event.taskId || 'next roadmap task'} | ${event.pending} tasks pending`;
+              checkpoint = 'Selecting next actionable roadmap task…';
+              stage = `${iterationLabel} | selecting actionable task | ${event.pending} tasks pending`;
             }
               if (event.type === 'recovery-finished') { checkpoint = `Recovered interrupted work: ${event.recoveryCommit || 'checkpoint committed and pushed'}`; stage = 'Recovered interrupted Terra work'; }
               if (event.type === 'iteration-finished') { const completed = `${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`; completedIterations.push(completed); checkpoint = ''; stage = 'Preparing next iteration'; if (liveAttached) renderStatus(); else console.log(`  ${completed}`); }

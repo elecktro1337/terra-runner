@@ -45,6 +45,7 @@ if ($cmd -eq 'run') {
         exit 0
     }
     $repo = (Get-Location).Path
+    '{"type":"text","part":{"text":"TERRA_SELECTED_TASK: NTD-0001"}}'
     if ($env:TERRA_MOCK_UPDATE_INSTRUCTIONS_ONCE -eq '1') {
         if ([string]::IsNullOrWhiteSpace($env:TERRA_MOCK_STATE_DIR)) { throw 'TERRA_MOCK_STATE_DIR is required for instruction-update simulation.' }
         [void][IO.Directory]::CreateDirectory($env:TERRA_MOCK_STATE_DIR)

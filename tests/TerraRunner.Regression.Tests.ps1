@@ -60,6 +60,11 @@ Describe 'Terra Runner safe command dispatch' {
         $source = Get-Content -LiteralPath $runner -Raw
         $source | Should Match 'function Test-OnlyProjectInstructionsChanges'
     }
+    It 'requires an explicit selected-task marker before OpenCode tool use' {
+        $prompt = Get-Content -LiteralPath (Join-Path $here 'terra-prompt.md') -Raw
+        $prompt | Should Match 'TERRA_SELECTED_TASK: <task ID>'
+        $prompt | Should Match 'Before using any tool'
+    }
     It 'does not start an agent for Report' {
         & $runner -Project safe-project -Config $script:config -Report
         (Test-Path -LiteralPath $script:calls) | Should Be $false
