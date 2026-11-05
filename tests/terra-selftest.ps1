@@ -8,6 +8,7 @@ $repo = Join-Path $tempRoot 'repo'
 $bare = Join-Path $tempRoot 'remote.git'
 $fake = Join-Path $PSScriptRoot 'mock-opencode.ps1'
 $cfgFile = Join-Path $tempRoot 'config.json'
+$fixture = Join-Path $PSScriptRoot 'fixtures/terra-config.json'
 try {
     [void][IO.Directory]::CreateDirectory($repo)
     & git init -q --bare $bare
@@ -21,9 +22,9 @@ try {
     & git -C $repo remote add origin $bare
     & git -C $repo push -q -u origin codex/terra
     # Tests must never inherit a user's active budget mode or project settings.
-    # Use the checked-in current configuration as the schema template. Runtime
-    # values below are replaced with the isolated mock project and temp storage.
-    $cfg = Get-Content -Raw -LiteralPath (Join-Path $runnerRoot 'terra-config.json') | ConvertFrom-Json -AsHashtable
+    # The checked-in fixture is the schema template; runtime values below are
+    # replaced with the isolated mock project and temporary storage.
+    $cfg = Get-Content -Raw -LiteralPath $fixture | ConvertFrom-Json -AsHashtable
     $cfg.projects[0].id = 'mock-project'
     $cfg.projects[0].path = $repo
     $cfg.openCodeCommand = $fake

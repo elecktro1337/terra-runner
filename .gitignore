@@ -3,6 +3,7 @@
 
 # User-specific settings and portable-mode state
 terra-config.json
+!tests/fixtures/terra-config.json
 data/
 config-backups/
 

@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 4,
+  "openCodeCommand": "opencode",
+  "agent": "build",
+  "model": "",
+  "openCode": {
+    "accounts": [],
+    "activeAccountId": "",
+    "reasoning": {
+      "variant": "",
+      "showThinking": false
+    }
+  },
+  "projects": [
+    {
+      "id": "fixture-project",
+      "path": "C:\\terra-runner-fixture",
+      "branch": "codex/terra",
+      "roadmap": "NTD-ROADMAP.md",
+      "progress": "NTD-PROGRESS.md"
+    }
+  ],
+  "budget": {
+    "mode": "daily",
+    "dailyUsd": 5.0,
+    "reserveUsd": 0.5,
+    "emergencyStopUsd": 4.95,
+    "allowUnlimited": false,
+    "requireGlobalOpenCodeStats": true,
+    "stopOnZeroCostWithTokens": true,
+    "balance": {
+      "source": "snapshot",
+      "id": "fixture-account",
+      "minimumUsd": 1.0,
+      "iterationReserveUsd": 0.5,
+      "maxAgeMinutes": 5,
+      "command": "",
+      "arguments": []
+    }
+  },
+  "execution": {
+    "pollSeconds": 1,
+    "maxIterationMinutes": 2,
+    "maxIterationsPerRun": 2,
+    "maxConsecutiveNoProgress": 2,
+    "maxConsecutiveDocumentationOnly": 2,
+    "maxToolErrorsPerIteration": 15,
+    "pauseBetweenIterationsSeconds": 0,
+    "maxRawLogMiB": 1
+  },
+  "logs": {
+    "root": "./data/projects",
+    "retainDays": 7,
+    "maxIterationsPerProject": 10,
+    "maxTotalMiBPerProject": 10,
+    "reportRetainDays": 7
+  }
+}

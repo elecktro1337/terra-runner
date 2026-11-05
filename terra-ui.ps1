@@ -1,5 +1,5 @@
 <#
-  Terra Runner 1.5 interactive console.
+  Terra Runner 1.6 interactive console.
   The UI owns configuration and navigation. The runner owns development execution.
 #>
 [CmdletBinding(PositionalBinding=$false)]
@@ -12,7 +12,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or newer is required.' }
 
-$script:Version = '1.5.0'
+$script:Version = '1.6.0'
 $script:Root = $PSScriptRoot
 $script:Runner = Join-Path $script:Root 'terra-runner.ps1'
 $script:Settings = $null

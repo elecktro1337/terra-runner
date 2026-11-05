@@ -376,6 +376,16 @@ function Require-NonNegativeNumber($Value, [string]$Name) {
     if ([double]::IsNaN($d) -or [double]::IsInfinity($d) -or $d -lt 0) { throw "Invalid non-negative setting: $Name" }
     return $d
 }
+function ConvertTo-UtcTimestamp($Value, [string]$ErrorMessage) {
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) { throw $ErrorMessage }
+    if ($Value -is [DateTimeOffset]) { return $Value.ToUniversalTime() }
+    if ($Value -is [DateTime]) { return ([DateTimeOffset]$Value).ToUniversalTime() }
+    try {
+        return [DateTimeOffset]::Parse([string]$Value, $Invariant, ([Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal))
+    } catch {
+        throw $ErrorMessage
+    }
+}
 function Get-BudgetMode($Settings) {
     $m = [string](Read-Member $Settings 'mode')
     if ([string]::IsNullOrWhiteSpace($m)) { $m = 'daily' } # schema v1 compatibility
@@ -411,8 +421,8 @@ function Get-QuotaSnapshot($Account, [string]$Executable = '', [string]$Director
     }
     $remaining = Require-NonNegativeNumber (Read-Member $quota 'remaining') 'quota.remaining'
     $reserve = Require-NonNegativeNumber (Read-Member $quota 'reserve') 'quota.reserve'
-    $observedAt = [string](Read-Member $quota 'observedAt')
-    try { $observed = [DateTimeOffset]::Parse($observedAt,$Invariant,([Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal)) } catch { throw 'Provider snapshot has no valid observation time. Refresh it in Profiles.' }
+    $observed = ConvertTo-UtcTimestamp (Read-Member $quota 'observedAt') 'Provider snapshot has no valid observation time. Refresh it in Profiles.'
+    $observedAt = $observed.ToString('o')
     $maxAge = Require-PositiveNumber (Read-Member $quota 'maxAgeMinutes') 'quota.maxAgeMinutes'
     $age = ([DateTimeOffset]::UtcNow - $observed.ToUniversalTime()).TotalMinutes
     if ($age -lt -2 -or $age -gt $maxAge) { throw "Provider snapshot is stale ($([Math]::Round($age,1)) minutes). Refresh it in Profiles before development." }
@@ -460,13 +470,11 @@ function Get-LiveBalance($Settings) {
     catch { throw 'Balance command must output one valid JSON object.' }
     $amount = Read-Member $value 'balanceUsd'
     [void](Require-NonNegativeNumber $amount 'balance command balanceUsd')
-    $observed = [string](Read-Member $value 'observedAt')
-    try { $at = [DateTimeOffset]::Parse($observed, $Invariant) }
-    catch { throw 'Balance command must return observedAt in ISO 8601 with timezone.' }
+    $at = ConvertTo-UtcTimestamp (Read-Member $value 'observedAt') 'Balance command must return observedAt in ISO 8601 with timezone.'
     $lag = ([DateTimeOffset]::UtcNow - $at.ToUniversalTime()).TotalMinutes
     $maxLag = Require-PositiveNumber (Read-Member $Settings 'maxAgeMinutes') 'balance.maxAgeMinutes'
     if ($lag -lt -2 -or $lag -gt $maxLag) { throw "Balance provider observation is not recent (age $([Math]::Round($lag,1)) minutes)." }
-    return [pscustomobject]@{ AmountUSD=[double]$amount; Source='external-command'; ObservedAt=$observed }
+    return [pscustomobject]@{ AmountUSD=[double]$amount; Source='external-command'; ObservedAt=$at.ToString('o') }
 }
 function Set-BalanceSnapshot([string]$File, [double]$Amount, $Usage, [bool]$Overwrite) {
     [void](Require-NonNegativeNumber $Amount 'SetBalanceUsd')
@@ -984,7 +992,7 @@ try {
             $psi.FileName = $pwshExe
             $psi.WorkingDirectory = $repo
             $psi.UseShellExecute = $false
-            $argsList = @('-NoProfile','-NonInteractive','-File',$workerFile,
+            $argsList = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$workerFile,
                 '-OpenCodeCommand',$openCode,'-ProjectPath',$repo,'-PromptFile',$promptFile,
                 '-EventsFile',$eventsPath,'-ErrorFile',$stderrPath,'-Agent',([string]$cfg.agent),'-Model',([string]$cfg.model))
             $reasoning = Read-Member (Read-Member $cfg 'openCode') 'reasoning'

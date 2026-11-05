@@ -7,10 +7,13 @@ $root = Split-Path -Parent $PSScriptRoot
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('terra-ui-navigation-' + [guid]::NewGuid().ToString('N'))
 $config = Join-Path $tempRoot 'terra-config.json'
 $null = [IO.Directory]::CreateDirectory($tempRoot)
-Copy-Item -LiteralPath (Join-Path $root 'terra-config.json') -Destination $config
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures/terra-config.json') -Destination $config
+$settings = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json -AsHashtable
+$settings.projects[0].path = $tempRoot
+$settings | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $config -Encoding UTF8
 $answers = [System.Collections.Generic.Queue[string]]::new()
 # Open every menu, edit a legacy project while keeping its values, run UI
-# diagnostics, then exit. The temporary config preserves user settings.
+# diagnostics, then exit. The temporary config is an isolated fixture.
 foreach ($answer in @('1','0','2','e','','','','','','0','3','0','4','0','5','0','6','','0')) { $answers.Enqueue($answer) }
 
 function global:Clear-Host { }
