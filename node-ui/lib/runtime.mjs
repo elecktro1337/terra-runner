@@ -77,6 +77,19 @@ export async function listInstances(configPath) {
     return result.filter(Boolean).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
+export async function deleteTerminalInstance(configPath, id) {
+  const instance = await readInstance(configPath, id);
+  if (!instance) return false;
+  if (!isTerminalInstance(instance)) throw new Error('Only a completed, failed, stopped, aborted, or orphaned instance can be removed.');
+  await fs.unlink(instancePath(configPath, id));
+  try { await fs.rm(path.join(runtimeRoot(configPath), 'controls', id), { recursive: true, force: true }); } catch { }
+  return true;
+}
+export async function clearTerminalInstances(configPath) {
+  const instances = await listInstances(configPath); let removed = 0;
+  for (const instance of instances) if (isTerminalInstance(instance) && await deleteTerminalInstance(configPath, instance.id)) removed++;
+  return removed;
+}
 export async function createInstance(configPath, project, profile, proxyRoute, coordinatorId, launch) {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();

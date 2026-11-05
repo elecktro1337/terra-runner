@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { authStorePath, canFinalizeStalledInstance, clearInstanceControls, createInstance, instanceControlPath, instanceRunnerFailure, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance } from '../lib/runtime.mjs';
+import { authStorePath, canFinalizeStalledInstance, clearInstanceControls, clearTerminalInstances, createInstance, deleteTerminalInstance, instanceControlPath, instanceRunnerFailure, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance } from '../lib/runtime.mjs';
 
 async function fixture() { return fs.mkdtemp(path.join(os.tmpdir(), 'terra-runtime-')); }
 
@@ -43,4 +43,17 @@ test('redacts runner stderr into a safe actionable instance failure', () => {
   assert.match(instanceRunnerFailure('Exception: Git working tree has uncommitted/untracked changes.', 1), /Commit, stash, or remove/);
   assert.match(instanceRunnerFailure('opaque provider output api_key=secret', 1), /Runner exited with code 1/);
   assert.doesNotMatch(instanceRunnerFailure('opaque provider output api_key=secret', 1), /secret/);
+});
+
+test('removes only terminal instance records and preserves active instances', async () => {
+  const root = await fixture(); const config = path.join(root, 'terra-config.json');
+  const terminal = await createInstance(config, { id: 'finished', path: 'C:\\finished' }, { id: 'p1' }, null, 'coordinator', {});
+  const active = await createInstance(config, { id: 'running', path: 'C:\\running' }, { id: 'p1' }, null, 'coordinator', {});
+  await updateInstance(config, terminal.id, { state: 'finished' }); await updateInstance(config, active.id, { state: 'running' });
+  assert.equal(await deleteTerminalInstance(config, terminal.id), true);
+  await assert.rejects(deleteTerminalInstance(config, active.id), /Only a completed/);
+  const another = await createInstance(config, { id: 'failed', path: 'C:\\failed' }, { id: 'p1' }, null, 'coordinator', {}); await updateInstance(config, another.id, { state: 'failed' });
+  assert.equal(await clearTerminalInstances(config), 1);
+  assert.equal((await listInstances(config)).length, 1);
+  assert.equal((await listInstances(config))[0].projectId, 'running');
 });

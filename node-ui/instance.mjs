@@ -53,7 +53,7 @@ function globalHeader(settings, subtitle = 'PROJECT INSTANCE') {
 }
 function renderRunHeader(settings, project, profile, command, roadmap) {
   clear();
-  const rows = [chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' })), chalk.gray('RUNNER  v2.3  ·  Active development run'), rule, ...developmentHeaderRows({ project, profile, command, roadmap, limitText: limitSummary(profile) }), rule];
+  const rows = [chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' })), chalk.gray('RUNNER  v2.3  ·  Active development run  ·  Dispatcher instance'), rule, ...developmentHeaderRows({ project, profile, command, roadmap, includeTerraLimits: false }), rule];
   for (const row of rows) console.log(row);
   return rows.reduce((count, row) => count + String(row).split(/\r?\n/).length, 0);
 }
