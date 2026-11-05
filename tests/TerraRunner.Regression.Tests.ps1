@@ -43,6 +43,12 @@ Describe 'Terra Runner safe command dispatch' {
         $source | Should Match '\$OutputEncoding\s*=\s*\$Utf8NoBom'
         $source | Should Match '\[Console\]::OutputEncoding\s*=\s*\$Utf8NoBom'
     }
+    It 'composes each worker prompt with committed project instructions' {
+        $worker = Get-Content -LiteralPath (Join-Path $here 'terra-worker.ps1') -Raw
+        $worker | Should Match '\[Parameter\(Mandatory\)\]\[string\]\$ProjectInstructionsFile'
+        $worker | Should Match 'Get-Content -LiteralPath \$ProjectInstructionsFile'
+        $worker | Should Match 'cannot relax global safety rules'
+    }
     It 'does not start an agent for Report' {
         & $runner -Project safe-project -Config $script:config -Report
         (Test-Path -LiteralPath $script:calls) | Should Be $false

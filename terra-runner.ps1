@@ -86,6 +86,28 @@ function Read-Member($Value, [string]$Name) {
     if ($null -ne $p) { return $p.Value }
     return $null
 }
+function Resolve-ProjectInstructionsFile([string]$Repository, $ProjectConfig) {
+    $relative = [string](Read-Member $ProjectConfig 'instructions')
+    if ([string]::IsNullOrWhiteSpace($relative)) { $relative = 'PROJECT-INSTRUCTIONS.md' }
+    if ([IO.Path]::IsPathRooted($relative)) { throw 'Project instructions must be a relative path inside the project.' }
+    $segments = @($relative -split '[\\/]')
+    if ($segments | Where-Object { $_ -eq '..' }) { throw 'Project instructions path must not leave the project directory.' }
+    $base = [IO.Path]::GetFullPath($Repository).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
+    $filename = [IO.Path]::GetFullPath((Join-Path $base $relative))
+    $prefix = $base + [IO.Path]::DirectorySeparatorChar
+    if (-not $filename.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'Project instructions path must stay inside the project directory.' }
+    return [pscustomobject]@{ Path=$filename; Relative=([IO.Path]::GetRelativePath($base,$filename).Replace('\\','/')) }
+}
+function Assert-ProjectInstructionsFile([string]$Repository, $Instructions) {
+    if ($null -eq $Instructions -or -not (Test-Path -LiteralPath $Instructions.Path -PathType Leaf)) {
+        $relative = if ($null -eq $Instructions) { 'PROJECT-INSTRUCTIONS.md' } else { [string]$Instructions.Relative }
+        throw "Project instructions file is required: $relative. Create it from Projects, then commit it before Development."
+    }
+    try { [void](Invoke-Cli 'git' @('-C',$Repository,'ls-files','--error-unmatch','--',$Instructions.Relative) $Repository) }
+    catch { throw "Project instructions file must be committed to Git: $($Instructions.Relative). Commit it before Development." }
+    $status = Invoke-Cli 'git' @('-C',$Repository,'status','--porcelain','--',$Instructions.Relative) $Repository
+    if ($status.Trim() -ne '') { throw "Project instructions file has uncommitted changes: $($Instructions.Relative). Commit it before Development." }
+}
 function Get-ActiveProxyRoute($Config) {
     $proxy = Read-Member $Config 'proxy'
     if ($null -eq $proxy -or [string](Read-Member $proxy 'activeRouteId') -in @('','direct')) { return $null }
@@ -876,7 +898,7 @@ function Rotate-Reports([string]$DataDirectory, $Settings) {
 }
 
 $cfg = Get-Content -LiteralPath $Config -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 40
-if ([int]$cfg.schemaVersion -notin @(1,2,3,4,5,6,7,8,9,10)) { throw 'Unsupported terra-config.json schemaVersion.' }
+if ([int]$cfg.schemaVersion -notin @(1,2,3,4,5,6,7,8,9,10,11)) { throw 'Unsupported terra-config.json schemaVersion.' }
 $projectConfig = @($cfg.projects | Where-Object { $_.id -eq $Project })
 if ($projectConfig.Count -ne 1) { throw "Expected exactly one project with id '$Project'." }
 $projectConfig = $projectConfig[0]
@@ -891,6 +913,8 @@ if (-not [System.IO.Path]::IsPathRooted($logRoot)) { $logRoot = Join-Path (Split
 $projectData = Join-Path $logRoot $Project
 $logsPath = Join-Path $projectData 'logs'
 $runtimeRoot = Join-Path (Split-Path -Parent $Config) 'runtime'
+$requiresProjectInstructions = [bool]($Once -or $Continuous -or $DryRun)
+$projectInstructions = $null
 $instance = $null
 $limitsEnabled = -not [bool]$InstanceId
 $requiresExplicitProfile = -not $InstanceId -and ($Once -or $Continuous -or $DryRun -or $Status -or $hasSetBalance)
@@ -1074,6 +1098,10 @@ try {
             throw "Local and remote branch heads differ; pending push was not accepted after $($pendingPush.Attempts) attempt(s): $($pendingPush.Output)"
         }
     }
+    if ($requiresProjectInstructions) {
+        $projectInstructions = Resolve-ProjectInstructionsFile $repo $projectConfig
+        Assert-ProjectInstructionsFile $repo $projectInstructions
+    }
     $initialGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
     if ($initialGitStatus.Trim() -ne '' -and ($Once -or $Continuous)) {
         [void](Recover-TerraInterruptedWork $repo ([string]$projectConfig.branch) $projectData $maxPushRetries $pushRetryDelaySeconds)
@@ -1150,6 +1178,9 @@ try {
         }
         $pending = Count-Pending $roadmap $taskIdPattern
         if ($pending -eq 0) { Write-Host 'No pending roadmap checkbox tasks found. Stopping.'; break }
+        # The file is user-owned and versioned. Re-check it before every worker
+        # so a newly committed project rule applies to the next iteration.
+        Assert-ProjectInstructionsFile $repo $projectInstructions
         $plannedTask = Get-NextPendingRoadmapTask $roadmap $taskIdPattern
         $headBefore = Get-Head $repo
         $doneBefore = Count-Completed $roadmap $taskIdPattern
@@ -1178,6 +1209,7 @@ try {
             $psi.UseShellExecute = $false
             $argsList = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$workerFile,
                 '-OpenCodeCommand',$openCode,'-ProjectPath',$repo,'-PromptFile',$promptFile,
+                '-ProjectInstructionsFile',$projectInstructions.Path,
                 '-EventsFile',$eventsPath,'-ErrorFile',$stderrPath,'-Agent',([string]$cfg.agent),'-Model',([string]$cfg.model))
             if ($InstanceId -or $ProfileId) { $argsList += '-Standalone' }
             if ($null -ne $proxyBridge) { $argsList += @('-ProxyUrl',$proxyBridge.Url,'-NoProxy',$proxyBridge.NoProxy,'-CaFile',$proxyBridge.CaFile) }

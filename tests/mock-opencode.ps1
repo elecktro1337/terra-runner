@@ -45,6 +45,21 @@ if ($cmd -eq 'run') {
         exit 0
     }
     $repo = (Get-Location).Path
+    if ($env:TERRA_MOCK_UPDATE_INSTRUCTIONS_ONCE -eq '1') {
+        if ([string]::IsNullOrWhiteSpace($env:TERRA_MOCK_STATE_DIR)) { throw 'TERRA_MOCK_STATE_DIR is required for instruction-update simulation.' }
+        [void][IO.Directory]::CreateDirectory($env:TERRA_MOCK_STATE_DIR)
+        $marker = Join-Path $env:TERRA_MOCK_STATE_DIR 'instructions-updated.marker'
+        if (-not (Test-Path -LiteralPath $marker)) {
+            [IO.File]::WriteAllText($marker,'updated')
+            Add-Content -LiteralPath (Join-Path $repo 'PROJECT-INSTRUCTIONS.md') -Value 'Updated instruction: use the refreshed check.'
+            & git -C $repo add PROJECT-INSTRUCTIONS.md | Out-Null
+            & git -C $repo commit -m 'test(mock): update project instructions' | Out-Null
+            & git -C $repo push origin codex/terra 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) { exit 3 }
+        }
+        '{"type":"text","part":{"text":"Mock instruction update"}}'
+        exit 0
+    }
     if ($env:TERRA_MOCK_IMPLEMENTATION_PROGRESS -eq '1') {
         $source = Join-Path $repo 'src/MockImplementation.php'
         $test = Join-Path $repo 'tests/MockImplementationTest.php'

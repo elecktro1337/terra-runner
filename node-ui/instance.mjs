@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Project-scoped Terra Runner 2.3 terminal. The central dispatcher creates this
+// Project-scoped Terra Runner 2.4 terminal. The central dispatcher creates this
 // process; it deliberately receives only an instance ID, never credentials.
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -51,12 +51,12 @@ function activityFromEvent(event) {
 function globalHeader(settings, subtitle = 'PROJECT INSTANCE') {
   clear(); const route = activeProxyRoute(settings); const projects = Array.isArray(settings.projects) ? settings.projects : []; const profiles = Array.isArray(settings.openCode?.profiles) ? settings.openCode.profiles : [];
   console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' })));
-  console.log(chalk.gray(`RUNNER  v2.3  ·  ${subtitle}`)); console.log(rule);
+  console.log(chalk.gray(`RUNNER  v2.4  ·  ${subtitle}`)); console.log(rule);
   console.log(`${chalk.bold('Workspace')} ${projects.length} project(s)  ${chalk.gray('│')}  ${profiles.length} profile(s)  ${chalk.gray('│')}  Proxy ${route ? route.name : 'Direct'}`); console.log(rule);
 }
 function renderRunHeader(settings, project, profile, command, roadmap) {
   clear();
-  const rows = [chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' })), chalk.gray('RUNNER  v2.3  ·  Active development run  ·  Dispatcher instance'), rule, ...developmentHeaderRows({ project, profile, command, roadmap, includeTerraLimits: false }), rule];
+  const rows = [chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' })), chalk.gray('RUNNER  v2.4  ·  Active development run  ·  Dispatcher instance'), rule, ...developmentHeaderRows({ project, profile, command, roadmap, includeTerraLimits: false }), rule];
   for (const row of rows) console.log(row);
   return rows.reduce((count, row) => count + String(row).split(/\r?\n/).length, 0);
 }

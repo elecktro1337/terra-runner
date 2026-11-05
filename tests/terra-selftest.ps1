@@ -17,7 +17,8 @@ try {
     & git -C $repo config user.name 'Terra Runner Mock'
     [IO.File]::WriteAllText((Join-Path $repo 'NTD-ROADMAP.md'),"- [ ] **NTD-0001 [P0]** — Проверить UTF-8 заголовок задачи`n")
     [IO.File]::WriteAllText((Join-Path $repo 'NTD-PROGRESS.md'),"# Progress`n")
-    & git -C $repo add NTD-ROADMAP.md NTD-PROGRESS.md
+    [IO.File]::WriteAllText((Join-Path $repo 'PROJECT-INSTRUCTIONS.md'),"# Project instructions`n`nUse the project verification commands before completion.`n")
+    & git -C $repo add NTD-ROADMAP.md NTD-PROGRESS.md PROJECT-INSTRUCTIONS.md
     & git -C $repo commit -qm 'Initial mock files'
     & git -C $repo remote add origin $bare
     & git -C $repo push -q -u origin codex/terra
@@ -45,6 +46,7 @@ try {
     $protectedBudget = Join-Path $tempRoot 'project-data/budgets/protected.json'
     [void][IO.Directory]::CreateDirectory((Split-Path -Parent $protectedBudget)); [IO.File]::WriteAllText($protectedBudget,'{}')
     $env:TERRA_MOCK_COST = '0.15'; $env:TERRA_MOCK_ALL_COST = '0.15'; $env:TERRA_MOCK_BROKEN_STATS = '0'
+    $env:TERRA_MOCK_CALL_LOG = Join-Path $tempRoot 'mock-opencode.calls.log'
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun
     if (-not (Test-Path -LiteralPath $oldBundle) -or -not (Test-Path -LiteralPath $newBundle) -or -not (Test-Path -LiteralPath $protectedBudget)) { throw 'Dry run modified logs or budget snapshots.' }
     Write-Host 'PASS: dry run leaves logs and budget snapshots unchanged.' -ForegroundColor Green
@@ -99,6 +101,7 @@ try {
     if (-not $summary.pushVerified -or $summary.doneAfter -ne 1) { throw 'Summary validation failed.' }
     if ($summary.transientNetworkFailure) { throw 'A successful text message mentioning TLS must not trigger retry logic.' }
     if ($summary.completedTaskIds -notcontains 'NTD-0001') { throw 'Missing completed TODO ID in iteration summary.' }
+    if ((Get-Content -LiteralPath $env:TERRA_MOCK_CALL_LOG -Raw) -notmatch 'Project instructions') { throw 'Committed project instructions were not passed to the worker prompt.' }
     if (-not $summary.commits -or $summary.commits.Count -lt 1) { throw 'Missing Git commit information in summary.' }
     if ($summary.toolErrors -ne 1) { throw 'Recovered tool error must be counted separately.' }
     $readable = Get-Content -LiteralPath ($summaries[0].FullName -replace '\.summary\.json$','.events.readable.jsonl') -Raw -Encoding UTF8
@@ -109,6 +112,40 @@ try {
     if ((Get-Content -Raw $dailyReport) -notmatch 'NTD-0001') { throw 'Daily report must contain task IDs.' }
     Write-Host 'PASS: readable logs, tool errors, and daily reports.' -ForegroundColor Green
     Write-Host 'PASS: one iteration, TODO update, commit, push and project log.' -ForegroundColor Green
+
+    # Instructions are mandatory, tracked, and clean before a dry run or
+    # model launch. Restore each local probe before the remaining scenarios.
+    $instructions = Join-Path $repo 'PROJECT-INSTRUCTIONS.md'
+    Move-Item -LiteralPath $instructions -Destination ($instructions + '.missing')
+    $missingInstructions = $false
+    try { & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun } catch { $missingInstructions = $_.Exception.Message -match 'instructions file is required' }
+    Move-Item -LiteralPath ($instructions + '.missing') -Destination $instructions
+    if (-not $missingInstructions) { throw 'Missing project instructions did not block a dry run.' }
+    Add-Content -LiteralPath $instructions -Value 'Uncommitted instruction change.'
+    $dirtyInstructions = $false
+    try { & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun } catch { $dirtyInstructions = $_.Exception.Message -match 'instructions file has uncommitted changes' }
+    & git -C $repo checkout -- PROJECT-INSTRUCTIONS.md
+    if (-not $dirtyInstructions) { throw 'Dirty project instructions did not block a dry run.' }
+    & git -C $repo rm --cached -q PROJECT-INSTRUCTIONS.md
+    $untrackedInstructions = $false
+    try { & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun } catch { $untrackedInstructions = $_.Exception.Message -match 'instructions file must be committed' }
+    & git -C $repo add PROJECT-INSTRUCTIONS.md
+    if (-not $untrackedInstructions) { throw 'Untracked project instructions did not block a dry run.' }
+    Write-Host 'PASS: project instructions must exist, be tracked, and be clean.' -ForegroundColor Green
+
+    # The runner reads instructions afresh for every worker. A clean commit
+    # made between iterations must appear in the next worker prompt.
+    [IO.File]::WriteAllText((Join-Path $repo 'NTD-ROADMAP.md'),"- [ ] **NTD-0002** — Instructions refresh task`n")
+    & git -C $repo add NTD-ROADMAP.md | Out-Null
+    & git -C $repo commit -qm 'test: add task for instruction refresh'
+    & git -C $repo push -q origin codex/terra
+    $env:TERRA_MOCK_UPDATE_INSTRUCTIONS_ONCE = '1'
+    $env:TERRA_MOCK_STATE_DIR = Join-Path $tempRoot 'instruction-state'
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 2
+    Remove-Item Env:TERRA_MOCK_UPDATE_INSTRUCTIONS_ONCE -ErrorAction SilentlyContinue
+    Remove-Item Env:TERRA_MOCK_STATE_DIR -ErrorAction SilentlyContinue
+    if ((Get-Content -LiteralPath $env:TERRA_MOCK_CALL_LOG -Raw) -notmatch 'Updated instruction: use the refreshed check') { throw 'The next worker did not receive the newly committed project instructions.' }
+    Write-Host 'PASS: committed project instruction updates apply to the next iteration.' -ForegroundColor Green
 
     # A durable marker permits safe automatic recovery only for an interrupted
     # Terra run, not for arbitrary dirty worktrees.
@@ -128,7 +165,9 @@ try {
     Write-Host 'PASS: interrupted Terra work is checkpointed and pushed before a new run.' -ForegroundColor Green
 
     $env:TERRA_MOCK_COST = '5.01'
-    $countBefore = @($summaries).Count
+    # The instruction-refresh continuous run above creates its own iteration
+    # summaries. Count the live directory rather than the earlier snapshot.
+    $countBefore = @(Get-ChildItem -LiteralPath (Join-Path $tempRoot 'project-data/mock-project/logs') -Recurse -Filter '*.summary.json').Count
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once
     $countAfter = @(Get-ChildItem -LiteralPath (Join-Path $tempRoot 'project-data/mock-project/logs') -Recurse -Filter '*.summary.json').Count
     if ($countBefore -ne $countAfter) { throw 'Runner started an iteration above daily budget.' }
@@ -154,10 +193,11 @@ try {
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -SetBalanceUsd 100.0
     $stateFile = Join-Path $tempRoot 'project-data/budgets/mock-user-balance.json'
     if (-not (Test-Path $stateFile)) { throw 'Balance snapshot was not created.' }
-    $env:TERRA_MOCK_ALL_COST = '115.0' # 100 - (115 - 20) = $5; stop.
+    $countBeforeBalance = @(Get-ChildItem -LiteralPath (Join-Path $tempRoot 'project-data/mock-project/logs') -Recurse -Filter '*.summary.json').Count
+    $env:TERRA_MOCK_ALL_COST = '119.0' # 100 - (119 - 20) = $1; below the $1 + $0.5 launch reserve.
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once
     $countAfter = @(Get-ChildItem -LiteralPath (Join-Path $tempRoot 'project-data/mock-project/logs') -Recurse -Filter '*.summary.json').Count
-    if ($countAfter -ne 1) { throw 'Balance floor should block new iterations.' }
+    if ($countAfter -ne $countBeforeBalance) { throw 'Balance floor should block new iterations.' }
     Write-Host 'PASS: $5 remaining balance stops even with daily checks disabled.' -ForegroundColor Green
 
     $env:TERRA_MOCK_ALL_COST = '95.0' # $25 left, should be allowed regardless of the day cost.
@@ -168,7 +208,7 @@ try {
     & git -C $repo push -q origin codex/terra
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once
     $countAfter = @(Get-ChildItem -LiteralPath (Join-Path $tempRoot 'project-data/mock-project/logs') -Recurse -Filter '*.summary.json').Count
-    if ($countAfter -ne 2) { throw 'Balance mode must allow iteration without daily cap.' }
+    if ($countAfter -ne ($countBeforeBalance + 1)) { throw 'Balance mode must allow iteration without daily cap.' }
     Write-Host 'PASS: balance mode executes regardless of daily cost.' -ForegroundColor Green
 
     # Hybrid: enough remaining on snapshot balance, but a daily limit still blocks.
@@ -176,7 +216,7 @@ try {
     $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once
     $countHybrid = @(Get-ChildItem -LiteralPath (Join-Path $tempRoot 'project-data/mock-project/logs') -Recurse -Filter '*.summary.json').Count
-    if ($countHybrid -ne 2) { throw 'Hybrid mode did not enforce daily limit.' }
+    if ($countHybrid -ne $countAfter) { throw 'Hybrid mode did not enforce daily limit.' }
     Write-Host 'PASS: hybrid requires both budget conditions.' -ForegroundColor Green
 
     $env:TERRA_MOCK_ALL_COST = '19.0' # Usage moving backward MUST fail closed.
@@ -233,6 +273,7 @@ try {
     & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 1
     Remove-Item Env:TERRA_MOCK_TLS_ONCE -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_STATE_DIR -ErrorAction SilentlyContinue
+    Remove-Item Env:TERRA_MOCK_UPDATE_INSTRUCTIONS_ONCE -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_TLS_TEXT -ErrorAction SilentlyContinue
     $afterTls = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
     if ($afterTls.Count -ne ($beforeTls + 2)) { throw 'TLS interruption was not retried as the same iteration.' }
@@ -261,6 +302,7 @@ finally {
     Remove-Item Env:TERRA_MOCK_COST -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_BROKEN_STATS -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_ALL_COST -ErrorAction SilentlyContinue
+    Remove-Item Env:TERRA_MOCK_CALL_LOG -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_NO_ACTIONABLE -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_IMPLEMENTATION_PROGRESS -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_TLS_ONCE -ErrorAction SilentlyContinue

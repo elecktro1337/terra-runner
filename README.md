@@ -1,4 +1,4 @@
-# Terra Runner 2.3
+# Terra Runner 2.4
 
 Terra Runner is a local Windows orchestrator for controlled OpenCode development. The central application manages projects, profiles, models, proxy routes and running workspaces; a development command can run in the main window or in a separate project terminal.
 
@@ -22,6 +22,10 @@ Normal settings and state live in `%LOCALAPPDATA%\TerraRunner`. `-Portable` keep
 The central header contains only global application information. Development explicitly selects a project and profile for each launch; Reports is an all-project read-only summary.
 
 During a run, Terra Runner shows roadmap completion and percentage, the selected roadmap task, safe live activity (inspection, file changes, Git, or verification), elapsed time for the current iteration, tool/check counts, and a bounded live journal of completed iterations. It does not display model reasoning text. In dispatcher-instance mode, only the frozen project/profile context is shown: Terra snapshot, budget, and cost-estimate fields are deliberately omitted because they are not enforced there.
+
+## Project instructions
+
+Every project has a committed `PROJECT-INSTRUCTIONS.md` alongside its roadmap and progress files. It is mandatory for Development and contains the project's own environment, Docker/Compose, testing, debugging, and architecture guidance. Use **Projects → Open project instructions** to create the empty file when missing and open it in Notepad. Commit it before launching Development; a committed update is read by the next continuous iteration. Project instructions supplement, but cannot weaken, Terra Runner's global safety policy, and the development agent never edits them.
 
 ## Profiles, snapshots, and limits
 
@@ -89,7 +93,7 @@ pwsh -File .\terra-runner.ps1 -Project my-project -ProfileId my-profile -Status
 pwsh -File .\terra-runner.ps1 -Project my-project -Report
 ```
 
-In schema v10, model execution and `-Status` require `-ProfileId`; `-Report`, proxy commands and controls do not. `-Status`, `-Report`, preflight, configuration actions, cancelled menus, and an invocation without an execution command never launch `opencode run`.
+In schema v11, model execution and `-Status` require `-ProfileId`; `-Report`, proxy commands and controls do not. `-Status`, `-Report`, preflight, configuration actions, cancelled menus, and an invocation without an execution command never launch `opencode run`.
 
 ## Tests
 
@@ -100,11 +104,14 @@ pwsh -NoProfile -ExecutionPolicy Bypass -Command "Invoke-Pester .\tests\TerraRun
 
 The test suites use local mocks and temporary repositories. They make no paid OpenCode requests.
 
-## Upgrade to 2.3
+## Upgrade to 2.4
 
-On first dispatcher start, configuration is migrated to schema v10. Existing
+On first dispatcher start, configuration is migrated to schema v11. Existing
 legacy model, account, reasoning and budget values are preserved in profiles;
-global profile/account selections and project default profiles are removed.
+global profile/account selections and project default profiles are removed. Each
+project receives the default instructions path `PROJECT-INSTRUCTIONS.md`; the
+file itself is not created by migration and must be created and committed before
+Development starts.
 The first Development launch of a cloud profile creates that project's private
 store and streams only that provider's current OpenCode credential into it.
 It does not copy credentials during migration and does not require another

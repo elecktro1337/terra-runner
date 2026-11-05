@@ -1,4 +1,4 @@
-# Terra Runner 2.3 architecture
+# Terra Runner 2.4 architecture
 
 ## Dispatcher and project workspaces
 
@@ -60,4 +60,4 @@ Terminal instance records are runtime metadata, not historical evidence. `Develo
 
 ## Safety boundaries
 
-Only `-Once` and `-Continuous` start an agent. Status, reports, setup, preflight, cancelled prompts, and configuration edits are read-only with respect to OpenCode execution. `STOP` requests finish the current iteration; `ABORT` requests terminate it on the next poll. The UI clears stale flags only when the user explicitly starts a new run. The versioned task prompt grants the agent a bounded local-infrastructure capability: it may start and await already-installed development dependencies required by the selected task, but may not install or reconfigure system software, elevate privileges, alter network/security settings, touch production, or remove resources it did not start.
+Only `-Once` and `-Continuous` start an agent. Status, reports, setup, preflight, cancelled prompts, and configuration edits are read-only with respect to OpenCode execution. `STOP` requests finish the current iteration; `ABORT` requests terminate it on the next poll. The UI clears stale flags only when the user explicitly starts a new run. The versioned task prompt is composed in the worker from immutable global policy plus the project-owned, Git-tracked `PROJECT-INSTRUCTIONS.md`, which is reread for every worker process. Project instructions cannot relax global safety policy and are not editable by the agent. The global prompt grants a bounded local-infrastructure capability: it may start and await already-installed development dependencies required by the selected task, but may not install or reconfigure system software, elevate privileges, alter network/security settings, touch production, or remove resources it did not start.

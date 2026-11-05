@@ -1,10 +1,10 @@
 # Configuration reference
 
-Terra Runner 2.3 stores normal configuration and runtime state in `%LOCALAPPDATA%\TerraRunner`. Use `-Portable` to keep state beside the installation.
+Terra Runner 2.4 stores normal configuration and runtime state in `%LOCALAPPDATA%\TerraRunner`. Use `-Portable` to keep state beside the installation.
 
 ## Dispatcher runtime and automatic OpenCode storage
 
-Schema v10 includes `openCode.stores[]` with
+Schema v11 includes `openCode.stores[]` with
 `profiles[].authStoreId`. Runtime instance records, heartbeats and addressable
 controls live next to the configuration under `runtime/`; they contain no
 provider secrets or Terra budget/quota values.
@@ -36,7 +36,7 @@ other projects' managed stores are not removed.
 
 ## Projects
 
-Each project has a stable ID, absolute path, expected Git branch, roadmap filename, and progress filename. Paths may contain spaces and Unicode characters. Project logs, reports, run summaries, and control files are stored below `logs.root/<project-id>`.
+Each project has a stable ID, absolute path, expected Git branch, roadmap filename, progress filename, and an `instructions` filename. `instructions` defaults to `PROJECT-INSTRUCTIONS.md`, is relative to the project root, cannot escape it, and must be a tracked clean file before Dry run, One iteration, or Continuous can start. Use **Projects → Open project instructions** to create the empty file and open it in Notepad; commit it before Development. The worker rereads its committed contents before each new iteration, so a newly committed update applies to the next iteration.
 
 `taskIdPattern` is optional. Without it, every Markdown checkbox is a roadmap task. When it is absent, Terra Runner still recognises conventional IDs such as `NTD-0109` in newly completed roadmap entries.
 

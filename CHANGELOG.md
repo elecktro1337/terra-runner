@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.4.0 - 2026-11-05
+
+- Added mandatory per-project `PROJECT-INSTRUCTIONS.md` files, tracked and clean in Git, with safe paths, UI creation/opening, and per-iteration worker prompt composition.
+
 ## 2.3.6 - 2026-11-05
 
 - Formatted active-instance heartbeat durations as minutes and seconds instead of raw seconds.

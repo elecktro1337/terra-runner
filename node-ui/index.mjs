@@ -10,7 +10,7 @@ import chalk from 'chalk';
 import figlet from 'figlet';
 import ora from 'ora';
 import { defaultApiLimits, isLocalModel, migrateProfiles, profileFrom } from './lib/profiles.mjs';
-import { normalizeProjects, validateProjectId } from './lib/projects.mjs';
+import { DEFAULT_PROJECT_INSTRUCTIONS, normalizeProjects, validateProjectId, validateProjectInstructionsPath } from './lib/projects.mjs';
 import { dailyReports, latestIterationSummary, iterationSummariesSince, projectDataRoot } from './lib/reports.mjs';
 import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, redactedRoute, validateProxyRoute } from './lib/proxy.mjs';
 import { authStorePath, canFinalizeStalledInstance, cleanupLegacyReservations, clearTerminalInstances, createInstance, deleteTerminalInstance, isTerminalInstance, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
@@ -243,7 +243,7 @@ async function runWithTui(runnerArgs, settings, project, mode, statusRow) {
   }
 }
 async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [] }; settings.openCode.accounts ||= []; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the setup wizard once or pass --config <file>. ${error.message}`); } }
-async function save(settings) { settings.schemaVersion = 10; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
+async function save(settings) { settings.schemaVersion = 11; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
 function parseModels(text) { return [...new Set(text.split(/\r?\n/).map(v => v.trim()).filter(v => /^[a-z0-9_.-]+\/.+/i.test(v)))]; }
 function storeEnvironment(storeId) { return storeId && storeId !== 'legacy-shared' ? { OPENCODE_DB: authStorePath(configPath, storeId) } : null; }
 function authStore(settings, id) { return (settings.openCode?.stores || []).find(store => store.id === id) || null; }
@@ -285,7 +285,7 @@ function profileKindLabel(profile) {
 }
 function header(settings) {
   clear(); const route = activeProxyRoute(settings); const projects = normalizeProjects(settings); const profiles = migrateProfiles(settings);
-  console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' }))); console.log(chalk.gray('RUNNER  v2.3  ·  Local OpenCode development orchestrator')); console.log(rule);
+  console.log(chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' }))); console.log(chalk.gray('RUNNER  v2.4  ·  Local OpenCode development orchestrator')); console.log(rule);
   console.log(`${chalk.bold('Workspace')} ${projects.length} project(s)  ${chalk.gray('│')}  ${profiles.length} profile(s)  ${chalk.gray('│')}  Proxy ${route ? route.name : 'Direct'}`);
   console.log(rule);
 }
@@ -293,7 +293,7 @@ function renderDevelopmentHeader(project, profile, command, roadmap) {
   clear();
   const rows = [
     chalk.cyan(figlet.textSync('Terra', { horizontalLayout: 'fitted' })),
-    chalk.gray('RUNNER  v2.3  ·  Active development run'),
+    chalk.gray('RUNNER  v2.4  ·  Active development run'),
     rule,
     ...developmentHeaderRows({ project, profile, command, roadmap, limitText: limitSummary(profile) }),
     rule
@@ -587,6 +587,7 @@ async function developmentMenu(settings) {
     if (!command) return;
     if (command === 'instances') { await instancesMenu(settings); continue; }
     const selected = await chooseDevelopmentLaunch(settings, command); if (!selected) continue;
+    if (!(await ensureProjectInstructionsForLaunch(settings, selected.project))) continue;
     const launch = { command, maxIterations: selected.maxIterations };
     if (selected.target === 'instance') { if (await yesNo(`Open '${selected.project.id}' in a separate terminal and start ${command}?`)) await startDispatcherInstance(settings, selected.project, selected.profile, launch); continue; }
     await runInMainWindow(settings, command, selected.project, selected.profile, selected.maxIterations);
@@ -625,6 +626,48 @@ async function readProjectId(message, projects, currentId = '') {
 async function detectBranch(projectPath, fallback = '') {
   try { return (await execute('git', ['-C', projectPath, 'branch', '--show-current'])).trim() || fallback; } catch { return fallback; }
 }
+function projectInstructionsPath(project) {
+  const relative = String(project.instructions || DEFAULT_PROJECT_INSTRUCTIONS).trim();
+  const error = validateProjectInstructionsPath(relative); if (error) throw new Error(error);
+  const rootPath = path.resolve(project.path);
+  const filename = path.resolve(rootPath, relative);
+  if (!filename.startsWith(`${rootPath}${path.sep}`)) throw new Error('Instructions path must stay inside the project directory.');
+  return filename;
+}
+async function launchExternalEditor(filename) {
+  const child = spawn('notepad.exe', [filename], { detached: true, stdio: 'ignore', windowsHide: false });
+  child.unref();
+  await new Promise((resolve, reject) => { child.once('error', reject); child.once('spawn', resolve); });
+}
+async function createOrOpenProjectInstructions(project, createMissing = true) {
+  const filename = projectInstructionsPath(project);
+  let created = false;
+  try { if (!(await fs.stat(filename)).isFile()) throw new Error(); }
+  catch {
+    if (!createMissing) return { filename, created: false, exists: false };
+    await fs.mkdir(path.dirname(filename), { recursive: true });
+    await fs.writeFile(filename, '# Project instructions\n', 'utf8');
+    created = true;
+  }
+  await launchExternalEditor(filename);
+  return { filename, created, exists: true };
+}
+async function ensureProjectInstructionsForLaunch(settings, project) {
+  const result = await createOrOpenProjectInstructions(project, false);
+  if (result.exists) return true;
+  header(settings); console.log(chalk.yellow.bold('PROJECT INSTRUCTIONS REQUIRED')); console.log(rule);
+  console.log(`  Project       ${project.id}`); console.log(`  Instructions  ${project.instructions || DEFAULT_PROJECT_INSTRUCTIONS}`);
+  console.log(chalk.gray('  Development requires a committed project instructions file.'));
+  console.log(rule);
+  if (!(await yesNo(`Create and open '${project.instructions || DEFAULT_PROJECT_INSTRUCTIONS}' now?`))) return false;
+  try {
+    const created = await createOrOpenProjectInstructions(project, true);
+    console.log(chalk.green(`Created ${created.filename} and opened it in Notepad.`));
+    console.log(chalk.yellow('Edit it if needed, commit it to this project, then start Development again.'));
+  } catch (error) { console.log(chalk.red(`Could not create or open instructions: ${error.message}`)); }
+  await pause();
+  return false;
+}
 async function editProject(settings, project, isNew = false) {
   const projects = normalizeProjects(settings); console.log(chalk.bold(isNew ? '\nNEW PROJECT' : '\nEDIT PROJECT'));
   const id = await readProjectId('Project ID', projects, isNew ? '' : project.id);
@@ -634,7 +677,9 @@ async function editProject(settings, project, isNew = false) {
   const branch = (await input({ message: 'Git branch', default: detected })).trim();
   const roadmap = (await input({ message: 'Roadmap filename', default: project.roadmap || 'ROADMAP.md' })).trim();
   const progress = (await input({ message: 'Progress filename', default: project.progress || 'PROGRESS.md' })).trim();
-  const updated = { id, path: projectPath, branch, roadmap, progress };
+  const instructions = (await input({ message: 'Project instructions filename', default: project.instructions || DEFAULT_PROJECT_INSTRUCTIONS })).trim();
+  const instructionsError = validateProjectInstructionsPath(instructions); if (instructionsError) { console.log(chalk.red(instructionsError)); return pause(); }
+  const updated = { id, path: projectPath, branch, roadmap, progress, instructions };
   if (isNew) projects.push(updated); else Object.assign(project, updated);
   await save(settings); console.log(chalk.green(`Project '${id}' saved.`)); return pause();
 }
@@ -646,12 +691,17 @@ async function projectsMenu(settings) {
       { name: chalk.cyan('+ Add project'), value: 'add' }
     ]);
     if (!action) return;
-    if (action === 'add') { await editProject(settings, { path: '', branch: '', roadmap: '', progress: '' }, true); continue; }
+    if (action === 'add') { await editProject(settings, { path: '', branch: '', roadmap: '', progress: '', instructions: DEFAULT_PROJECT_INSTRUCTIONS }, true); continue; }
     const project = projects.find(item => item.id === action.slice('project:'.length)); if (!project) continue;
     const detail = await pick(`Project: ${project.id}`, [
-      { name: 'Edit project configuration', value: 'edit' }, { name: chalk.red('Remove project configuration'), value: 'remove' }
+      { name: 'Edit project configuration', value: 'edit' }, { name: 'Open project instructions', value: 'instructions' }, { name: chalk.red('Remove project configuration'), value: 'remove' }
     ]);
     if (detail === 'edit') await editProject(settings, project);
+    if (detail === 'instructions') {
+      try { const result = await createOrOpenProjectInstructions(project, true); console.log(chalk.green(`${result.created ? 'Created and opened' : 'Opened'} ${result.filename} in Notepad.`)); if (result.created) console.log(chalk.yellow('Commit the new instructions file before starting Development.')); }
+      catch (error) { console.log(chalk.red(`Could not open instructions: ${error.message}`)); }
+      await pause();
+    }
     if (detail === 'remove') {
       if (projects.length === 1) { console.log(chalk.yellow('Keep at least one project configured.')); await pause(); continue; }
       const active = (await listInstances(configPath)).some(instance => instance.projectId === project.id && !isTerminalInstance(instance));

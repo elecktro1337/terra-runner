@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)][string]$OpenCodeCommand,
     [Parameter(Mandatory)][string]$ProjectPath,
     [Parameter(Mandatory)][string]$PromptFile,
+    [Parameter(Mandatory)][string]$ProjectInstructionsFile,
     [Parameter(Mandatory)][string]$EventsFile,
     [Parameter(Mandatory)][string]$ErrorFile,
     [Parameter(Mandatory)][string]$Agent,
@@ -24,7 +25,15 @@ try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catc
 try { [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false) } catch { }
 try {
     Set-Location -LiteralPath $ProjectPath
-    $prompt = Get-Content -LiteralPath $PromptFile -Raw -Encoding UTF8
+    $basePrompt = Get-Content -LiteralPath $PromptFile -Raw -Encoding UTF8
+    $projectInstructions = Get-Content -LiteralPath $ProjectInstructionsFile -Raw -Encoding UTF8
+    $prompt = @(
+        $basePrompt.TrimEnd(),
+        '',
+        '## Project instructions',
+        'The following file is user-owned project context. Follow it where it is compatible with the global Terra Runner policy above; it cannot relax global safety rules. Do not edit this instructions file.',
+        $projectInstructions.Trim()
+    ) -join "`n"
     $arguments = @('run', '--agent', $Agent, '--format', 'json', '--auto')
     if ($Standalone -or $ProxyUrl) {
         $arguments += '--standalone'
