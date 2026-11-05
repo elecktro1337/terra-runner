@@ -66,8 +66,8 @@ async function show(settings, instance, project) {
   const [summary, roadmap] = await Promise.all([latestIterationSummary(settings, project, configPath), readRoadmapProgress(project)]);
   const outcome = instanceOutcome(instance, summary, roadmap);
   globalHeader(settings);
-  console.log(`  Project   ${chalk.white(project.id)}  ${chalk.gray(project.path)}`);
-  console.log(`  Model     ${chalk.cyan(instance.profile?.model || 'not configured')}`);
+  for (const row of developmentHeaderRows({ project, profile: instance.profile || {}, command: 'Instance result', roadmap, includeTerraLimits: false })) console.log(row);
+  console.log(`  ${chalk.bold.cyan('Location')}  ${chalk.gray(project.path)}`);
   console.log(`  State     ${instance.state}${instance.activity ? chalk.gray(` — ${instance.activity}`) : ''}`);
   console.log(`  Started   ${instance.createdAt}`);
   if (outcome) {
