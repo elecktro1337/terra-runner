@@ -67,7 +67,7 @@ function renderRunHeader(settings, project, profile, command, roadmap) {
   const dynamic = developmentHeaderRows({ project, profile, command, roadmap, includeTerraLimits: false, run: { elapsedSeconds: 0, lastTask: '', lastCommit: null } });
   const rows = [...prefix, ...dynamic, rule];
   for (const row of rows) console.log(row);
-  return { statusRow: rows.reduce((count, row) => count + String(row).split(/\r?\n/).length, 0), liveHeaderRow: Math.max(0, prefix.reduce((count, row) => count + String(row).split(/\r?\n/).length, 0) - 1), command };
+  return { statusRow: rows.reduce((count, row) => count + String(row).split(/\r?\n/).length, 0), liveHeaderRow: prefix.reduce((count, row) => count + String(row).split(/\r?\n/).length, 0), command };
 }
 async function pick(message, choices) { try { return await select({ message, choices: [...choices, { name: '← Back', value: null }], loop: false }); } catch (error) { if (error?.name === 'ExitPromptError') return null; throw error; } }
 async function load() { const [settings, instance] = await Promise.all([fs.readFile(configPath, 'utf8').then(JSON.parse), readInstance(configPath, instanceId)]); if (!instance) throw new Error('The dispatcher instance record no longer exists.'); const project = (settings.projects || []).find(item => item.id === instance.projectId); if (!project) throw new Error(`Project '${instance.projectId}' was removed from the configuration.`); return { settings, instance, project }; }

@@ -322,9 +322,7 @@ function renderDevelopmentHeader(project, profile, command, roadmap) {
   for (const row of rows) console.log(row);
   return {
     statusRow: rows.reduce((total, row) => total + String(row).split(/\r?\n/).length, 0),
-    // console.log advances after the printed prefix. Fixed cursor rows are
-    // zero-based, so rendering starts on the first dynamic header row.
-    liveHeaderRow: Math.max(0, prefix.reduce((total, row) => total + String(row).split(/\r?\n/).length, 0) - 1),
+    liveHeaderRow: prefix.reduce((total, row) => total + String(row).split(/\r?\n/).length, 0),
     command
   };
 }
