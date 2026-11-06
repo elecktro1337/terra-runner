@@ -101,6 +101,14 @@ Describe 'Terra Runner safe command dispatch' {
         $prompt | Should Match 'TERRA_SELECTED_TASK: <task ID>'
         $prompt | Should Match 'Before using any tool'
     }
+    It 'requires autonomous decomposition before a broad roadmap item becomes a WIP loop' {
+        $prompt = Get-Content -LiteralPath (Join-Path $here 'terra-prompt.md') -Raw
+        $prompt | Should Match '## Roadmap task sizing'
+        $prompt | Should Match 'autonomously decompose it instead of making another WIP slice'
+        $prompt | Should Match 'non-checkbox.*parent'
+        $prompt | Should Match 'fresh unused `PREFIX-####` IDs'
+        $prompt | Should Match 'Stay within the selected task''s direct scope'
+    }
     It 'does not start an agent for Report' {
         & $runner -Project safe-project -Config $script:config -Report
         (Test-Path -LiteralPath $script:calls) | Should Be $false

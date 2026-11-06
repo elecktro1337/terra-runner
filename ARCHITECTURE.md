@@ -34,8 +34,11 @@ path plus its `-Suite` invocation contract. The harness, never the prompt or
 Terra state, owns local `.env` loading, loopback Compose lifecycle and
 disposable test schemas. A successful worker that leaves partial work in a
 clean-start worktree is checkpointed immediately with a normal hooked WIP
-commit and verified push; it becomes implementation progress but cannot tick a
-roadmap checkbox.
+commit and verified push; it becomes bounded implementation progress but
+cannot tick a roadmap checkbox. The global worker policy requires an agent to
+decompose a broad roadmap checkbox into a non-checkbox parent and focused child
+checkboxes before implementation, preventing one roadmap item from becoming an
+unbounded WIP loop.
 
 Terra Runner separates presentation, execution, and persistent project evidence.
 

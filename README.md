@@ -75,7 +75,7 @@ Choose **Development → One iteration** for one explicit agent run. **Main wind
 
 For **Run continuously**, choose the iteration limit at launch:
 
-- `0` means continue until a normal safety stop, budget stop, roadmap completion, or user stop. A larger roadmap item may span several commits: a clean, pushed code or test change counts as verified implementation progress even before its checkbox is completed.
+- `0` means continue until a normal safety stop, budget stop, roadmap completion, or user stop. A larger roadmap item may span several commits, but it must still be closeable: when an agent detects a broad item before implementation, it commits an explicit parent/child decomposition and then completes the resulting focused child tasks. Clean, pushed code or test changes are verified implementation progress only within the bounded uncompleted-implementation safety window.
 - `1`–`1000` limits only this run and is not saved in the profile.
 
 A main-window run applies the selected profile's provider-snapshot and limit policy. If a required snapshot is missing or stale, the UI requests a current provider-reported value before starting. Dispatcher instances deliberately do not apply Terra snapshot, budget, quota, or reservation checks. A runner stops when it has repeatedly produced neither a completed roadmap item nor a clean, pushed code/test change. Project-local services and test tooling are recovered autonomously; Terra will not fake evidence for a live service or test.
@@ -103,7 +103,7 @@ worktree without one can be manual work, so it remains blocked for review.
 
 ### WIP checkpoints
 
-When an iteration exits successfully without an OpenCode stream error but leaves useful uncommitted work in a worktree that was clean at the start, Terra validates the staged diff, runs the repository's normal Git hooks/secret scanning through a standard commit, and pushes `wip(terra): checkpoint <task-id> <run-id>`. This preserves partial implementation without ticking a roadmap checkbox; Continuous treats the pushed checkpoint as implementation progress and proceeds to the next iteration. Any failed diff check, hook, provider/error event, abort, or unavailable push stops with the precise reason and leaves the work for review. The interrupted-run marker remains the fallback for process/computer failure.
+When an iteration exits successfully without an OpenCode stream error but leaves useful uncommitted work in a worktree that was clean at the start, Terra validates the staged diff, runs the repository's normal Git hooks/secret scanning through a standard commit, and pushes `wip(terra): checkpoint <task-id> <run-id>`. This preserves partial implementation without ticking a roadmap checkbox. A clean, pushed checkpoint can continue a genuinely focused multi-commit task, but Terra stops after six consecutive implementation iterations without a roadmap completion; it does not allow an unattended WIP loop. Broad work must first be decomposed into focused child checkboxes in a dedicated documentation commit. Any failed diff check, hook, provider/error event, abort, or unavailable push stops with the precise reason and leaves the work for review. The interrupted-run marker remains the fallback for process/computer failure.
 
 ## Safe CLI commands
 
