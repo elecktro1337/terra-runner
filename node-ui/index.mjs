@@ -18,6 +18,7 @@ import { LiveFooter, LiveHeaderBlock, LiveStatusBlock } from './lib/live-footer.
 import { selectedRoadmapTaskFromEvent } from './lib/task-selection.mjs';
 import { developmentHeaderRows, elapsedSecondsSince } from './lib/run-display.mjs';
 import { readRoadmapProgress } from './lib/roadmap.mjs';
+import { humanActionCounts, parseHumanActions } from './lib/human-actions.mjs';
 import { instanceTerminalLauncher } from './lib/instance-launcher.mjs';
 import { ensureProjectAuthStore, isProjectManagedStore, removeProjectAuthStore } from './lib/project-auth-stores.mjs';
 import { completedIterationText } from './lib/iteration-history.mjs';
@@ -229,6 +230,11 @@ async function runWithTui(runnerArgs, settings, project, profile, mode, header) 
             }
               if (event.type === 'recovery-finished') { checkpoint = `Recovered interrupted work: ${event.recoveryCommit || 'checkpoint committed and pushed'}`; stage = 'Recovered interrupted Terra work'; }
               if (event.type === 'provider-retry-waiting') { checkpoint = `Provider interrupted the response; retry ${event.attempt || 1}/${event.maximumAttempts || '?'}`; stage = `Waiting ${event.delaySeconds || '?'}s before provider retry`; }
+              if (event.type === 'human-actions-recorded') { checkpoint = `Recorded human action: ${(event.ids || []).join(', ')}`; }
+              if (event.type === 'human-action-required') {
+                const first = Array.isArray(event.actions) ? event.actions[0] : null;
+                stage = 'Paused: human action required'; checkpoint = first ? `${first.id}: ${first.do || first.summary} Evidence: ${first.completionEvidence || 'see roadmap'}` : 'See Development → Human actions.';
+              }
               if (event.type === 'iteration-finished') {
                 const completed = `${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`;
                 completedIterations.push(completed);
@@ -608,14 +614,85 @@ async function runInMainWindow(settings, command, project, profile, maxIteration
 async function developmentMenu(settings) {
   while (true) {
     header(settings); console.log(chalk.bold('DEVELOPMENT')); console.log(rule);
-    const command = await pick('Development', [{ name: 'One iteration', value: 'once' }, { name: 'Dry run', value: 'dry-run' }, { name: 'Continuous', value: 'continuous' }, { name: 'Active instances', value: 'instances' }]);
+    const command = await pick('Development', [{ name: 'One iteration', value: 'once' }, { name: 'Dry run', value: 'dry-run' }, { name: 'Continuous', value: 'continuous' }, { name: 'Human actions', value: 'human-actions' }, { name: 'Active instances', value: 'instances' }]);
     if (!command) return;
     if (command === 'instances') { await instancesMenu(settings); continue; }
+    if (command === 'human-actions') { await humanActionsMenu(settings); continue; }
     const selected = await chooseDevelopmentLaunch(settings, command); if (!selected) continue;
     if (!(await ensureProjectInstructionsForLaunch(settings, selected.project))) continue;
     const launch = { command, maxIterations: selected.maxIterations };
     if (selected.target === 'instance') { if (await yesNo(`Open '${selected.project.id}' in a separate terminal and start ${command}?`)) await startDispatcherInstance(settings, selected.project, selected.profile, launch); continue; }
     await runInMainWindow(settings, command, selected.project, selected.profile, selected.maxIterations);
+  }
+}
+function humanActionLines(action) {
+  return [
+    `${chalk.yellow(action.id)}  ${action.summary || action.do || 'Human action required'}`,
+    `  Why: ${action.why || 'Not recorded'}`,
+    `  Do: ${chalk.cyan(action.do || 'Not recorded')}`,
+    `  Evidence: ${action.completionEvidence || 'Not recorded'}`,
+    `  Blocks: ${action.blocks.length ? action.blocks.join(', ') : 'no technical task recorded'}`
+  ];
+}
+async function projectRoadmapText(project) {
+  return fs.readFile(path.join(project.path, project.roadmap || 'ROADMAP.md'), 'utf8');
+}
+async function completeHumanAction(project, action, evidence) {
+  const roadmapFile = path.join(project.path, project.roadmap || 'ROADMAP.md');
+  const progressFile = path.join(project.path, project.progress || 'PROGRESS.md');
+  const [roadmapBefore, progressBefore] = await Promise.all([fs.readFile(roadmapFile, 'utf8'), fs.readFile(progressFile, 'utf8')]);
+  const status = await execute('git', ['-C', project.path, 'status', '--porcelain'], root);
+  if (status.trim()) throw new Error('Commit or stash the existing project changes before completing a human action.');
+  const item = new RegExp(`(^\\s*-\\s*)\\[ \\](\\s+\\*\\*${action.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+\\[human\\]\\*\\*)`, 'mi');
+  if (!item.test(roadmapBefore)) throw new Error('This human action is no longer open. Refresh the list.');
+  const roadmapAfter = roadmapBefore.replace(item, '$1[x]$2');
+  const stamp = new Date().toISOString();
+  const progressAfter = `${progressBefore.trimEnd()}\n- ${stamp} — ${action.id} completed by human. Evidence: ${evidence.trim()}. Unblocked: ${action.blocks.join(', ') || 'none recorded'}.\n`;
+  try {
+    await fs.writeFile(roadmapFile, roadmapAfter, 'utf8'); await fs.writeFile(progressFile, progressAfter, 'utf8');
+    await execute('git', ['-C', project.path, 'add', '--', path.basename(roadmapFile), path.basename(progressFile)], root);
+    await execute('git', ['-C', project.path, 'diff', '--cached', '--check'], root);
+    await execute('git', ['-C', project.path, 'commit', '-m', `docs(roadmap): complete ${action.id}`], root);
+    await execute('git', ['-C', project.path, 'push', 'origin', project.branch], root);
+  } catch (error) {
+    // Before a successful commit this restores the explicitly captured clean
+    // state. A post-commit push failure intentionally remains visible to Git.
+    const now = await execute('git', ['-C', project.path, 'status', '--porcelain'], root).catch(() => '');
+    if (now.trim()) { await fs.writeFile(roadmapFile, roadmapBefore, 'utf8'); await fs.writeFile(progressFile, progressBefore, 'utf8'); await execute('git', ['-C', project.path, 'restore', '--staged', '--', path.basename(roadmapFile), path.basename(progressFile)], root).catch(() => {}); }
+    throw error;
+  }
+}
+async function humanActionsMenu(settings) {
+  while (true) {
+    const project = await chooseProject(settings); if (!project) return;
+    while (true) {
+      let text = ''; try { text = await projectRoadmapText(project); } catch { console.log(chalk.red('The configured roadmap file could not be read.')); await pause(); break; }
+      const actions = parseHumanActions(text); const counts = humanActionCounts(text);
+      header(settings); console.log(chalk.bold('HUMAN ACTIONS')); console.log(rule);
+      console.log(`  Project  ${chalk.cyan(project.id)}  │  ${chalk.yellow(`${counts.open} open`)}  │  ${counts.completed} completed`);
+      if (!actions.length) console.log(chalk.gray('  No human actions are recorded. Development continues with eligible technical tasks.'));
+      const choice = await pick('Open a human action', [
+        ...actions.map(action => ({ name: `${action.completed ? chalk.gray('✓') : chalk.yellow('!')} ${action.id}  ${action.summary || action.do}`, value: action.id })),
+        { name: 'Open roadmap', value: 'roadmap' }, { name: 'Refresh', value: 'refresh' }
+      ]);
+      if (!choice) break;
+      if (choice === 'refresh') continue;
+      if (choice === 'roadmap') { await createOrOpenProjectInstructions({ ...project, instructions: project.roadmap || 'ROADMAP.md' }, false); continue; }
+      const action = actions.find(item => item.id === choice); if (!action) continue;
+      clear(); header(settings); console.log(chalk.bold(`HUMAN ACTION · ${action.id}`)); console.log(rule); humanActionLines(action).forEach(line => console.log(line)); console.log(rule);
+      const detail = await pick(`Human action: ${action.id}`, [
+        ...(action.completed ? [] : [{ name: 'Mark complete', value: 'complete' }]),
+        { name: 'Open roadmap', value: 'roadmap' }, { name: 'Refresh', value: 'refresh' }
+      ]);
+      if (detail === 'complete') {
+        const evidence = String(await input({ message: 'Completion evidence / result (do not include secrets)' })).trim();
+        if (!evidence) { console.log(chalk.yellow('Completion evidence is required.')); await pause(); continue; }
+        try { await completeHumanAction(project, action, evidence); console.log(chalk.green(`${action.id} marked complete and pushed. Dependent tasks are eligible on the next run.`)); }
+        catch (error) { console.log(chalk.red(`Could not complete ${action.id}: ${error.message}`)); }
+        await pause();
+      }
+      if (detail === 'roadmap') await createOrOpenProjectInstructions({ ...project, instructions: project.roadmap || 'ROADMAP.md' }, false);
+    }
   }
 }
 async function instancesMenu(settings) {

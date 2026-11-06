@@ -91,6 +91,20 @@ worktree without one can be manual work, so it remains blocked for review.
 
 When an iteration exits successfully without an OpenCode stream error but leaves useful uncommitted work in a worktree that was clean at the start, Terra validates the staged diff, runs the repository's normal Git hooks/secret scanning through a standard commit, and pushes `wip(terra): checkpoint <task-id> <run-id>`. This preserves partial implementation without ticking a roadmap checkbox; Continuous treats the pushed checkpoint as implementation progress and proceeds to the next iteration. Any failed diff check, hook, provider/error event, abort, or unavailable push stops with the precise reason and leaves the work for review. The interrupted-run marker remains the fallback for process/computer failure.
 
+### Human actions and blocked task chains
+
+Roadmaps may contain a versioned `## Human actions` section. A human action is
+an external prerequisite, not a development task: it has a `HUM-####` ID,
+does not change roadmap progress, and records why it is needed, the exact
+action, required completion evidence, and the technical task IDs it blocks.
+Workers may request one only with the strict `TERRA_HUMAN_TASK` JSON marker.
+After a clean, verified worker result Terra records the action, adds
+`Depends on: HUM-####` below each affected task, commits and pushes that
+roadmap-only change. It continues independent work. If no eligible technical
+task remains, it pauses before another model iteration and shows the exact
+human action. Use **Development → Human actions** to inspect it and, after a
+non-secret evidence note, mark it complete in a separate pushed commit.
+
 ## Safe CLI commands
 
 All public commands use named parameters. OpenCode starts only with an explicit execution command.

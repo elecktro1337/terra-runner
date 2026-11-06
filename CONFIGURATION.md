@@ -42,6 +42,31 @@ Each project has a stable ID, absolute path, expected Git branch, roadmap filena
 
 `taskIdPattern` is optional. Without it, every Markdown checkbox is a roadmap task. When it is absent, Terra Runner still recognises conventional IDs such as `NTD-0109` in newly completed roadmap entries.
 
+## Human actions in roadmaps
+
+No configuration setting is needed. Each project may maintain this canonical
+roadmap section (usually Terra creates it after a validated worker marker):
+
+```md
+## Human actions
+
+- [ ] **HUM-0001 [human]** — Publish approved sender-domain DNS records.
+  - Why: SPF/DKIM/DMARC evidence cannot be produced from this repository.
+  - Do: Publish the approved records through the DNS owner.
+  - Completion evidence: DNS provider confirmation and commit the checkbox update.
+  - Blocks: NTD-0133, NTD-0136
+```
+
+`HUM-*` entries are excluded from technical roadmap counts. A blocked technical
+item receives an indented `Depends on: HUM-0001` line; more than one open
+human dependency is allowed. The runner skips that item but keeps selecting
+independent technical work. Once no eligible task remains, it pauses with
+`human-action-required` before starting another worker. **Development → Human
+actions** displays the exact work/evidence and can mark an item complete with
+a required non-secret evidence note; the user action updates the roadmap and
+progress file and pushes a normal Git commit. Editing a checkbox manually is
+also recognised at the next selection refresh.
+
 ## Profiles
 
 Profiles are stored under `openCode.profiles`. A profile holds non-secret account identity, model, reasoning variant, policy, optional provider snapshot, and limits. Terra Runner never stores an API key or OAuth token.

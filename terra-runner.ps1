@@ -409,6 +409,64 @@ function Save-TerraWipCheckpoint([string]$Directory, [string]$Branch, [string]$R
         return [pscustomobject]@{ Success=$false; Reason=("wip-checkpoint-failed: " + $_.Exception.Message); Commit='' }
     }
 }
+function Save-TerraHumanActions([string]$RoadmapFile, [string]$Directory, [string]$Branch, $Requests, [int]$Attempts, [int]$DelaySeconds, [string]$StopPath, [string]$AbortPath) {
+    if (@($Requests).Count -eq 0) { return [pscustomobject]@{ Success=$true; Ids=@(); Commit=''; Reason='' } }
+    $original=[IO.File]::ReadAllText($RoadmapFile,[Text.UTF8Encoding]::new($false)); $lines=[System.Collections.Generic.List[string]]::new([string[]]($original -split "`r?`n")); $existing=@(Get-HumanActions $RoadmapFile)
+    $ids=[System.Collections.Generic.List[string]]::new(); $changed=$false
+    foreach($request in @($Requests)) {
+        $same=@($existing | Where-Object { -not $_.Completed -and $_.Why.Trim().ToLowerInvariant() -eq $request.Why.Trim().ToLowerInvariant() -and $_.Do.Trim().ToLowerInvariant() -eq $request.Do.Trim().ToLowerInvariant() -and $_.CompletionEvidence.Trim().ToLowerInvariant() -eq $request.CompletionEvidence.Trim().ToLowerInvariant() } | Select-Object -First 1)
+        if ($same.Count) {
+            $humanId=$same[0].Id
+            # A later worker can discover another technical task blocked by the
+            # same external action. Keep the canonical action entry complete.
+            for($lineIndex=0;$lineIndex -lt $lines.Count;$lineIndex++) {
+                if ($lines[$lineIndex] -notmatch (('(?i)^\s*-\s*\[[ xX]\]\s+\*\*' + [regex]::Escape($humanId) + '\s+\[human\]\*\*'))) { continue }
+                for($detailIndex=$lineIndex+1;$detailIndex -lt $lines.Count;$detailIndex++) {
+                    if ($lines[$detailIndex] -match '^\s*-\s*\[[ xX]\]' -or $lines[$detailIndex] -match '^\s*#{1,2}\s+') { break }
+                    if ($lines[$detailIndex] -match '(?i)^\s+-\s+Blocks:\s*(.*)$') {
+                        $known=@([regex]::Matches($Matches[1],'(?i)[A-Z][A-Z0-9_-]*-\d{2,}') | ForEach-Object { $_.Value.ToUpperInvariant() })
+                        $merged=@($known + @($request.Blocks) | Select-Object -Unique)
+                        if (($merged -join ', ') -ne ($known -join ', ')) { $lines[$detailIndex]='  - Blocks: '+($merged -join ', '); $changed=$true }
+                        break
+                    }
+                }
+                break
+            }
+        } else {
+            $numbers=@($existing | ForEach-Object { if ($_.Id -match 'HUM-(\d+)$') { [int]$Matches[1] } }); $next=if($numbers.Count){(($numbers | Measure-Object -Maximum).Maximum+1)}else{1}; $humanId=('HUM-{0:D4}' -f $next)
+            if (-not ($lines -match '^##\s+Human actions\s*$')) { if ($lines.Count -and $lines[$lines.Count-1] -ne '') { $lines.Add('') }; $lines.Add('## Human actions'); $lines.Add('') }
+            if ($lines.Count -and $lines[$lines.Count-1] -ne '') { $lines.Add('') }
+            $summary=$request.Do; if($summary.Length -gt 180){$summary=$summary.Substring(0,177)+'...'}
+            $lines.Add("- [ ] **$humanId [human]** — $summary"); $lines.Add("  - Why: $($request.Why)"); $lines.Add("  - Do: $($request.Do)"); $lines.Add("  - Completion evidence: $($request.CompletionEvidence)"); $lines.Add(('  - Blocks: ' + ($request.Blocks -join ', ')))
+            $existing += [pscustomobject]@{ Id=$humanId; Completed=$false; Why=$request.Why; Do=$request.Do; CompletionEvidence=$request.CompletionEvidence }; $changed=$true
+        }
+        [void]$ids.Add($humanId)
+        foreach($taskId in @($request.Blocks)) {
+            for($index=0;$index -lt $lines.Count;$index++) {
+                if ($lines[$index] -notmatch '^\s*-\s*\[ \]') { continue }; $first=[regex]::Match($lines[$index],'[A-Za-z][A-Za-z0-9_]{1,31}-\d{2,}'); if(-not $first.Success -or $first.Value -ne $taskId){continue}
+                $insert=$index+1; $found=$false
+                while($insert -lt $lines.Count -and $lines[$insert] -notmatch '^\s*-\s*\[[ xX]\]' -and $lines[$insert] -notmatch '^\s*#{1,2}\s+') {
+                    if($lines[$insert] -match '(?i)^\s+-\s+Depends on:\s*(.+)$') { $deps=@([regex]::Matches($Matches[1],'(?i)HUM-\d{4,}')|ForEach-Object{$_.Value.ToUpperInvariant()}); if($deps -notcontains $humanId){$lines[$insert]='  - Depends on: '+(@($deps+$humanId|Select-Object -Unique)-join ', ');$changed=$true};$found=$true;break };$insert++
+                }
+                if(-not $found){$lines.Insert($insert,"  - Depends on: $humanId");$changed=$true}; break
+            }
+        }
+    }
+    if(-not $changed){return [pscustomobject]@{Success=$true;Ids=@($ids.ToArray());Commit='';Reason=''}}
+    try {
+        [IO.File]::WriteAllText($RoadmapFile,(($lines -join [Environment]::NewLine).TrimEnd()+[Environment]::NewLine),[Text.UTF8Encoding]::new($false))
+        $relative=[IO.Path]::GetRelativePath($Directory,$RoadmapFile).Replace('\','/')
+        Invoke-Cli 'git' @('-C',$Directory,'add','--',$relative) $Directory | Out-Null
+        Invoke-Cli 'git' @('-C',$Directory,'diff','--cached','--check') $Directory | Out-Null
+        Invoke-Cli 'git' @('-C',$Directory,'commit','-m',('chore(terra): record human action '+($ids -join ', '))) $Directory | Out-Null
+        $publish=Wait-ForGitRemotePublish $Directory $Branch $Attempts $DelaySeconds $StopPath $AbortPath
+        if(-not $publish.Success){return [pscustomobject]@{Success=$false;Ids=@($ids.ToArray());Commit=(Get-Head $Directory);Reason=$(if($publish.Interrupted){$publish.Reason}else{"human-action-push-unverified: $($publish.Error)"})}}
+        return [pscustomobject]@{Success=$true;Ids=@($ids.ToArray());Commit=(Get-Head $Directory);Reason=''}
+    } catch {
+        try { [IO.File]::WriteAllText($RoadmapFile,$original,[Text.UTF8Encoding]::new($false)); Invoke-Cli 'git' @('-C',$Directory,'restore','--staged','--',$RoadmapFile) $Directory | Out-Null } catch { }
+        return [pscustomobject]@{Success=$false;Ids=@($ids.ToArray());Commit='';Reason=('human-action-recording-failed: '+$_.Exception.Message)}
+    }
+}
 function Get-EventErrors([string]$EventsFile) {
     $streamErrors = 0
     $toolErrorIds = [System.Collections.Generic.HashSet[string]]::new()
@@ -539,9 +597,48 @@ function Wait-ForOpenCodeRecovery([string]$Executable, [string]$Directory, $Budg
 function Test-RoadmapTask([string]$Line, [bool]$Completed, [string]$TaskIdPattern = '') {
     $checkbox = if ($Completed) { '^\s*-\s*\[[xX]\]' } else { '^\s*-\s*\[ \]' }
     if ($Line -notmatch $checkbox) { return $false }
+    # Human actions are versioned roadmap evidence, not implementation tasks.
+    if ($Line -match '(?i)\*\*HUM-\d{4,}\s+\[human\]\*\*') { return $false }
     if ([string]::IsNullOrWhiteSpace($TaskIdPattern)) { return $true }
     try { return $Line -match $TaskIdPattern }
     catch { throw "Invalid project taskIdPattern: $TaskIdPattern" }
+}
+function Get-HumanActions([string]$RoadmapFile) {
+    $lines = @([System.IO.File]::ReadAllLines($RoadmapFile)); $actions = [System.Collections.Generic.List[object]]::new()
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        $match = [regex]::Match($lines[$index],'(?i)^\s*-\s*\[([ xX])\]\s+\*\*(HUM-\d{4,})\s+\[human\]\*\*\s*[—-]\s*(.+?)\s*$')
+        if (-not $match.Success) { continue }
+        $action = [ordered]@{ Id=$match.Groups[2].Value.ToUpperInvariant(); Completed=($match.Groups[1].Value -match '[xX]'); Summary=$match.Groups[3].Value.Trim(); Why=''; Do=''; CompletionEvidence=''; Blocks=@(); Index=$index }
+        for ($child = $index + 1; $child -lt $lines.Count; $child++) {
+            if ($lines[$child] -match '^\s*-\s*\[[ xX]\]' -or $lines[$child] -match '^\s*#{1,2}\s+') { break }
+            $detail = [regex]::Match($lines[$child],'(?i)^\s+-\s+(Why|Do|Completion evidence|Blocks):\s*(.*?)\s*$')
+            if (-not $detail.Success) { continue }
+            $key=$detail.Groups[1].Value.ToLowerInvariant(); $value=$detail.Groups[2].Value.Trim()
+            if ($key -eq 'why') { $action.Why=$value } elseif ($key -eq 'do') { $action.Do=$value } elseif ($key -eq 'completion evidence') { $action.CompletionEvidence=$value } else { $action.Blocks=@([regex]::Matches($value,'(?i)[A-Z][A-Z0-9_-]*-\d{2,}') | ForEach-Object { $_.Value.ToUpperInvariant() }) }
+        }
+        $actions.Add([pscustomobject]$action)
+    }
+    return @($actions.ToArray())
+}
+function Get-RoadmapTaskHumanDependencies([string]$RoadmapFile, [string]$TaskId) {
+    $lines=@([System.IO.File]::ReadAllLines($RoadmapFile)); $wanted=$TaskId.ToUpperInvariant(); $ids=[System.Collections.Generic.List[string]]::new()
+    for ($index=0; $index -lt $lines.Count; $index++) {
+        if ($lines[$index] -notmatch '^\s*-\s*\[[ xX]\]') { continue }
+        if ($lines[$index] -match '(?i)\*\*HUM-\d{4,}\s+\[human\]\*\*') { continue }
+        $first=[regex]::Match($lines[$index],'[A-Za-z][A-Za-z0-9_]{1,31}-\d{2,}')
+        if (-not $first.Success -or -not [string]::Equals($first.Value,$wanted,[StringComparison]::OrdinalIgnoreCase)) { continue }
+        for ($child=$index+1; $child -lt $lines.Count; $child++) {
+            if ($lines[$child] -match '^\s*-\s*\[[ xX]\]' -or $lines[$child] -match '^\s*#{1,2}\s+') { break }
+            $dependency=[regex]::Match($lines[$child],'(?i)^\s+-\s+Depends on:\s*(.+)$')
+            if ($dependency.Success) { foreach($id in [regex]::Matches($dependency.Groups[1].Value,'(?i)HUM-\d{4,}')) { if (-not $ids.Contains($id.Value.ToUpperInvariant())) { $ids.Add($id.Value.ToUpperInvariant()) } } }
+        }
+        break
+    }
+    return @($ids.ToArray())
+}
+function Get-OpenHumanBlockers([string]$RoadmapFile, [string]$TaskId) {
+    $open=@(Get-HumanActions $RoadmapFile | Where-Object { -not $_.Completed }); $required=@(Get-RoadmapTaskHumanDependencies $RoadmapFile $TaskId)
+    return @($open | Where-Object { $required -contains $_.Id })
 }
 function Count-Completed([string]$RoadmapFile, [string]$TaskIdPattern = '') {
     $count = 0
@@ -567,9 +664,34 @@ function Get-NextPendingRoadmapTask([string]$RoadmapFile, [string]$TaskIdPattern
         $id = ''; try { $match = [regex]::Match($line,$idPattern); if ($match.Success) { $id = $match.Value } } catch { }
         $title = ($line -replace '^\s*-\s*\[ \]\s*','' -replace '\s+',' ').Trim()
         if ($title.Length -gt 140) { $title = $title.Substring(0,140) + '...' }
-        return [pscustomobject]@{ Id=$id; Title=$title }
+        $blockers=@(Get-OpenHumanBlockers $RoadmapFile $id)
+        if ($blockers.Count -gt 0) { continue }
+        return [pscustomobject]@{ Id=$id; Title=$title; Blockers=@() }
     }
-    return [pscustomobject]@{ Id=''; Title='' }
+    return [pscustomobject]@{ Id=''; Title=''; Blockers=@() }
+}
+function Get-OpenHumanActionSummary([string]$RoadmapFile) {
+    return @((Get-HumanActions $RoadmapFile | Where-Object { -not $_.Completed }) | ForEach-Object { [ordered]@{ id=$_.Id; summary=$_.Summary; why=$_.Why; do=$_.Do; completionEvidence=$_.CompletionEvidence; blocks=@($_.Blocks) } })
+}
+function Get-WorkerHumanTaskRequests([string]$EventsFile, [string]$RoadmapFile, [string]$TaskIdPattern = '') {
+    if (-not (Test-Path -LiteralPath $EventsFile -PathType Leaf)) { return @() }
+    $requests=[System.Collections.Generic.List[object]]::new(); $seen=[System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach($line in [System.IO.File]::ReadLines($EventsFile,[Text.UTF8Encoding]::new($false))) {
+        try { $event=ConvertFrom-Json -InputObject $line -AsHashtable -Depth 60 } catch { continue }
+        if ([string](Read-Member $event 'type') -ne 'text') { continue }
+        $part=Read-Member $event 'part'; $text=[string](Read-Member $part 'text'); if (-not $text) { $text=[string](Read-Member $event 'text') }
+        foreach($marker in [regex]::Matches($text,'(?im)^\s*TERRA_HUMAN_TASK\s*:\s*(\{[^\r\n]+\})\s*$')) {
+            try { $payload=ConvertFrom-Json -InputObject $marker.Groups[1].Value -AsHashtable -Depth 10 } catch { continue }
+            $why=[string](Read-Member $payload 'why'); $do=[string](Read-Member $payload 'do'); $evidence=[string](Read-Member $payload 'completionEvidence'); $blocks=@(Read-Member $payload 'blocks' | ForEach-Object { [string]$_ })
+            if ([string]::IsNullOrWhiteSpace($why) -or [string]::IsNullOrWhiteSpace($do) -or [string]::IsNullOrWhiteSpace($evidence) -or $blocks.Count -eq 0 -or $why.Length -gt 800 -or $do.Length -gt 800 -or $evidence.Length -gt 800) { continue }
+            $valid=[System.Collections.Generic.List[string]]::new()
+            foreach($id in $blocks) { $candidate=$id.ToUpperInvariant(); if ($candidate -match '^HUM-' -or -not (Get-RoadmapTaskTitle $RoadmapFile $candidate) -or -not (Test-RoadmapTaskPending $RoadmapFile $candidate)) { continue }; $valid.Add($candidate) }
+            if ($valid.Count -eq 0) { continue }
+            $key=(($why.Trim().ToLowerInvariant())+'|'+($do.Trim().ToLowerInvariant())+'|'+($evidence.Trim().ToLowerInvariant())+'|'+(($valid.ToArray() | Sort-Object) -join ','))
+            if ($seen.Add($key) -and $requests.Count -lt 8) { $requests.Add([pscustomobject]@{ Why=$why.Trim(); Do=$do.Trim(); CompletionEvidence=$evidence.Trim(); Blocks=@($valid.ToArray()); Key=$key }) }
+        }
+    }
+    return @($requests.ToArray())
 }
 function Get-RoadmapTaskTitle([string]$RoadmapFile, [string]$TaskId) {
     if ([string]::IsNullOrWhiteSpace($TaskId) -or -not (Test-Path -LiteralPath $RoadmapFile -PathType Leaf)) { return '' }
@@ -584,6 +706,15 @@ function Get-RoadmapTaskTitle([string]$RoadmapFile, [string]$TaskId) {
         return $title
     }
     return ''
+}
+function Test-RoadmapTaskPending([string]$RoadmapFile, [string]$TaskId) {
+    $wanted=$TaskId.ToUpperInvariant()
+    foreach($line in [System.IO.File]::ReadAllLines($RoadmapFile)) {
+        if ($line -notmatch '^\s*-\s*\[ \]') { continue }
+        $first=[regex]::Match($line,'[A-Za-z][A-Za-z0-9_]{1,31}-\d{2,}')
+        if ($first.Success -and [string]::Equals($first.Value,$wanted,[StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
 }
 function Get-WorkerSelectedTaskId([string]$EventsFile, [string]$RoadmapFile) {
     if (-not (Test-Path -LiteralPath $EventsFile -PathType Leaf)) { return '' }
@@ -1013,7 +1144,7 @@ function Write-EnglishDailyReport([string]$DataDirectory, [string]$Date) {
     Ensure-Directory $reportDirectory
     $cost = 0.0; $tasks = 0; $pushes = 0; $code = 0; $tests = 0; $docs = 0; $errors = 0
     $usageKinds = [System.Collections.Generic.HashSet[string]]::new(); $latestQuota = $null
-    $ids = [System.Collections.Generic.HashSet[string]]::new(); $commits = [System.Collections.Generic.List[string]]::new()
+    $ids = [System.Collections.Generic.HashSet[string]]::new(); $humanIds = [System.Collections.Generic.HashSet[string]]::new(); $commits = [System.Collections.Generic.List[string]]::new()
     foreach ($summary in $summaries) {
         $kind = [string](Read-Member $summary 'accountUsageKind'); if (-not $kind) { $kind = 'balance' }; [void]$usageKinds.Add($kind)
         $delta = Read-Member $summary 'costDeltaUSD'; if ($kind -eq 'balance' -and $null -ne $delta) { $cost += [double]$delta }
@@ -1022,6 +1153,7 @@ function Write-EnglishDailyReport([string]$DataDirectory, [string]$Date) {
         if ([bool](Read-Member $summary 'pushVerified')) { $pushes++ }
         $code += [int](Read-Member $summary 'codeFilesChanged'); $tests += [int](Read-Member $summary 'testFilesChanged'); $docs += [int](Read-Member $summary 'documentationFilesChanged'); $errors += [int](Read-Member $summary 'toolErrors')
         foreach ($id in @(Read-Member $summary 'completedTaskIds')) { if ($id) { [void]$ids.Add([string]$id) } }
+        foreach ($id in @(Read-Member $summary 'humanActionsRecorded')) { if ($id) { [void]$humanIds.Add([string]$id) } }
         foreach ($commit in @(Read-Member $summary 'commits')) { if ($commit) { $commits.Add(([string](Read-Member $commit 'hash') + ' ' + [string](Read-Member $commit 'subject'))) } }
     }
     $rows = [System.Collections.Generic.List[string]]::new()
@@ -1034,6 +1166,7 @@ function Write-EnglishDailyReport([string]$DataDirectory, [string]$Date) {
     else { $rows.Add('- Mixed account usage: see each iteration policy below.') }
     $rows.Add("- Changed files: code **$code**, tests **$tests**, documentation **$docs**; tool errors **$errors**")
     if ($ids.Count) { $rows.Add('- Completed task IDs: ' + (@($ids | Sort-Object) -join ', ')) }
+    if ($humanIds.Count) { $rows.Add('- Human actions recorded: ' + (@($humanIds | Sort-Object) -join ', ')) }
     if ($commits.Count) { $rows.Add(''); $rows.Add('## Commits'); foreach ($commit in $commits) { $rows.Add('- ' + $commit) } }
     $rows.Add(''); $rows.Add('| Time | Iteration | Policy | Tasks | Code | Tests | Docs | Usage | Push | Stop reason |'); $rows.Add('|---|---|---|---:|---:|---:|---:|---|---|---|')
     foreach ($summary in $summaries) {
@@ -1351,10 +1484,17 @@ try {
         }
         $pending = Count-Pending $roadmap $taskIdPattern
         if ($pending -eq 0) { Write-Host 'No pending roadmap checkbox tasks found. Stopping.'; break }
+        $plannedTask = Get-NextPendingRoadmapTask $roadmap $taskIdPattern
+        if ([string]::IsNullOrWhiteSpace($plannedTask.Id)) {
+            $actions=@(Get-OpenHumanActionSummary $roadmap)
+            Write-Host 'All remaining technical roadmap tasks are blocked by required human actions. No OpenCode worker was started.' -ForegroundColor Yellow
+            foreach($action in $actions) { Write-Host ("  {0}: {1}`n    Do: {2}`n    Evidence: {3}`n    Blocks: {4}" -f $action.id,$action.summary,$action.do,$action.completionEvidence,($action.blocks -join ', ')) -ForegroundColor Yellow }
+            Write-UiEvent 'human-action-required' @{ actions=$actions; pending=$pending; reason='human-action-required' }
+            break
+        }
         # The file is user-owned and versioned. Re-check it before every worker
         # so a newly committed project rule applies to the next iteration.
         Assert-ProjectInstructionsFile $repo $projectInstructions
-        $plannedTask = Get-NextPendingRoadmapTask $roadmap $taskIdPattern
         $headBefore = Get-Head $repo
         $doneBefore = Count-Completed $roadmap $taskIdPattern
         $runId = (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-' + [guid]::NewGuid().ToString('N').Substring(0,6)
@@ -1502,6 +1642,20 @@ try {
         elseif (-not $pushVerified -and -not $termination) { $termination = "git-remote-verification-error: $($remotePublish.Error)" }
         if (-not $pushVerified -and -not $termination) { $termination = 'local-and-remote-branch-heads-differ' }
         if ($gitStatus.Trim() -eq '' -and $pushVerified) { Clear-TerraRecoveryMarker $projectData }
+        $humanActionsRecorded=@(); $humanActionCommit=''
+        # Markers are advisory until the worker has exited cleanly and all of
+        # its implementation/WIP work is verified on the configured remote.
+        if ($exitCode -eq 0 -and $eventErrors -eq 0 -and -not $termination -and $gitStatus.Trim() -eq '' -and $pushVerified) {
+            $humanRequests=@(Get-WorkerHumanTaskRequests $eventsPath $roadmap $taskIdPattern)
+            if ($humanRequests.Count) {
+                $humanSave=Save-TerraHumanActions $roadmap $repo ([string]$projectConfig.branch) $humanRequests $maxPushRetries $pushRetryDelaySeconds $stopPath $abortPath
+                if ($humanSave.Success) {
+                    $humanActionsRecorded=@($humanSave.Ids); $humanActionCommit=[string]$humanSave.Commit
+                    if ($humanActionsRecorded.Count) { Write-Host ('Recorded required human action(s): ' + ($humanActionsRecorded -join ', ')) -ForegroundColor Yellow; Write-UiEvent 'human-actions-recorded' @{ ids=$humanActionsRecorded; commit=$humanActionCommit; actions=(Get-OpenHumanActionSummary $roadmap) } }
+                    $headAfter=Get-Head $repo; $gitStatus=Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
+                } elseif (-not $termination) { $termination=[string]$humanSave.Reason }
+            }
+        }
         $changedFiles = $null
         $completedIds = @(); $iterationCommits = @()
         try {
@@ -1572,6 +1726,9 @@ try {
             commits = @($iterationCommits)
             checkpointCommit = $checkpointCommit
             checkpointReason = $checkpointReason
+            humanActionsRecorded = @($humanActionsRecorded)
+            humanActionCommit = $humanActionCommit
+            openHumanActions = @(Get-OpenHumanActionSummary $roadmap)
             noActionableTasksReported = $noTasksReported
             noActionableTasksMessage = $noTaskMessage
             workingTreeClean = ($gitStatus.Trim() -eq '')

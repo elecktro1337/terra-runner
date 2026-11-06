@@ -13,3 +13,10 @@ test('limits roadmap counts to the configured task pattern', () => {
   assert.equal(roadmap.pending, 1);
   assert.equal(roadmap.nextTask, 'NTD-3 next');
 });
+
+test('excludes human actions from development roadmap progress', () => {
+  const roadmap = roadmapProgressFromText('- [ ] **HUM-0001 [human]** — Publish DNS\n- [ ] NTD-2 implementation\n- [x] NTD-1 done');
+  assert.equal(roadmap.completed, 1);
+  assert.equal(roadmap.pending, 1);
+  assert.equal(roadmap.total, 2);
+});

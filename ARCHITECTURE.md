@@ -37,6 +37,17 @@ clean-start worktree is checkpointed immediately with a normal hooked WIP
 commit and verified push; it becomes implementation progress but cannot tick a
 roadmap checkbox.
 
+Human prerequisites are project-owned Markdown evidence rather than Terra
+configuration. `terra-prompt.md` permits a worker to emit the validated
+`TERRA_HUMAN_TASK` marker only after it identifies a specific external action.
+The runner parses it from the raw event stream only after a clean, pushed
+result (or WIP checkpoint), appends/deduplicates `HUM-####` entries, and adds
+explicit `Depends on: HUM-####` links to the listed technical tasks. The task
+selector excludes only items with unresolved linked actions, so independent
+paths continue. A fully blocked roadmap emits `human-action-required` without
+launching another worker. Completion is a user action in the dispatcher and is
+committed/pushed as normal project evidence.
+
 Terra Runner separates presentation, execution, and persistent project evidence.
 
 ## Components

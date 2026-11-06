@@ -259,6 +259,29 @@ try {
     if (-not $noActionSummary.noActionableTasksReported) { throw 'NO_ACTIONABLE_TASKS signal was not recorded.' }
     Write-Host 'PASS: NO_ACTIONABLE_TASKS stops before a second paid iteration.' -ForegroundColor Green
 
+    # A worker can record a concrete external prerequisite. Terra must commit
+    # it as project evidence, link only the listed technical task, and then
+    # stop before another worker when every remaining technical task is linked.
+    [IO.File]::WriteAllText((Join-Path $repo 'NTD-ROADMAP.md'),"- [ ] **NTD-0201** — DNS dependent technical task`n")
+    & git -C $repo add NTD-ROADMAP.md | Out-Null
+    & git -C $repo commit -qm 'test: add human-blocked task'
+    & git -C $bare fetch -q $repo codex/terra:refs/heads/codex/terra
+    $beforeHuman = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
+    $env:TERRA_MOCK_HUMAN_TASK = '1'
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once
+    Remove-Item Env:TERRA_MOCK_HUMAN_TASK -ErrorAction SilentlyContinue
+    $humanRoadmap = Get-Content -Raw -LiteralPath (Join-Path $repo 'NTD-ROADMAP.md')
+    if ($humanRoadmap -notmatch '\*\*HUM-0001 \[human\]\*\*' -or $humanRoadmap -notmatch 'Depends on: HUM-0001') { throw 'Human task was not recorded and linked to the dependent roadmap task.' }
+    $humanSummary = Get-Content -Raw -LiteralPath (@(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).FullName) | ConvertFrom-Json
+    if ($humanSummary.humanActionsRecorded -notcontains 'HUM-0001') { throw 'Human task ID was not preserved in the iteration summary.' }
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 2
+    if (@(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count -ne ($beforeHuman + 1)) { throw 'A fully blocked roadmap wrote an unexpected paid-iteration summary.' }
+    Write-Host 'PASS: human actions block only dependent work without another worker launch.' -ForegroundColor Green
+    [IO.File]::WriteAllText((Join-Path $repo 'NTD-ROADMAP.md'),"- [ ] **NTD-0101** — First pending task`n- [ ] **NTD-0102** — Second pending task`n")
+    & git -C $repo add NTD-ROADMAP.md | Out-Null
+    & git -C $repo commit -qm 'test: reset tasks after human-action scenario'
+    & git -C $bare fetch -q $repo codex/terra:refs/heads/codex/terra
+
     # A larger roadmap task can span several commits. Code/test changes must
     # keep Continuous moving even before that task's checkbox is completed.
     $beforeImplementationProgress = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
