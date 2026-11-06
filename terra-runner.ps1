@@ -520,6 +520,23 @@ function Get-EventErrors([string]$EventsFile) {
         VerificationExamples = @($verificationExamples.ToArray())
     }
 }
+function Test-CleanWorkerStop([string]$EventsFile) {
+    # OpenCode can return exit 1 after a deliberate final `step_finish` with
+    # reason `stop`. The complete event stream is authoritative in that case.
+    if (-not (Test-Path -LiteralPath $EventsFile -PathType Leaf)) { return $false }
+    $lastFinish = $null
+    try {
+        foreach ($line in [System.IO.File]::ReadLines($EventsFile,[Text.UTF8Encoding]::new($false))) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $event = ConvertFrom-Json -InputObject $line -AsHashtable -Depth 60
+            if ([string](Read-Member $event 'type') -eq 'error') { return $false }
+            if ([string](Read-Member $event 'type') -in @('step_finish','step-finish')) { $lastFinish = $event }
+        }
+    } catch { return $false }
+    if ($null -eq $lastFinish) { return $false }
+    $part = Read-Member $lastFinish 'part'
+    return [string]::Equals([string](Read-Member $part 'reason'),'stop',[StringComparison]::OrdinalIgnoreCase)
+}
 function Test-TransientNetworkFailure([string]$EventsFile, [string]$ErrorFile) {
     $signature = '(?is)(?:\b(?:tls|ssl)\b.{0,120}\b(?:handshake|connection|socket|network|reset|timeout|certificate)\b|\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|SSL_ERROR|CERT_|UNABLE_TO_VERIFY)\b)'
     if (Test-Path -LiteralPath $ErrorFile -PathType Leaf) {
@@ -1582,6 +1599,7 @@ try {
         $verificationExamples = @()
         $noTasksReported = $false
         $noTaskMessage = ''
+        $cleanWorkerStop = $false
         try {
             $eventsReview = Get-EventErrors $eventsPath
             $eventErrors = $eventsReview.Errors
@@ -1594,6 +1612,12 @@ try {
             $noTaskMessage = [string]$eventsReview.NoTaskMessage
         } catch {
             if (-not $termination) { $termination = "invalid-event-output: $($_.Exception.Message)" }
+        }
+        if ($exitCode -ne 0 -and -not $termination -and $eventErrors -eq 0 -and (Test-CleanWorkerStop $eventsPath)) {
+            $cleanWorkerStop = $true
+            $exitCode = 0
+            Write-Host 'OpenCode ended with a clean stop event; preserving the verified result instead of treating it as a worker failure.' -ForegroundColor Yellow
+            Write-UiEvent 'worker-clean-stop' @{ iteration=$i }
         }
         $transientNetworkFailure = Test-TransientNetworkFailure $eventsPath $stderrPath
         $transientProviderFailure = if ($transientNetworkFailure) { $null } else { Get-TransientProviderFailure $eventsPath }
@@ -1655,6 +1679,13 @@ try {
                     $headAfter=Get-Head $repo; $gitStatus=Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
                 } elseif (-not $termination) { $termination=[string]$humanSave.Reason }
             }
+        }
+        # A clean agent stop is a normal end-of-iteration result. In Continuous
+        # mode, a recorded human action permits the selector to continue with
+        # independent work; it pauses without another worker if every task is
+        # now linked to an open action.
+        if ($cleanWorkerStop -and -not $termination -and $humanActionsRecorded.Count -eq 0) {
+            $termination = 'agent-stopped-cleanly'
         }
         $changedFiles = $null
         $completedIds = @(); $iterationCommits = @()
@@ -1768,6 +1799,7 @@ try {
             transientProviderFailure = $(if ($null -ne $transientProviderFailure) { [string]$transientProviderFailure.Type } else { '' })
             transientProviderMessage = $(if ($null -ne $transientProviderFailure) { 'provider response interruption' } else { '' })
             transientProviderRetryAttempt = $transientProviderRetryCount
+            cleanWorkerStop = $cleanWorkerStop
             usageError = $usageError
             eventsFile = [IO.Path]::GetFileName($eventsPath)
             readableEventsFile = [IO.Path]::GetFileName($readablePath)

@@ -34,7 +34,7 @@ try {
         $harnessContext = @(
             '',
             '## Local integration harness',
-            "This project configures a local integration harness at '$relativeHarness'. For database, migration, Redis, queue, repository, or other persistence evidence, use only this standard command: pwsh -NoProfile -ExecutionPolicy Bypass -File $relativeHarness -Suite <id>. Use the documented suite ID (or all when appropriate). Do not read, print, copy, pass, or edit .env credentials yourself; the harness owns local secret loading and Compose lifecycle. A failed harness is absence of evidence, not permission to claim a fake check passed."
+            "This project configures a local integration harness at '$relativeHarness'. For database, migration, Redis, queue, repository, or other persistence evidence, use only this standard command: pwsh -NoProfile -ExecutionPolicy Bypass -File $relativeHarness -Suite <id>. Use the documented suite ID (or all when appropriate). Do not read, print, copy, pass, or edit .env credentials yourself; the harness owns local secret loading and Compose lifecycle. You may fully manage Docker/Compose resources declared by this project, but never another project's resources. A failed harness is absence of evidence, not permission to claim a fake check passed."
         )
     }
     $prompt = @(

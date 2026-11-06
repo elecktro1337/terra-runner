@@ -85,6 +85,12 @@ Describe 'Terra Runner safe command dispatch' {
         $source | Should Match "'diff','--cached','--check'"
         $source | Should Match '\$exitCode -eq 0 -and \$eventErrors -eq 0'
     }
+    It 'recognises a clean OpenCode stop event without classifying it as a provider failure' {
+        $source = Get-Content -LiteralPath $runner -Raw
+        $source | Should Match 'function Test-CleanWorkerStop'
+        $source | Should Match "OpenCode ended with a clean stop event"
+        $source | Should Match 'cleanWorkerStop = \$cleanWorkerStop'
+    }
     It 'requires an explicit selected-task marker before OpenCode tool use' {
         $prompt = Get-Content -LiteralPath (Join-Path $here 'terra-prompt.md') -Raw
         $prompt | Should Match 'TERRA_SELECTED_TASK: <task ID>'

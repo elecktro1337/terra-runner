@@ -26,6 +26,7 @@ function formatSafetyReason(value) {
   if (noImplementationProgress) return `Safety stop — ${noImplementationProgress[1]} consecutive iteration(s) made no roadmap, code, or test progress.`;
   if (/^no-actionable-roadmap-task$/i.test(reason)) return 'Safety stop — OpenCode reported no actionable roadmap task.';
   if (/^human-action-required/i.test(reason)) return 'Paused — required human action is recorded in the project roadmap.';
+  if (/^agent-stopped-cleanly$/i.test(reason)) return 'Agent ended the iteration cleanly without a provider or tool error.';
   if (/^roadmap-complete$/i.test(reason)) return 'Roadmap complete.';
   const docsOnly = reason.match(/^documentation-only-progress:\s*(\d+)/i);
   if (docsOnly) return `Safety stop — ${docsOnly[1]} consecutive iteration(s) changed no code or tests.`;
