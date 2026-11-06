@@ -36,6 +36,17 @@ A snapshot is not a live provider balance or quota API. Refresh it with a provid
 
 Install OpenCode 2.x, ensure `opencode` is available on `PATH`, then run preflight. Terra Runner requires OpenCode support for `run --agent --format json --auto`; local cost estimation additionally requires `stats --all --json`.
 
+## Proxy diagnostic fails
+
+**System → Run diagnostics** starts a temporary loopback-only bridge and makes
+one HTTPS CONNECT request. The diagnostics screen displays a concise, redacted
+reason; it does not show the PowerShell line number, proxy password, URL user
+info, or authorization headers. `HTTP/1.1 200 Connection Established` followed
+by a curl timeout means the upstream proxy accepted the tunnel but the target
+request did not finish in time. Check the proxy host's outbound network/TLS
+path, route policy, and any configured CA file; do not put credentials into
+the Terra settings error report.
+
 ## Terminal display or hotkeys look wrong
 
 Use Windows Terminal or a current PhpStorm terminal with Node.js 20+ and PowerShell 7. The Node UI uses ANSI rendering where supported. If terminal input does not support raw key handling, use the runner control commands instead.
@@ -43,6 +54,11 @@ Use Windows Terminal or a current PhpStorm terminal with Node.js 20+ and PowerSh
 ## A dispatcher instance seems to have ended
 
 Open **Development → Active instances** and select the terminal record. Terra shows the same result report as the project window, including the reason, tasks completed during that launch, iteration count, last task, duration, commit, and log location. A terminal record no longer has a runner process, so it deliberately offers only removal, refresh, and Back. Stop, Abort, and stalled finalization are reserved for actionable active records.
+
+The list displays eight records per page. For an active run, press **Refresh**
+to recalculate the current iteration's elapsed time from its saved start time;
+older records without that timestamp continue from their most recent
+heartbeat.
 
 ## Configuration is invalid
 

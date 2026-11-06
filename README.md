@@ -11,7 +11,10 @@ Terra Runner is a local Windows orchestrator for controlled OpenCode development
 
 ## Start
 
-Double-click `Terra Runner.cmd`.
+Double-click `Terra Runner.cmd` from the Terra Runner installation folder. To
+launch it from the Desktop, create a Windows shortcut to that file; do not copy
+the `.cmd` file by itself, because the Node UI and PowerShell runner remain in
+the installation folder.
 
 The primary interface is the Node.js terminal UI (Node.js 20+), which is required for the dispatcher. PowerShell 7 remains the execution engine. Setup and profile editing never start OpenCode.
 
@@ -21,7 +24,7 @@ Normal settings and state live in `%LOCALAPPDATA%\TerraRunner`. `-Portable` keep
 
 The central header contains only global application information. Development explicitly selects a project and profile for each launch; Reports is an all-project read-only summary.
 
-During a run, Terra Runner shows roadmap completion and percentage, the task selected by the worker, safe live activity (inspection, file changes, Git, or verification), elapsed time for the current iteration, tool/check counts, and a bounded live journal of completed iterations. The live header refreshes while the run is active with total run duration, the last completed task, and the last commit. It does not display model reasoning text. In dispatcher-instance mode, only the frozen project/profile context is shown: Terra snapshot, budget, and cost-estimate fields are deliberately omitted because they are not enforced there.
+During a run, Terra Runner shows roadmap completion and percentage, the task selected by the worker, safe live activity (inspection, file changes, Git, or verification), elapsed time for the current iteration, tool/check counts, and a bounded live journal of completed iterations. The changing iteration status occupies one compact row; a graceful-stop notice remains separately visible. The live header refreshes while the run is active with total run duration, the last completed task, and the last commit. It does not display model reasoning text. In dispatcher-instance mode, only the frozen project/profile context is shown: Terra snapshot, budget, and cost-estimate fields are deliberately omitted because they are not enforced there.
 
 ## Project instructions
 
@@ -53,9 +56,9 @@ This is explicitly an estimate, not the provider's actual balance. It may includ
 
 ## Running development
 
-The main menu is **Development**, **Projects**, **Models & accounts**, **Reports**, **System**, and **Exit**. In **Development**, choose **One iteration**, **Dry run**, **Continuous**, or **Active instances**. A development launch always follows command → project → profile → run mode → (continuous parameters) → confirmation. **System → Run diagnostics** checks configuration, project folders, PowerShell, Node.js, the OpenCode command, and—when a route is active—one isolated HTTPS CONNECT through its temporary loopback bridge. It never starts OpenCode or a development run.
+The main menu is **Development**, **Projects**, **Models & accounts**, **Reports**, **System**, and **Exit**. In **Development**, choose **One iteration**, **Dry run**, **Continuous**, or **Active instances**. A development launch always follows command → project → profile → run mode → (continuous parameters) → confirmation. **System → Run diagnostics** checks configuration, project folders, PowerShell, Node.js, the OpenCode command, and—when a route is active—one isolated HTTPS CONNECT through its temporary loopback bridge. It never starts OpenCode or a development run. A failed proxy check is displayed as a redacted `Reason`, rather than a PowerShell source-location trace; proxy credentials and authorization headers are never shown.
 
-`← Back` always returns one menu level: an instance list returns to Development, proxy/auth-storage pages return to System, profile selection returns to project selection, run-mode selection returns to profile selection, and a blank continuous-iteration field returns to run-mode selection. Selecting a completed, failed, stopped, aborted, or orphaned record in **Development → Active instances** first shows its final project report: result, tasks completed in that launch, iteration count, last task, duration, commit, and log location. Terminal records offer only safe removal, refresh, and Back; Stop, Abort, and stalled-instance finalization are shown only when an active instance can actually accept them. Removal deletes only the runtime record and stale control files, never a project repository, log, report, or active instance.
+`← Back` always returns one menu level: an instance list returns to Development, proxy/auth-storage pages return to System, profile selection returns to project selection, run-mode selection returns to profile selection, and a blank continuous-iteration field returns to run-mode selection. **Active instances** shows eight records per page and offers page navigation, Refresh, and safe cleanup of terminal records. It derives an active iteration's elapsed time from its persisted start time, so a Refresh does not leave the display at the last heartbeat value. Selecting a completed, failed, stopped, aborted, or orphaned record first shows its final project report: result, tasks completed in that launch, iteration count, last task, duration, commit, and log location. Terminal records offer only safe removal, refresh, and Back; Stop, Abort, and stalled-instance finalization are shown only when an active instance can actually accept them. Removal deletes only the runtime record and stale control files, never a project repository, log, report, or active instance.
 
 Choose **Development → One iteration** for one explicit agent run. **Main window** keeps live progress and the selected profile's normal safety limits. **Dispatcher instance** opens the project in a separate terminal immediately with the selected command snapshot; it retains project locks, isolated OpenCode storage and proxy scope, but intentionally has no Terra budget, quota, or reservation checks.
 

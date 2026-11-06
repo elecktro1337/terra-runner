@@ -42,7 +42,7 @@ Terra Runner separates presentation, execution, and persistent project evidence.
 ## Components
 
 - `Terra Runner.cmd` requires Node.js 20+ and starts the Node.js dispatcher; PowerShell 7 remains the execution engine and CLI host.
-- `node-ui/index.mjs` is the primary terminal UI. It manages projects and profiles, gathers safe OpenCode inventory, renders run telemetry, and starts PowerShell with named parameters.
+- `node-ui/index.mjs` is the primary terminal UI. It manages projects and profiles, gathers safe OpenCode inventory, renders run telemetry, starts PowerShell with named parameters, and paginates runtime instance records.
 - `node-ui/lib/profiles.mjs` normalises and applies non-secret profile settings.
 - `node-ui/lib/reports.mjs` reads isolated project summaries and reports.
 - `terra-runner.ps1` is the safety and orchestration engine. It validates Git, controls budgets and snapshots, writes summaries/reports, and manages stop files.
@@ -58,6 +58,7 @@ Terra Runner separates presentation, execution, and persistent project evidence.
 5. Node reads safe tool-event metadata from the raw JSONL stream to render activity and verification counts. It does not render model reasoning content.
 6. The runner writes immutable per-iteration JSON summaries and raw/readable event logs under the stable project ID.
 7. Node refreshes the active header once per second with roadmap counts, total run duration, last completed task, and last commit. It renders a bounded journal of completed iterations below the changing status, pins only Stop/Abort controls to the terminal bottom, and aggregates new summaries at completion.
+8. A dispatcher instance persists the start timestamp of each iteration. The central list recomputes elapsed time from that timestamp (or a legacy heartbeat fallback) whenever it is refreshed, rather than treating a cached heartbeat value as a clock.
 
 ## State boundaries
 
@@ -65,7 +66,7 @@ Application installation contains scripts, templates, and the Node UI. Applicati
 
 OpenCode credentials remain owned by OpenCode. Terra Runner stores only account IDs, labels, profile policy, managed-store metadata, and user-entered provider observations. A local OpenCode cost estimate is stored separately from the provider snapshot and is always labelled as an estimate. A project-managed DB is deleted immediately when its inactive project configuration is removed; its source profile DB remains untouched.
 
-Terminal instance records are runtime metadata, not historical evidence. Selecting a terminal record in `Development → Active instances` derives the same final report as its project window from the per-project summaries, roadmap and instance manifest. Terminal records expose removal only; active records expose Stop/Abort, and stalled finalization only when its process is absent. Removing one record or clearing all terminal records never removes an active, starting, stopping, or aborting instance. Logs, reports, and project control state remain separate and are not removed by this action.
+Terminal instance records are runtime metadata, not historical evidence. Selecting a terminal record in `Development → Active instances` derives the same final report as its project window from the per-project summaries, roadmap and instance manifest. The list is paginated in groups of eight; it shows a calculated live elapsed duration for active iteration heartbeats. Terminal records expose removal only; active records expose Stop/Abort, and stalled finalization only when its process is absent. Removing one record or clearing all terminal records never removes an active, starting, stopping, or aborting instance. Logs, reports, and project control state remain separate and are not removed by this action.
 
 ## Safety boundaries
 

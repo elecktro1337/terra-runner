@@ -13,7 +13,7 @@ Dispatcher instances are autonomous after launch: closing or restarting the
 central dispatcher does not stop them. Choosing **Stop all and exit** remains
 an explicit graceful-stop operation for the active instances.
 
-Finished, failed, stopped, aborted, and orphaned instance manifests are disposable runtime records. Use **Development → Active instances** to remove one record or clear all terminal records. The cleanup also removes only that record's `STOP`/`ABORT` directory. It never removes active instance records, project logs, reports, control-state, OpenCode stores, or the configuration.
+Finished, failed, stopped, aborted, and orphaned instance manifests are disposable runtime records. Active records also retain a non-secret `iterationStartedAt` timestamp so the dispatcher can calculate live iteration duration after a refresh. Use **Development → Active instances** to browse records in pages of eight, remove one record, or clear all terminal records. The cleanup also removes only that record's `STOP`/`ABORT` directory. It never removes active instance records, project logs, reports, control-state, OpenCode stores, or the configuration.
 
 There is no global selected project or profile. Legacy `activeProjectId`, active profile/account fields, global model/budget/reasoning values and `projects[].defaultProfileId` are removed on save; Development explicitly selects a project and profile for each launch.
 
