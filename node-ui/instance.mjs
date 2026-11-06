@@ -19,6 +19,8 @@ import { instanceOutcome, instanceReportRows } from './lib/instance-outcome.mjs'
 import { iterationSummariesSince, latestIterationSummary, projectDataRoot } from './lib/reports.mjs';
 import { selectedRoadmapTaskFromEvent } from './lib/task-selection.mjs';
 import { projectWindowActionPlan } from './lib/instance-actions.mjs';
+import { parseHumanActions } from './lib/human-actions.mjs';
+import { isCleanWorkerStopEventStream } from './lib/worker-stop.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -33,6 +35,17 @@ const rule = chalk.gray('─'.repeat(76));
 const controls = chalk.gray('Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop');
 function clear() { if (process.stdout.isTTY) process.stdout.write('\x1Bc'); }
 function durationText(milliseconds) { const seconds = Math.max(0, Math.floor(milliseconds / 1000)); return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`; }
+async function cleanWorkerStopFromFile(filename) {
+  if (!filename) return false;
+  try { return isCleanWorkerStopEventStream(await fs.readFile(filename, 'utf8')); } catch { return false; }
+}
+async function openHumanActionPause(project) {
+  try {
+    const roadmap = await fs.readFile(path.resolve(project.path, project.roadmap), 'utf8');
+    const action = parseHumanActions(roadmap).find(item => !item.completed);
+    return action ? `${action.id}: ${action.do || action.summary}. Evidence: ${action.completionEvidence || 'see roadmap'}` : '';
+  } catch { return ''; }
+}
 function limitSummary(profile = {}) {
   if (profile.policy === 'local') return 'not applicable';
   if (profile.policy === 'oauth-managed') return 'provider-managed';
@@ -114,7 +127,7 @@ async function run(mode, limit = 1) {
   if (mode === 'continuous') runnerArgs.push(limit > 0 ? '-MaxIterations' : '-UnlimitedIterations', String(limit || ''));
   const child = spawn('pwsh.exe', runnerArgs.filter(Boolean), { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: false });
   await safeUpdate({ state: 'running', runnerPid: child.pid, activity: 'OpenCode runner is active' });
-  let buffer = ''; let stderr = '';
+  let buffer = ''; let stderr = ''; let runnerFailure = '';
   const consume = async chunk => {
     const text = String(chunk); buffer += text;
     const lines = buffer.split(/\r?\n/); buffer = lines.pop() || '';
@@ -128,6 +141,7 @@ async function run(mode, limit = 1) {
         if (event.type === 'provider-retry-waiting') { stage = 'Waiting before provider retry'; detail = `Retry ${event.attempt || 1}/${event.maximumAttempts || '?'}; next attempt in ${event.delaySeconds || '?'}s`; }
         if (event.type === 'human-actions-recorded') { detail = `Recorded human action: ${(event.ids || []).join(', ')}`; }
         if (event.type === 'human-action-required') { const first = Array.isArray(event.actions) ? event.actions[0] : null; humanActionPause = first ? `${first.id}: ${first.do || first.summary}. Evidence: ${first.completionEvidence || 'see roadmap'}` : 'See Development → Human actions.'; stage = 'Paused: human action required'; detail = humanActionPause; }
+        if (event.type === 'runner-failed') runnerFailure = String(event.reason || 'runner-internal-error');
         if (event.type === 'iteration-heartbeat') { stage = `Iteration ${event.iteration} | working`; }
         if (event.type === 'iteration-finished') { completedIterations.push(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`); lastTask = (Array.isArray(event.completedTaskIds) && event.completedTaskIds.find(Boolean)) || selectedTask || event.taskId || lastTask; lastCommit = Array.isArray(event.commits) ? event.commits[0] || lastCommit : lastCommit; stage = control ? 'Finalizing requested stop' : 'Preparing next iteration'; detail = ''; void readRoadmapProgress(project).then(next => { liveRoadmap = next; if (liveAttached) renderHeader(); }); if (liveAttached) renderHeader(); }
         const instanceActivity = event.type === 'iteration-heartbeat' ? `Iteration ${event.iteration}: ${event.elapsedSeconds}s` : event.type === 'network-waiting' ? `Waiting for ${event.source || 'network'} connection` : event.type === 'provider-retry-waiting' ? 'Waiting before provider retry' : event.type;
@@ -141,11 +155,17 @@ async function run(mode, limit = 1) {
   if (process.stdin.isTTY) { process.stdin.setRawMode?.(true); process.stdin.resume(); process.stdin.on('data', keyHandler); }
   await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }).then(async code => {
     const current = await readInstance(configPath, instanceId); const aborted = current?.state === 'aborting'; const stopped = current?.state === 'stopping';
-    const failed = !aborted && !stopped && code !== 0;
+    // A runner can fail while serialising its report after OpenCode has already
+    // emitted its authoritative clean terminal event. Preserve that verified
+    // agent outcome instead of labelling the project run as a provider failure.
+    const cleanWorkerStop = code !== 0 && await cleanWorkerStopFromFile(eventFile);
+    if (cleanWorkerStop && !humanActionPause) humanActionPause = await openHumanActionPause(project);
+    const effectiveCode = cleanWorkerStop ? 0 : code;
+    const failed = !aborted && !stopped && effectiveCode !== 0;
     const [roadmapAfter, summaryAfter] = await Promise.all([readRoadmapProgress(project), latestIterationSummary(settings, project, configPath)]);
-    const normalReason = humanActionPause || (roadmapAfter.available && roadmapAfter.pending === 0 ? `Roadmap complete — all ${roadmapAfter.total} task(s) are done.` : String(summaryAfter?.stoppedReason || ''));
-    const safetyStopped = code === 0 && (Boolean(humanActionPause) || (Boolean(summaryAfter?.stoppedReason) && summaryAfter.stoppedReason !== 'roadmap-complete'));
-    await safeUpdate({ state: aborted ? 'aborted' : stopped || safetyStopped ? 'stopped' : code === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', error: failed ? instanceRunnerFailure(stderr, code) : '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? String(current?.stopReason || 'Graceful stop completed.') : code === 0 ? normalReason : `runner exit ${code}` });
+    const normalReason = humanActionPause || (cleanWorkerStop ? 'OpenCode ended with a verified clean stop event.' : roadmapAfter.available && roadmapAfter.pending === 0 ? `Roadmap complete — all ${roadmapAfter.total} task(s) are done.` : String(summaryAfter?.stoppedReason || ''));
+    const safetyStopped = effectiveCode === 0 && (Boolean(humanActionPause) || cleanWorkerStop || (Boolean(summaryAfter?.stoppedReason) && summaryAfter.stoppedReason !== 'roadmap-complete'));
+    await safeUpdate({ state: aborted ? 'aborted' : stopped || safetyStopped ? 'stopped' : effectiveCode === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', error: failed ? (runnerFailure || instanceRunnerFailure(stderr, code)) : '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? String(current?.stopReason || 'Graceful stop completed.') : effectiveCode === 0 ? normalReason : `runner exit ${code}` });
   }).catch(async error => { await safeUpdate({ state: 'failed', runnerPid: null, error: error.message, activity: '' }); }).finally(() => {
     if (paint) clearInterval(paint); if (headerUpdate) clearInterval(headerUpdate); clearInterval(eventWatch); if (liveAttached) process.stdout.off('resize', onResize); liveHeader.clear(); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h');
   });

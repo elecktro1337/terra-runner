@@ -1839,6 +1839,14 @@ try {
     }
     Write-Host "Terra Runner finished. Project logs: $logsPath"
 }
+catch {
+    # Never leave a dispatcher instance with only an opaque process code. The
+    # Node side deliberately uses a redacted classification, not raw exception
+    # text, because a command/provider can include sensitive environment data.
+    Write-UiEvent 'runner-failed' @{ reason='runner-internal-error' }
+    Write-Error ("Terra Runner internal error: " + $_.Exception.Message)
+    throw
+}
 finally {
     if ($null -ne $activeChild) { Stop-Child $activeChild; $activeChild.Dispose() }
     Stop-TerraProxyBridge $proxyBridge

@@ -91,6 +91,11 @@ Describe 'Terra Runner safe command dispatch' {
         $source | Should Match "OpenCode ended with a clean stop event"
         $source | Should Match 'cleanWorkerStop = \$cleanWorkerStop'
     }
+
+    It 'emits a redacted runner failure event when internal result finalisation throws' {
+        $source = Get-Content -LiteralPath $runner -Raw
+        $source | Should Match "Write-UiEvent 'runner-failed' @\{ reason='runner-internal-error' \}"
+    }
     It 'requires an explicit selected-task marker before OpenCode tool use' {
         $prompt = Get-Content -LiteralPath (Join-Path $here 'terra-prompt.md') -Raw
         $prompt | Should Match 'TERRA_SELECTED_TASK: <task ID>'
