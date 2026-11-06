@@ -33,6 +33,11 @@ test('labels no-roadmap-progress as a safety stop instead of normal completion',
   assert.match(outcome.reason, /^Safety stop — 3 consecutive iteration/);
 });
 
+test('does not surface legacy human-action text in a completed instance report', () => {
+  const outcome = instanceOutcome({ state: 'stopped', stopReason: 'HUM-0001: old external prerequisite' }, null, { available: true, completed: 1, pending: 2, total: 3 });
+  assert.equal(outcome.reason, 'Legacy external-prerequisite record; it no longer blocks development.');
+});
+
 test('explains a safety stop only after roadmap and implementation progress are both absent', () => {
   const outcome = instanceOutcome(
     { state: 'stopped', stopReason: 'no-verified-implementation-progress: 3 consecutive iteration(s) made no roadmap, code, or test progress' },

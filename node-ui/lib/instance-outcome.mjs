@@ -20,6 +20,7 @@ function latestCommit(summary = {}) {
 
 function formatSafetyReason(value) {
   const reason = String(value || '');
+  if (/^HUM-\d+:/i.test(reason)) return 'Legacy external-prerequisite record; it no longer blocks development.';
   const noProgress = reason.match(/^no-roadmap-progress:\s*(\d+)/i);
   if (noProgress) return `Safety stop — ${noProgress[1]} consecutive iteration(s) completed no roadmap task.`;
   const noImplementationProgress = reason.match(/^no-verified-implementation-progress:\s*(\d+)/i);
