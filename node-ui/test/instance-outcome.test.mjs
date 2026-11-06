@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { instanceOutcome } from '../lib/instance-outcome.mjs';
+import { formatInstanceTime, instanceOutcome, instanceReportRows } from '../lib/instance-outcome.mjs';
 
 test('explains that a finished continuous instance completed its roadmap', () => {
   const outcome = instanceOutcome(
@@ -55,4 +55,11 @@ test('reports unique completed roadmap tasks across the current run', () => {
   );
   assert.equal(outcome.runIterations, 3);
   assert.equal(outcome.runCompletedTasks, 2);
+});
+
+test('shows an MSK end timestamp for a terminal instance and keeps legacy records readable', () => {
+  assert.match(formatInstanceTime('2026-11-05T22:41:35.848Z'), /06\.11\.2026.*01:41:35.*MSK/);
+  const chalk = { bold: { cyan: value => value }, gray: value => value, green: value => value, yellow: value => value, red: value => value };
+  const rows = instanceReportRows({ instance: { state: 'stopped', createdAt: '2026-11-05T22:31:28.882Z', updatedAt: '2026-11-05T22:41:35.848Z' }, project: { path: 'C:\\project' }, outcome: { kind: 'stopped', reason: 'Stop', runIterations: 0 }, chalk });
+  assert.ok(rows.some(row => row.includes('Ended') && row.includes('01:41:35')));
 });

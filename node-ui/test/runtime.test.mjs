@@ -26,6 +26,8 @@ test('instance registry stores a command snapshot without profile limit fields',
   await clearInstanceControls(config, instance.id); await assert.rejects(fs.stat(instanceControlPath(config, instance.id, 'STOP')));
   await updateInstance(config, instance.id, { state: 'running', activity: 'test' });
   assert.equal((await listInstances(config))[0].state, 'running');
+  const terminal = await updateInstance(config, instance.id, { state: 'stopped', activity: '' });
+  assert.match(terminal.endedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
 test('authentication database path is derived from a safe storage ID', () => {

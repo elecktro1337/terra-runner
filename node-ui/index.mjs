@@ -632,7 +632,7 @@ async function instancesMenu(settings) {
     const instance = instances.find(item => item.id === choice); if (!instance) continue;
     if (isTerminalInstance(instance)) await showInstanceCompletionReport(settings, instance);
     const action = await pick(`Instance: ${instance.projectId}`, instanceActionPlan(instance, { canFinalize: canFinalizeStalledInstance(instance) }).map(item => ({ ...item, name: item.destructive ? chalk.red(item.name) : item.attention || item.value === 'remove' ? chalk.yellow(item.name) : item.name })));
-    if (action === 'stop' || action === 'abort') { const kind = action === 'abort' ? 'ABORT' : 'STOP'; await requestInstanceControl(configPath, instance.id, kind); await updateInstance(configPath, instance.id, { state: action === 'abort' ? 'aborting' : 'stopping', activity: action === 'abort' ? 'Emergency abort requested by dispatcher' : 'Graceful stop requested by dispatcher' }); }
+    if (action === 'stop' || action === 'abort') { const kind = action === 'abort' ? 'ABORT' : 'STOP'; await requestInstanceControl(configPath, instance.id, kind); await updateInstance(configPath, instance.id, { state: action === 'abort' ? 'aborting' : 'stopping', activity: action === 'abort' ? 'Emergency abort requested by dispatcher' : 'Graceful stop requested by dispatcher', stopReason: action === 'abort' ? 'Emergency abort requested by dispatcher.' : 'Graceful stop requested by dispatcher.' }); }
     if (action === 'finalize') { const aborted = instance.state === 'aborting'; await updateInstance(configPath, instance.id, { state: aborted ? 'aborted' : 'failed', runnerPid: null, activity: '', stopReason: aborted ? 'Emergency abort finalized: no runner process is active.' : 'Stalled launch finalized: no runner process is active.' }); }
     if (action === 'remove') { if (await yesNo(`Remove completed instance '${instance.projectId}' from the local list?`)) await deleteTerminalInstance(configPath, instance.id); }
   }
@@ -654,7 +654,7 @@ async function showInstanceCompletionReport(settings, instance) {
 }
 async function stopAllInstances() {
   const instances = await listInstances(configPath); const active = instances.filter(instance => !isTerminalInstance(instance));
-  for (const instance of active) { await requestInstanceControl(configPath, instance.id, 'STOP'); await updateInstance(configPath, instance.id, { state: 'stopping', activity: 'Dispatcher is shutting down' }); }
+  for (const instance of active) { await requestInstanceControl(configPath, instance.id, 'STOP'); await updateInstance(configPath, instance.id, { state: 'stopping', activity: 'Dispatcher is shutting down', stopReason: 'Dispatcher is shutting down; graceful stop requested.' }); }
   if (active.length) console.log(chalk.yellow(`Graceful Stop requested for ${active.length} project instance(s). They will also stop if the dispatcher heartbeat expires.`));
 }
 async function readProjectId(message, projects, currentId = '') {

@@ -76,7 +76,7 @@ async function show(settings, instance, project) {
   console.log(rule);
 }
 async function safeUpdate(patch) { return updateInstance(configPath, instanceId, patch); }
-async function request(kind) { await requestInstanceControl(configPath, instanceId, kind); await safeUpdate({ state: kind === 'ABORT' ? 'aborting' : 'stopping', activity: kind === 'ABORT' ? 'Emergency abort requested' : 'Finishing the current iteration' }); }
+async function request(kind, reason = '') { await requestInstanceControl(configPath, instanceId, kind); await safeUpdate({ state: kind === 'ABORT' ? 'aborting' : 'stopping', activity: kind === 'ABORT' ? 'Emergency abort requested' : 'Finishing the current iteration', ...(reason ? { stopReason: reason } : {}) }); }
 async function run(mode, limit = 1) {
   const { settings, instance, project } = await load();
   if (['stopping', 'aborting'].includes(instance.state)) {
@@ -143,7 +143,7 @@ async function run(mode, limit = 1) {
     const [roadmapAfter, summaryAfter] = await Promise.all([readRoadmapProgress(project), latestIterationSummary(settings, project, configPath)]);
     const normalReason = roadmapAfter.available && roadmapAfter.pending === 0 ? `Roadmap complete — all ${roadmapAfter.total} task(s) are done.` : String(summaryAfter?.stoppedReason || '');
     const safetyStopped = code === 0 && Boolean(summaryAfter?.stoppedReason) && summaryAfter.stoppedReason !== 'roadmap-complete';
-    await safeUpdate({ state: aborted ? 'aborted' : stopped || safetyStopped ? 'stopped' : code === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', error: failed ? instanceRunnerFailure(stderr, code) : '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? 'Graceful stop completed.' : code === 0 ? normalReason : `runner exit ${code}` });
+    await safeUpdate({ state: aborted ? 'aborted' : stopped || safetyStopped ? 'stopped' : code === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', error: failed ? instanceRunnerFailure(stderr, code) : '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? String(current?.stopReason || 'Graceful stop completed.') : code === 0 ? normalReason : `runner exit ${code}` });
   }).catch(async error => { await safeUpdate({ state: 'failed', runnerPid: null, error: error.message, activity: '' }); }).finally(() => {
     if (paint) clearInterval(paint); if (headerUpdate) clearInterval(headerUpdate); clearInterval(eventWatch); if (liveAttached) process.stdout.off('resize', onResize); liveHeader.clear(); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h');
   });
@@ -155,8 +155,12 @@ async function preflight() {
 }
 async function heartbeatWatch() {
   const instance = await readInstance(configPath, instanceId); if (!instance || ['finished', 'failed', 'stopped', 'aborted'].includes(instance.state)) return;
+  if (['stopping', 'aborting'].includes(instance.state)) return;
   const coordinator = await readCoordinatorHeartbeat(configPath); const age = coordinator?.updatedAt ? Date.now() - Date.parse(coordinator.updatedAt) : Infinity;
-  if (!coordinator || coordinator.id !== instance.coordinatorId || age > 20000) await request('STOP');
+  if (!coordinator || coordinator.id !== instance.coordinatorId || age > 20000) {
+    const cause = !coordinator ? 'Dispatcher heartbeat is missing.' : coordinator.id !== instance.coordinatorId ? 'Dispatcher coordinator changed.' : `Dispatcher heartbeat expired after ${Math.ceil(age / 1000)}s.`;
+    await request('STOP', `${cause} Graceful stop requested by instance watchdog.`);
+  }
 }
 const watch = setInterval(() => void heartbeatWatch(), 5000); watch.unref();
 async function main() {

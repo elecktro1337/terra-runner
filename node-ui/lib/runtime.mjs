@@ -97,7 +97,7 @@ export async function createInstance(configPath, project, profile, proxyRoute, c
     id, projectId: project.id, projectPath: project.path, state: 'launching', createdAt: now, updatedAt: now,
     coordinatorId, coordinatorHeartbeatAt: now, profile: sanitizeProfile(profile), proxyRoute: proxyRoute ? structuredClone(proxyRoute) : null,
     launch: structuredClone(launch || { command: 'idle', maxIterations: 0 }),
-    runnerPid: null, windowPid: null, iteration: null, activity: '', stopReason: '', error: '', logsPath: ''
+    runnerPid: null, windowPid: null, iteration: null, activity: '', stopReason: '', error: '', logsPath: '', endedAt: ''
   };
   await writeJson(instancePath(configPath, id), instance);
   return instance;
@@ -111,7 +111,9 @@ export async function cleanupLegacyReservations(configPath) {
 export async function updateInstance(configPath, id, patch) {
   const current = await readInstance(configPath, id);
   if (!current) throw new Error(`Instance '${id}' was not found.`);
-  const next = { ...current, ...patch, updatedAt: new Date().toISOString() };
+  const now = new Date().toISOString();
+  const next = { ...current, ...patch, updatedAt: now };
+  if (isTerminalInstance(next) && !isTerminalInstance(current) && !next.endedAt) next.endedAt = now;
   await writeJson(instancePath(configPath, id), next);
   return next;
 }

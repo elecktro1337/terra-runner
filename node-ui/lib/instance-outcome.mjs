@@ -3,6 +3,13 @@ function durationText(seconds) {
   return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
 }
 
+export function formatInstanceTime(value) {
+  if (!value) return 'unknown';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return `${date.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'medium', hour12: false, timeZone: 'Europe/Moscow' })} MSK`;
+}
+
 function latestCommit(summary = {}) {
   const first = Array.isArray(summary?.commits) ? summary.commits[0] : null;
   if (!first) return '';
@@ -69,8 +76,9 @@ export function instanceReportRows({ instance = {}, project = {}, outcome = null
   const rows = [
     `  ${chalk.bold.cyan('Location')}  ${chalk.gray(project.path || '')}`,
     `  State     ${instance.state || 'unknown'}${instance.activity ? chalk.gray(` — ${instance.activity}`) : ''}`,
-    `  Started   ${instance.createdAt || 'unknown'}`
+    `  Started   ${formatInstanceTime(instance.createdAt)}`
   ];
+  if (['finished', 'failed', 'stopped', 'aborted', 'orphaned'].includes(String(instance.state || ''))) rows.push(`  Ended     ${formatInstanceTime(instance.endedAt || instance.updatedAt)}`);
   if (!outcome) return rows;
   const resultColor = outcome.kind === 'complete' ? chalk.green : outcome.kind === 'failed' || outcome.kind === 'aborted' ? chalk.red : chalk.yellow;
   rows.push(`  Result    ${resultColor(outcome.reason)}`);
