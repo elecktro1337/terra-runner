@@ -31,7 +31,7 @@ Every project has a `PROJECT-INSTRUCTIONS.md` alongside its roadmap and progress
 
 A project can additionally configure one project-owned PowerShell harness (for example, `tests/tools/terra-integration.ps1`) in **Projects**. The path is always repository-relative and optional; projects without one continue to use normal unit/static work. When present, Development and Dry run verify that the file exists, but Terra never runs it by itself. The worker receives only the relative path and invokes it for database, migration, Redis, queue, repository, or persistence evidence with `pwsh -NoProfile -ExecutionPolicy Bypass -File <harness> -Suite <id>`.
 
-The harness owns any local `.env` loading, Compose health checks, and disposable test schemas. It must never print secrets, expose them in arguments or logs, touch production/staging, or remove containers/volumes it did not create. A failed harness means the required evidence is absent; it cannot be replaced by a fake check.
+The harness owns any local `.env` loading, Compose health checks, and disposable test schemas. It must never print secrets, expose them in arguments or logs, or touch production/staging. The agent may repair a missing or incomplete project-owned harness, or use the project's local Compose tooling, so real evidence remains autonomous; it may not replace a failed real check with a fake one.
 
 ## Profiles, snapshots, and limits
 
@@ -90,20 +90,6 @@ worktree without one can be manual work, so it remains blocked for review.
 ### WIP checkpoints
 
 When an iteration exits successfully without an OpenCode stream error but leaves useful uncommitted work in a worktree that was clean at the start, Terra validates the staged diff, runs the repository's normal Git hooks/secret scanning through a standard commit, and pushes `wip(terra): checkpoint <task-id> <run-id>`. This preserves partial implementation without ticking a roadmap checkbox; Continuous treats the pushed checkpoint as implementation progress and proceeds to the next iteration. Any failed diff check, hook, provider/error event, abort, or unavailable push stops with the precise reason and leaves the work for review. The interrupted-run marker remains the fallback for process/computer failure.
-
-### Human actions and blocked task chains
-
-Roadmaps may contain a versioned `## Human actions` section. A human action is
-an external prerequisite, not a development task: it has a `HUM-####` ID,
-does not change roadmap progress, and records why it is needed, the exact
-action, required completion evidence, and the technical task IDs it blocks.
-Workers may request one only with the strict `TERRA_HUMAN_TASK` JSON marker.
-After a clean, verified worker result Terra records the action, adds
-`Depends on: HUM-####` below each affected task, commits and pushes that
-roadmap-only change. It continues independent work. If no eligible technical
-task remains, it pauses before another model iteration and shows the exact
-human action. Use **Development → Human actions** to inspect it and, after a
-non-secret evidence note, mark it complete in a separate pushed commit.
 
 ## Safe CLI commands
 

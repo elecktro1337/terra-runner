@@ -37,17 +37,6 @@ clean-start worktree is checkpointed immediately with a normal hooked WIP
 commit and verified push; it becomes implementation progress but cannot tick a
 roadmap checkbox.
 
-Human prerequisites are project-owned Markdown evidence rather than Terra
-configuration. `terra-prompt.md` permits a worker to emit the validated
-`TERRA_HUMAN_TASK` marker only after it identifies a specific external action.
-The runner parses it from the raw event stream only after a clean, pushed
-result (or WIP checkpoint), appends/deduplicates `HUM-####` entries, and adds
-explicit `Depends on: HUM-####` links to the listed technical tasks. The task
-selector excludes only items with unresolved linked actions, so independent
-paths continue. A fully blocked roadmap emits `human-action-required` without
-launching another worker. Completion is a user action in the dispatcher and is
-committed/pushed as normal project evidence.
-
 Terra Runner separates presentation, execution, and persistent project evidence.
 
 ## Components
@@ -80,4 +69,4 @@ Terminal instance records are runtime metadata, not historical evidence. Selecti
 
 ## Safety boundaries
 
-Only `-Once` and `-Continuous` start an agent. Status, reports, setup, preflight, cancelled prompts, and configuration edits are read-only with respect to OpenCode execution. `STOP` requests finish the current iteration; `ABORT` requests terminate it on the next poll. The UI clears stale flags only when the user explicitly starts a new run. The versioned task prompt is composed in the worker from immutable global policy plus the project-owned `PROJECT-INSTRUCTIONS.md`, which is reread for every worker process. The instructions file may be the sole local Git change at launch; the worker stages and commits that unchanged file separately before task work. Project instructions cannot relax global safety policy and are not editable by the agent. A configured integration harness is the exclusive route for persistence evidence: the worker must not inspect `.env` or credentials directly. The global prompt grants full lifecycle authority over the selected project's local Docker/Compose resources, including recreating or removing project containers and disposable data needed for real verification. It may not install or reconfigure system software, elevate privileges, alter network/security settings, touch production, or affect another project's Docker resources.
+Only `-Once` and `-Continuous` start an agent. Status, reports, setup, preflight, cancelled prompts, and configuration edits are read-only with respect to OpenCode execution. `STOP` requests finish the current iteration; `ABORT` requests terminate it on the next poll. The UI clears stale flags only when the user explicitly starts a new run. The versioned task prompt is composed in the worker from immutable global policy plus the project-owned `PROJECT-INSTRUCTIONS.md`, which is reread for every worker process. The instructions file may be the sole local Git change at launch; the worker stages and commits that unchanged file separately before task work. Project instructions cannot relax global safety policy and are not editable by the agent. A configured integration harness is preferred for persistence evidence, but the worker may repair a project-owned harness or use the local Compose tooling when that is necessary for real evidence; it must treat `.env` only as opaque local-tool input and never emit its contents. The global prompt grants full lifecycle authority over the selected project's local Docker/Compose resources, including recreating or removing project containers and disposable data needed for real verification. It may not install or reconfigure system software, elevate privileges, alter network/security settings, touch production, or affect another project's Docker resources.

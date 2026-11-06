@@ -25,7 +25,6 @@ function formatSafetyReason(value) {
   const noImplementationProgress = reason.match(/^no-verified-implementation-progress:\s*(\d+)/i);
   if (noImplementationProgress) return `Safety stop — ${noImplementationProgress[1]} consecutive iteration(s) made no roadmap, code, or test progress.`;
   if (/^no-actionable-roadmap-task$/i.test(reason)) return 'Safety stop — OpenCode reported no actionable roadmap task.';
-  if (/^human-action-required/i.test(reason)) return 'Paused — required human action is recorded in the project roadmap.';
   if (/^agent-stopped-cleanly$/i.test(reason)) return 'Agent ended the iteration cleanly without a provider or tool error.';
   if (/^roadmap-complete$/i.test(reason)) return 'Roadmap complete.';
   const docsOnly = reason.match(/^documentation-only-progress:\s*(\d+)/i);
@@ -69,7 +68,6 @@ export function instanceOutcome(instance = {}, summary = null, roadmap = {}, run
     task: taskIds.join(', ') || String(summary?.plannedTaskId || ''),
     duration: summary?.elapsedSeconds == null ? '' : durationText(summary.elapsedSeconds),
     commit: latestCommit(summary),
-    humanActions: Array.isArray(summary?.openHumanActions) ? summary.openHumanActions : [],
     runCompletedTasks: run.completed,
     runIterations: run.iterations
   };
@@ -85,12 +83,6 @@ export function instanceReportRows({ instance = {}, project = {}, outcome = null
   if (!outcome) return rows;
   const resultColor = outcome.kind === 'complete' ? chalk.green : outcome.kind === 'failed' || outcome.kind === 'aborted' ? chalk.red : chalk.yellow;
   rows.push(`  Result    ${resultColor(outcome.reason)}`);
-  if (Array.isArray(outcome.humanActions) && outcome.humanActions.length) {
-    const action = outcome.humanActions[0];
-    rows.push(`  ${chalk.yellow('Human')}    ${action.id}: ${action.do || action.summary || 'action required'}`);
-    if (action.completionEvidence) rows.push(`  Evidence ${action.completionEvidence}`);
-    if (Array.isArray(action.blocks) && action.blocks.length) rows.push(`  Blocks   ${action.blocks.join(', ')}`);
-  }
   if (outcome.runIterations) rows.push(`  This run  ${outcome.runCompletedTasks ? chalk.green(`${outcome.runCompletedTasks} task(s) completed`) : 'no roadmap tasks completed'}  │  ${outcome.runIterations} iteration(s)`);
   if (outcome.task) rows.push(`  Last task ${chalk.cyan(outcome.task)}`);
   if (outcome.duration) rows.push(`  Duration  ${outcome.duration}`);

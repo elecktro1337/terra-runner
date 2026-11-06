@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { isHumanActionLine } from './human-actions.mjs';
 
 export function roadmapProgressFromText(text, taskIdPattern = '') {
   let matcher = null;
@@ -9,7 +8,7 @@ export function roadmapProgressFromText(text, taskIdPattern = '') {
   let completed = 0; let pending = 0; let nextTask = '';
   for (const line of String(text || '').split(/\r?\n/)) {
     const match = line.match(/^\s*-\s*\[([ xX])\]\s*(.*)$/);
-    if (!match || isHumanActionLine(line) || (matcher && !matcher.test(line))) continue;
+    if (!match || /\*\*HUM-\d+\s+\[human\]\*\*/i.test(line) || (matcher && !matcher.test(line))) continue;
     if (match[1].toLowerCase() === 'x') completed++;
     else {
       pending++;

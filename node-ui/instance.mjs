@@ -19,7 +19,6 @@ import { instanceOutcome, instanceReportRows } from './lib/instance-outcome.mjs'
 import { iterationSummariesSince, latestIterationSummary, projectDataRoot } from './lib/reports.mjs';
 import { selectedRoadmapTaskFromEvent } from './lib/task-selection.mjs';
 import { projectWindowActionPlan } from './lib/instance-actions.mjs';
-import { parseHumanActions } from './lib/human-actions.mjs';
 import { isCleanWorkerStopEventStream } from './lib/worker-stop.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -38,13 +37,6 @@ function durationText(milliseconds) { const seconds = Math.max(0, Math.floor(mil
 async function cleanWorkerStopFromFile(filename) {
   if (!filename) return false;
   try { return isCleanWorkerStopEventStream(await fs.readFile(filename, 'utf8')); } catch { return false; }
-}
-async function openHumanActionPause(project) {
-  try {
-    const roadmap = await fs.readFile(path.resolve(project.path, project.roadmap), 'utf8');
-    const action = parseHumanActions(roadmap).find(item => !item.completed);
-    return action ? `${action.id}: ${action.do || action.summary}. Evidence: ${action.completionEvidence || 'see roadmap'}` : '';
-  } catch { return ''; }
 }
 function limitSummary(profile = {}) {
   if (profile.policy === 'local') return 'not applicable';
@@ -104,7 +96,7 @@ async function run(mode, limit = 1) {
   const roadmap = await readRoadmapProgress(project);
   const header = renderRunHeader(settings, project, instance.profile || {}, command, roadmap);
   const footer = new LiveFooter(process.stdout, controls); const status = new LiveStatusBlock(process.stdout, header.statusRow, 1); const liveHeader = new LiveHeaderBlock(process.stdout, header.liveHeaderRow);
-  const liveAttached = footer.enabled && status.enabled; let frame = 0; const frames = ['-', '\\', '|', '/']; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration'; let detail = ''; let humanActionPause = ''; let iterationStarted = Date.now(); let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let selectedTask = ''; let control = ''; let controlNotice = ''; let liveRoadmap = roadmap; let lastTask = ''; let lastCommit = null; const completedIterations = [];
+  const liveAttached = footer.enabled && status.enabled; let frame = 0; const frames = ['-', '\\', '|', '/']; let stage = mode === 'continuous' ? 'Preparing continuous development' : 'Preparing iteration'; let detail = ''; let iterationStarted = Date.now(); let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let selectedTask = ''; let control = ''; let controlNotice = ''; let liveRoadmap = roadmap; let lastTask = ''; let lastCommit = null; const completedIterations = [];
   const statusText = () => `${chalk.cyan(frames[frame++ % frames.length])} ${stage} · ${durationText(Date.now() - iterationStarted)}`;
   const renderStatus = () => status.render(statusText(), detail, completedIterations, controlNotice);
   const renderHeader = () => liveHeader.render([...developmentHeaderRows({ project, profile: instance.profile || {}, command: header.command, roadmap: liveRoadmap, includeTerraLimits: false, run: { elapsedSeconds: elapsedSecondsSince(runStartedAt), lastTask, lastCommit } }), rule]);
@@ -139,8 +131,6 @@ async function run(mode, limit = 1) {
         if (event.type === 'recovery-finished') { stage = 'Recovered interrupted Terra work'; detail = `Recovery commit ${event.recoveryCommit || 'created and pushed'}`; }
         if (event.type === 'network-waiting') { stage = `Waiting for ${event.source || 'network'} connection`; detail = `Retry ${event.attempt || 1}; next check in ${event.delaySeconds || '?'}s`; }
         if (event.type === 'provider-retry-waiting') { stage = 'Waiting before provider retry'; detail = `Retry ${event.attempt || 1}/${event.maximumAttempts || '?'}; next attempt in ${event.delaySeconds || '?'}s`; }
-        if (event.type === 'human-actions-recorded') { detail = `Recorded human action: ${(event.ids || []).join(', ')}`; }
-        if (event.type === 'human-action-required') { const first = Array.isArray(event.actions) ? event.actions[0] : null; humanActionPause = first ? `${first.id}: ${first.do || first.summary}. Evidence: ${first.completionEvidence || 'see roadmap'}` : 'See Development → Human actions.'; stage = 'Paused: human action required'; detail = humanActionPause; }
         if (event.type === 'runner-failed') runnerFailure = String(event.reason || 'runner-internal-error');
         if (event.type === 'iteration-heartbeat') { stage = `Iteration ${event.iteration} | working`; }
         if (event.type === 'iteration-finished') { completedIterations.push(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`); lastTask = (Array.isArray(event.completedTaskIds) && event.completedTaskIds.find(Boolean)) || selectedTask || event.taskId || lastTask; lastCommit = Array.isArray(event.commits) ? event.commits[0] || lastCommit : lastCommit; stage = control ? 'Finalizing requested stop' : 'Preparing next iteration'; detail = ''; void readRoadmapProgress(project).then(next => { liveRoadmap = next; if (liveAttached) renderHeader(); }); if (liveAttached) renderHeader(); }
@@ -159,12 +149,11 @@ async function run(mode, limit = 1) {
     // emitted its authoritative clean terminal event. Preserve that verified
     // agent outcome instead of labelling the project run as a provider failure.
     const cleanWorkerStop = code !== 0 && await cleanWorkerStopFromFile(eventFile);
-    if (cleanWorkerStop && !humanActionPause) humanActionPause = await openHumanActionPause(project);
     const effectiveCode = cleanWorkerStop ? 0 : code;
     const failed = !aborted && !stopped && effectiveCode !== 0;
     const [roadmapAfter, summaryAfter] = await Promise.all([readRoadmapProgress(project), latestIterationSummary(settings, project, configPath)]);
-    const normalReason = humanActionPause || (cleanWorkerStop ? 'OpenCode ended with a verified clean stop event.' : roadmapAfter.available && roadmapAfter.pending === 0 ? `Roadmap complete — all ${roadmapAfter.total} task(s) are done.` : String(summaryAfter?.stoppedReason || ''));
-    const safetyStopped = effectiveCode === 0 && (Boolean(humanActionPause) || cleanWorkerStop || (Boolean(summaryAfter?.stoppedReason) && summaryAfter.stoppedReason !== 'roadmap-complete'));
+    const normalReason = cleanWorkerStop ? 'OpenCode ended with a verified clean stop event.' : roadmapAfter.available && roadmapAfter.pending === 0 ? `Roadmap complete — all ${roadmapAfter.total} task(s) are done.` : String(summaryAfter?.stoppedReason || '');
+    const safetyStopped = effectiveCode === 0 && (cleanWorkerStop || (Boolean(summaryAfter?.stoppedReason) && summaryAfter.stoppedReason !== 'roadmap-complete'));
     await safeUpdate({ state: aborted ? 'aborted' : stopped || safetyStopped ? 'stopped' : effectiveCode === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', error: failed ? (runnerFailure || instanceRunnerFailure(stderr, code)) : '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? String(current?.stopReason || 'Graceful stop completed.') : effectiveCode === 0 ? normalReason : `runner exit ${code}` });
   }).catch(async error => { await safeUpdate({ state: 'failed', runnerPid: null, error: error.message, activity: '' }); }).finally(() => {
     if (paint) clearInterval(paint); if (headerUpdate) clearInterval(headerUpdate); clearInterval(eventWatch); if (liveAttached) process.stdout.off('resize', onResize); liveHeader.clear(); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h');

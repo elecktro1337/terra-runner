@@ -56,11 +56,10 @@ if ($cmd -eq 'run') {
     }
     $repo = (Get-Location).Path
     '{"type":"text","part":{"text":"TERRA_SELECTED_TASK: NTD-0001"}}'
-    if ($env:TERRA_MOCK_HUMAN_TASK -eq '1') {
-        '{"type":"text","part":{"text":"TERRA_HUMAN_TASK: {\"why\":\"Approved DNS records cannot be changed from this repository.\",\"do\":\"Publish the approved SPF record through the DNS owner.\",\"completionEvidence\":\"DNS provider confirmation.\",\"blocks\":[\"NTD-0201\"]}"}}'
+    if ($env:TERRA_MOCK_CLEAN_STOP -eq '1') {
         '{"type":"step_finish","part":{"reason":"stop"}}'
         # OpenCode can use exit 1 for this clean terminal event. Terra must
-        # preserve the already-verified Git result and the human marker.
+        # preserve it as a normal iteration result.
         exit 1
     }
     if ($env:TERRA_MOCK_UPDATE_INSTRUCTIONS_ONCE -eq '1') {

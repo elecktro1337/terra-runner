@@ -38,34 +38,9 @@ other projects' managed stores are not removed.
 
 Each project has a stable ID, absolute path, expected Git branch, roadmap filename, progress filename, and an `instructions` filename. `instructions` defaults to `PROJECT-INSTRUCTIONS.md`, is relative to the project root, and cannot escape it. The file must exist before Dry run, One iteration, or Continuous can start. It may be new, staged, or modified only when it is the sole local Git change: the worker stages and commits exactly that existing file in its own documentation commit before task work. **Projects** has separate explicit actions for **Open project instructions**, **Open roadmap**, and **Open progress**. Opening an existing file is always user-initiated; Development only offers to create and open instructions when the file is missing. The worker rereads instructions before each new iteration, so a newly committed update applies to the next iteration.
 
-`integrationHarness` is an optional relative `.ps1` path inside the same repository. It is intentionally empty for legacy projects. Dry run and Development fail closed if a configured harness is missing, but Terra never invokes it automatically. The worker receives only its path and the contract command `pwsh -NoProfile -ExecutionPolicy Bypass -File <harness> -Suite <id>`; credentials, `.env` contents, Compose options, and service output are not copied into Terra configuration, process arguments, events, or summaries. The agent may create, recreate and remove Docker/Compose resources declared by that selected project, but not another project's resources. A configured harness is mandatory evidence for integration work involving DB/migrations/Redis/queues/repositories; ordinary unit/static work remains possible without it.
+`integrationHarness` is an optional relative `.ps1` path inside the same repository. It is intentionally empty for legacy projects. Dry run and Development fail closed if a configured harness is missing, but Terra never invokes it automatically. The worker receives only its path and the contract command `pwsh -NoProfile -ExecutionPolicy Bypass -File <harness> -Suite <id>`; credentials, `.env` contents, Compose options, and service output are not copied into Terra configuration, process arguments, events, or summaries. The agent may create, recreate and remove Docker/Compose resources declared by that selected project, but not another project's resources. When real persistence evidence requires it, the worker may repair a project-owned harness or use the project's local Compose tooling while keeping `.env` opaque; ordinary unit/static work remains possible without a harness.
 
 `taskIdPattern` is optional. Without it, every Markdown checkbox is a roadmap task. When it is absent, Terra Runner still recognises conventional IDs such as `NTD-0109` in newly completed roadmap entries.
-
-## Human actions in roadmaps
-
-No configuration setting is needed. Each project may maintain this canonical
-roadmap section (usually Terra creates it after a validated worker marker):
-
-```md
-## Human actions
-
-- [ ] **HUM-0001 [human]** — Publish approved sender-domain DNS records.
-  - Why: SPF/DKIM/DMARC evidence cannot be produced from this repository.
-  - Do: Publish the approved records through the DNS owner.
-  - Completion evidence: DNS provider confirmation and commit the checkbox update.
-  - Blocks: NTD-0133, NTD-0136
-```
-
-`HUM-*` entries are excluded from technical roadmap counts. A blocked technical
-item receives an indented `Depends on: HUM-0001` line; more than one open
-human dependency is allowed. The runner skips that item but keeps selecting
-independent technical work. Once no eligible task remains, it pauses with
-`human-action-required` before starting another worker. **Development → Human
-actions** displays the exact work/evidence and can mark an item complete with
-a required non-secret evidence note; the user action updates the roadmap and
-progress file and pushes a normal Git commit. Editing a checkbox manually is
-also recognised at the next selection refresh.
 
 ## Profiles
 
