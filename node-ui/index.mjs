@@ -836,10 +836,24 @@ async function proxyRoutesMenu(settings) {
     if (action === 'delete' && await yesNo(`Delete '${route.name}'?`)) { proxy.routes = proxy.routes.filter(item => item.id !== route.id); if (proxy.activeRouteId === route.id) proxy.activeRouteId = DIRECT_ROUTE_ID; await save(settings); }
   }
 }
-function diagnosticText(value) {
+function diagnosticText(value, maxLength = 220) {
   return String(value || '')
     .replace(/:\/\/[^\s/@:]+(?::[^\s/@]*)?@/g, '://***@')
-    .replace(/\s+/g, ' ').trim().slice(0, 220);
+    .replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+function proxyDiagnosticText(value) {
+  const raw = String(value || '');
+  const marker = raw.match(/TERRA_PROXY_TEST_ERROR:\s*([^\r\n]+)/u);
+  return diagnosticText(marker?.[1] || raw, 600);
+}
+function printDiagnosticCheck(check) {
+  const icon = check.ok ? chalk.green('✓') : chalk.red('×');
+  if (check.ok) {
+    console.log(`  ${icon} ${chalk.bold(check.label)}  ${check.detail}`);
+    return;
+  }
+  console.log(`  ${icon} ${chalk.bold(check.label)}`);
+  console.log(`    ${chalk.red('Reason')}  ${check.detail}`);
 }
 async function systemDiagnostics(settings) {
   header(settings); console.log(chalk.bold('SYSTEM DIAGNOSTICS')); console.log(rule);
@@ -865,10 +879,10 @@ async function systemDiagnostics(settings) {
       const output = await execute('pwsh.exe', args, root);
       checks.push({ label: 'Proxy HTTPS CONNECT', ok: true, detail: diagnosticText(output) || `Succeeded through ${redactedRoute(route)}` });
     } catch (error) {
-      checks.push({ label: 'Proxy HTTPS CONNECT', ok: false, detail: diagnosticText(error.message) || `Failed through ${redactedRoute(route)}` });
+      checks.push({ label: 'Proxy HTTPS CONNECT', ok: false, detail: proxyDiagnosticText(error.message) || `Failed through ${redactedRoute(route)}` });
     }
   }
-  for (const check of checks) console.log(`  ${check.ok ? chalk.green('✓') : chalk.red('×')} ${chalk.bold(check.label)}  ${check.detail}`);
+  for (const check of checks) printDiagnosticCheck(check);
   console.log(rule); console.log(chalk.gray('  Diagnostics do not start OpenCode or a development run. A proxy check starts a temporary loopback bridge and performs one HTTPS CONNECT request.'));
   await pause();
 }

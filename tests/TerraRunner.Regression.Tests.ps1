@@ -120,6 +120,12 @@ Describe 'Terra Runner safe command dispatch' {
         $message | Should Not Match 'перезаписать переменную Host|overwrite.*Host'
         (Test-Path -LiteralPath $script:calls) | Should Be $false
     }
+    It 'emits a redacted, structured proxy diagnostic for a failed CONNECT test' {
+        $source = Get-Content -LiteralPath $runner -Raw
+        $source | Should Match 'TERRA_PROXY_TEST_ERROR:'
+        $source | Should Match 'ConvertTo-SafeProxyTestDetail'
+        $source | Should Match "--fail --head https://example.com/"
+    }
     It 'does not start an agent when no execution command is selected' {
         & $runner -Project safe-project -Config $script:config
         (Test-Path -LiteralPath $script:calls) | Should Be $false

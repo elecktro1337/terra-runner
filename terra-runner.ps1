@@ -139,6 +139,18 @@ function Get-ActiveProxyRoute($Config) {
     return $route
 }
 function Get-ProxyNoProxy($Route) { return (@('localhost','127.0.0.1','::1') + @((Read-Member $Route 'noProxy')) | Where-Object { $_ } | Select-Object -Unique) -join ',' }
+function ConvertTo-SafeProxyTestDetail([string]$Detail) {
+    # curl and the bridge are allowed to explain a failed connection, but their
+    # diagnostics must never turn a username/password URL or an auth header into
+    # terminal/UI output.
+    $value = [string]$Detail
+    $value = [regex]::Replace($value, '(?i)(https?|socks4a?|socks5h?)://[^/\s@]+@', '$1://***@')
+    $value = [regex]::Replace($value, '(?im)\b(proxy-authorization|authorization|password|token)\s*[:=]\s*\S+', '$1=***')
+    $value = [regex]::Replace($value, '\s+', ' ').Trim()
+    if ([string]::IsNullOrWhiteSpace($value)) { return 'The proxy did not establish an HTTPS CONNECT tunnel.' }
+    if ($value.Length -gt 520) { return $value.Substring(0,520) + '…' }
+    return $value
+}
 function Start-TerraProxyBridge($Route) {
     $node = Get-Command node.exe -ErrorAction SilentlyContinue; if ($null -eq $node) { $node = Get-Command node -ErrorAction SilentlyContinue }; if ($null -eq $node) { throw 'Node.js 20+ is required for a configured proxy route.' }
     $bridge = Join-Path $ScriptDir 'node-ui/proxy-bridge.mjs'; if (-not (Test-Path -LiteralPath $bridge)) { throw 'Proxy bridge file is missing.' }
@@ -1159,7 +1171,21 @@ if ($ProxyStatus) { if ($null -eq $activeProxyRoute) { Write-Host 'Proxy route: 
 if ($ProxyTest) {
     if ($null -eq $activeProxyRoute) { Write-Host 'Proxy test: Direct route is selected; no proxy is configured.'; return }
     $testBridge = $null
-    try { $testBridge = Start-TerraProxyBridge $activeProxyRoute; $null = & curl.exe --proxy $testBridge.Url --connect-timeout 8 --max-time 20 --silent --show-error --head https://example.com/ 2>&1; if ($LASTEXITCODE -ne 0) { throw 'HTTPS CONNECT test failed.' }; Write-Host "Proxy test succeeded through $($testBridge.Display)." } finally { Stop-TerraProxyBridge $testBridge }
+    try {
+        $testBridge = Start-TerraProxyBridge $activeProxyRoute
+        $curlOutput = @(& curl.exe --proxy $testBridge.Url --connect-timeout 8 --max-time 20 --silent --show-error --fail --head https://example.com/ 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            $curlDetail = ConvertTo-SafeProxyTestDetail (($curlOutput | ForEach-Object { [string]$_ }) -join "`n")
+            throw "HTTPS CONNECT failed: $curlDetail"
+        }
+        Write-Host "Proxy test succeeded through $($testBridge.Display)."
+    } catch {
+        $safeDetail = ConvertTo-SafeProxyTestDetail $_.Exception.Message
+        # Node diagnostics deliberately reads this stable marker instead of the
+        # verbose PowerShell source-location rendering that follows a throw.
+        [Console]::Error.WriteLine("TERRA_PROXY_TEST_ERROR: $safeDetail")
+        throw "Proxy HTTPS CONNECT check failed: $safeDetail"
+    } finally { Stop-TerraProxyBridge $testBridge }
     return
 }
 
