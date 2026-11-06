@@ -5,6 +5,9 @@ import { footerRows, LiveFooter, LiveStatusBlock, liveStatusRows } from '../lib/
 test('formats one pinned controls row and a separate status block', () => {
   assert.deepEqual(footerRows('Controls: [S] stop'), ['  Controls: [S] stop']);
   assert.deepEqual(liveStatusRows('Preparing iteration'), ['  Preparing iteration']);
+  assert.deepEqual(liveStatusRows('Iteration 3 | NTD-0085 | Updating project files', 'Retry 1; next check in 30s'), [
+    '  Iteration 3 | NTD-0085 | Updating project files  │  Retry 1; next check in 30s'
+  ]);
 });
 
 test('keeps completed iteration history below the changing live status', () => {
@@ -44,14 +47,14 @@ test('footer clears its former row before drawing at a resized terminal bottom',
   assert.match(written, /Controls: \[S\] stop/);
 });
 
-test('status block stays below the header and clears without writing normal output', () => {
+test('status block keeps its changing details on one row and clears without writing normal output', () => {
   let written = '';
   const stream = { isTTY: true, rows: 30, write(value) { written += value; return true; } };
   const status = new LiveStatusBlock(stream, 11);
   status.render('Iteration 1 | task', '✓ Previous iteration complete');
   assert.equal(status.lastRow, 11);
   assert.match(written, /Iteration 1 \| task/);
-  assert.match(written, /Previous iteration complete/);
+  assert.match(written, /Iteration 1 \| task  │  ✓ Previous iteration complete/);
   status.clear();
   assert.equal(status.visible, false);
 });
