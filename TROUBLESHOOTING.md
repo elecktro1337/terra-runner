@@ -16,6 +16,16 @@ The Node UI displays a short reason and next step instead of a PowerShell stack 
 
 Use **Development → Dry run** to check the project path, branch, roadmap, progress file, instructions, OpenCode command, provider snapshot, and working-tree cleanliness without launching an agent.
 
+## I need roadmap, progress, and instructions for a new project
+
+Open **Projects → Open default project bootstrap prompt**. Append the intended
+project goal in its final **Запрос пользователя** block, supply the repository
+tree and relevant source/documentation to a model, then save the three returned
+files in the repository. Models that cannot attach files must return complete
+Markdown blocks for `PREFIX-ROADMAP.md`, `PREFIX-PROGRESS.md`, and
+`PROJECT-INSTRUCTIONS.md`. Add the project through **Projects** only after the
+files are saved; Terra does not import generated documents automatically.
+
 ## A WIP checkpoint stopped the run
 
 Terra only creates a WIP checkpoint after a worker exits normally without a stream error and leaves a previously clean worktree dirty. The checkpoint runs the repository's normal commit hooks and does not mark a roadmap checkbox complete. If its diff check, hook, or push fails, inspect the reported reason and existing local work; Terra does not delete it. After the checkpoint is pushed, Continuous can safely use it as implementation progress on the next iteration.

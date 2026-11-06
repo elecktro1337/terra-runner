@@ -36,6 +36,17 @@ A project can additionally configure one project-owned PowerShell harness (for e
 
 The harness owns any local `.env` loading, Compose health checks, and disposable test schemas. It must never print secrets, expose them in arguments or logs, or touch production/staging. The agent may repair a missing or incomplete project-owned harness, or use the project's local Compose tooling, so real evidence remains autonomous; it may not replace a failed real check with a fake one.
 
+### Bootstrap a new project
+
+**Projects → Open default project bootstrap prompt** opens the versioned
+`PROJECT-BOOTSTRAP-PROMPT.md` template. Copy it into any capable model, append
+the project goal in its final **Запрос пользователя** section, and provide the
+repository tree and relevant files. The prompt requests three downloadable
+files—`PREFIX-ROADMAP.md`, `PREFIX-PROGRESS.md`, and
+`PROJECT-INSTRUCTIONS.md`—or three complete Markdown code blocks when file
+attachments are unavailable. Add the project normally through **Projects**
+after saving those files in its repository.
+
 ## Profiles, snapshots, and limits
 
 A profile combines an OpenCode account, model, reasoning level, and execution policy.

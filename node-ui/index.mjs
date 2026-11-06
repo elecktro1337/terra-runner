@@ -23,6 +23,7 @@ import { ensureProjectAuthStore, isProjectManagedStore, removeProjectAuthStore }
 import { completedIterationText } from './lib/iteration-history.mjs';
 import { instanceActivityText } from './lib/instance-display.mjs';
 import { instancePage } from './lib/instance-pagination.mjs';
+import { PROJECT_BOOTSTRAP_MENU_VALUE, PROJECT_BOOTSTRAP_PROMPT_FILE, projectMenuChoices } from './lib/project-bootstrap.mjs';
 import { instanceActionPlan } from './lib/instance-actions.mjs';
 import { instanceOutcome, instanceReportRows } from './lib/instance-outcome.mjs';
 
@@ -727,6 +728,13 @@ async function openProjectFile(project, field, fallback, label) {
   await launchExternalEditor(filename);
   return filename;
 }
+async function openProjectBootstrapPrompt() {
+  const filename = path.join(root, PROJECT_BOOTSTRAP_PROMPT_FILE);
+  try { if (!(await fs.stat(filename)).isFile()) throw new Error('not a file'); }
+  catch { throw new Error(`Default project bootstrap prompt was not found: ${filename}`); }
+  await launchExternalEditor(filename);
+  return filename;
+}
 async function ensureProjectInstructionsForLaunch(settings, project) {
   const result = await projectInstructionsStatus(project);
   if (result.exists) return true;
@@ -763,11 +771,13 @@ async function editProject(settings, project, isNew = false) {
 async function projectsMenu(settings) {
   while (true) {
     header(settings); console.log(chalk.bold('PROJECTS')); const projects = normalizeProjects(settings);
-    const action = await pick('Manage project configuration', [
-      ...projects.map(project => ({ name: project.id, value: `project:${project.id}` })),
-      { name: chalk.cyan('+ Add project'), value: 'add' }
-    ]);
+    const action = await pick('Manage project configuration', projectMenuChoices(projects).map(item => item.value === 'add' ? { ...item, name: chalk.cyan(item.name) } : item));
     if (!action) return;
+    if (action === PROJECT_BOOTSTRAP_MENU_VALUE) {
+      try { const filename = await openProjectBootstrapPrompt(); console.log(chalk.green(`Opened ${filename} in Notepad.`)); }
+      catch (error) { console.log(chalk.red(`Could not open default bootstrap prompt: ${error.message}`)); }
+      await pause(); continue;
+    }
     if (action === 'add') { await editProject(settings, { path: '', branch: '', roadmap: '', progress: '', instructions: DEFAULT_PROJECT_INSTRUCTIONS, integrationHarness: '' }, true); continue; }
     const project = projects.find(item => item.id === action.slice('project:'.length)); if (!project) continue;
     const harness = await projectIntegrationHarnessStatus(project);

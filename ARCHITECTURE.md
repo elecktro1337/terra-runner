@@ -42,7 +42,7 @@ Terra Runner separates presentation, execution, and persistent project evidence.
 ## Components
 
 - `Terra Runner.cmd` requires Node.js 20+ and starts the Node.js dispatcher; PowerShell 7 remains the execution engine and CLI host.
-- `node-ui/index.mjs` is the primary terminal UI. It manages projects and profiles, gathers safe OpenCode inventory, renders run telemetry, starts PowerShell with named parameters, and paginates runtime instance records.
+- `node-ui/index.mjs` is the primary terminal UI. It manages projects and profiles, gathers safe OpenCode inventory, renders run telemetry, starts PowerShell with named parameters, paginates runtime instance records, and opens the global project-documentation bootstrap prompt.
 - `node-ui/lib/profiles.mjs` normalises and applies non-secret profile settings.
 - `node-ui/lib/reports.mjs` reads isolated project summaries and reports.
 - `terra-runner.ps1` is the safety and orchestration engine. It validates Git, controls budgets and snapshots, writes summaries/reports, and manages stop files.
@@ -63,6 +63,12 @@ Terra Runner separates presentation, execution, and persistent project evidence.
 ## State boundaries
 
 Application installation contains scripts, templates, and the Node UI. Application configuration and state live under `%LOCALAPPDATA%\TerraRunner` unless portable mode is selected. Each project receives a separate data directory, so projects with identical display names cannot mix logs or financial state.
+
+`PROJECT-BOOTSTRAP-PROMPT.md` is a versioned installation template, not a
+per-project setting or runtime artifact. It asks an external model to inspect
+the supplied project before producing the same roadmap/progress/instructions
+file contract used by Terra projects. It contains no credentials or project
+state and is opened only through an explicit **Projects** action.
 
 OpenCode credentials remain owned by OpenCode. Terra Runner stores only account IDs, labels, profile policy, managed-store metadata, and user-entered provider observations. A local OpenCode cost estimate is stored separately from the provider snapshot and is always labelled as an estimate. A project-managed DB is deleted immediately when its inactive project configuration is removed; its source profile DB remains untouched.
 
