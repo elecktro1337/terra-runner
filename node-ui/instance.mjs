@@ -134,8 +134,10 @@ async function run(mode, limit = 1) {
         if (event.type === 'runner-failed') runnerFailure = String(event.reason || 'runner-internal-error');
         if (event.type === 'iteration-heartbeat') { stage = `Iteration ${event.iteration} | working`; }
         if (event.type === 'iteration-finished') { completedIterations.push(`${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`); lastTask = (Array.isArray(event.completedTaskIds) && event.completedTaskIds.find(Boolean)) || selectedTask || event.taskId || lastTask; lastCommit = Array.isArray(event.commits) ? event.commits[0] || lastCommit : lastCommit; stage = control ? 'Finalizing requested stop' : 'Preparing next iteration'; detail = ''; void readRoadmapProgress(project).then(next => { liveRoadmap = next; if (liveAttached) renderHeader(); }); if (liveAttached) renderHeader(); }
-        const instanceActivity = event.type === 'iteration-heartbeat' ? `Iteration ${event.iteration}: ${event.elapsedSeconds}s` : event.type === 'network-waiting' ? `Waiting for ${event.source || 'network'} connection` : event.type === 'provider-retry-waiting' ? 'Waiting before provider retry' : event.type;
-        await safeUpdate({ state: 'running', activity: instanceActivity, iteration: event.iteration ?? null });
+        const instanceActivity = event.type === 'iteration-started' || event.type === 'iteration-heartbeat' ? `Iteration ${event.iteration}: ${event.type === 'iteration-heartbeat' ? event.elapsedSeconds : 0}s` : event.type === 'network-waiting' ? `Waiting for ${event.source || 'network'} connection` : event.type === 'provider-retry-waiting' ? 'Waiting before provider retry' : event.type;
+        const instancePatch = { state: 'running', activity: instanceActivity, iteration: event.iteration ?? null };
+        if (event.type === 'iteration-started') instancePatch.iterationStartedAt = event.at || new Date().toISOString();
+        await safeUpdate(instancePatch);
       } catch { }
     }
   };

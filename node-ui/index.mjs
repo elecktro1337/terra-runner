@@ -22,6 +22,7 @@ import { instanceTerminalLauncher } from './lib/instance-launcher.mjs';
 import { ensureProjectAuthStore, isProjectManagedStore, removeProjectAuthStore } from './lib/project-auth-stores.mjs';
 import { completedIterationText } from './lib/iteration-history.mjs';
 import { instanceActivityText } from './lib/instance-display.mjs';
+import { instancePage } from './lib/instance-pagination.mjs';
 import { instanceActionPlan } from './lib/instance-actions.mjs';
 import { instanceOutcome, instanceReportRows } from './lib/instance-outcome.mjs';
 
@@ -618,15 +619,23 @@ async function developmentMenu(settings) {
   }
 }
 async function instancesMenu(settings) {
+  let page = 0;
   while (true) {
     const instances = await listInstances(configPath); header(settings); console.log(chalk.bold('ACTIVE AND RECENT PROJECT INSTANCES')); console.log(rule);
     if (!instances.length) console.log(chalk.gray('  No project windows have been opened yet.'));
+    const visible = instancePage(instances, page);
+    page = visible.page;
+    if (instances.length > visible.items.length) console.log(chalk.gray(`  Showing ${visible.first}–${visible.last} of ${visible.total} records · page ${visible.page + 1}/${visible.pageCount}`));
     const terminalCount = instances.filter(isTerminalInstance).length;
-    const choices = instances.map(instance => ({ name: `${isTerminalInstance(instance) ? chalk.gray('○') : chalk.green('●')} ${instance.projectId}  ${chalk.cyan(instance.profile?.model || '')}  ${isTerminalInstance(instance) ? chalk.gray(instance.state) : chalk.yellow(instance.state)}${instance.activity ? chalk.gray(` — ${instanceActivityText(instance.activity)}`) : ''}`, value: instance.id }));
+    const choices = visible.items.map(instance => ({ name: `${isTerminalInstance(instance) ? chalk.gray('○') : chalk.green('●')} ${instance.projectId}  ${chalk.cyan(instance.profile?.model || '')}  ${isTerminalInstance(instance) ? chalk.gray(instance.state) : chalk.yellow(instance.state)}${instance.activity ? chalk.gray(` — ${instanceActivityText(instance)}`) : ''}`, value: instance.id }));
+    if (visible.page > 0) choices.push({ name: '← Previous page', value: 'previous-page' });
+    if (visible.page + 1 < visible.pageCount) choices.push({ name: 'Next page →', value: 'next-page' });
     if (terminalCount) choices.push({ name: chalk.yellow(`Clear ${terminalCount} completed / failed record(s)`), value: 'clear-terminal' });
     choices.push({ name: 'Refresh', value: 'refresh' });
     const choice = await pick('Open an instance', choices);
     if (!choice) return;
+    if (choice === 'previous-page') { page--; continue; }
+    if (choice === 'next-page') { page++; continue; }
     if (choice === 'clear-terminal') { if (await yesNo(`Remove ${terminalCount} completed, failed, stopped, aborted, or orphaned instance record(s)?`)) { const removed = await clearTerminalInstances(configPath); console.log(chalk.green(`Removed ${removed} terminal instance record(s).`)); await pause(); } continue; }
     const instance = instances.find(item => item.id === choice); if (!instance) continue;
     if (isTerminalInstance(instance)) await showInstanceCompletionReport(settings, instance);
