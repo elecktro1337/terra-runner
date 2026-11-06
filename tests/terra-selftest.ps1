@@ -291,6 +291,22 @@ try {
     if (-not $implementationSummary.implementationProgress -or $implementationSummary.consecutiveNoProgress -ne 0 -or $implementationSummary.stoppedReason) { throw 'Code/test progress was incorrectly treated as no roadmap progress.' }
     Write-Host 'PASS: code/test progress keeps continuous development running without a roadmap checkbox.' -ForegroundColor Green
 
+    # Checkpoints preserve partial work, but a continuous run must not make
+    # unlimited paid iterations when no roadmap checkbox ever closes.
+    $beforeUncompletedLimit = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
+    $cfg.execution.maxConsecutiveUncompletedImplementationIterations = 2
+    $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
+    $env:TERRA_MOCK_IMPLEMENTATION_PROGRESS = '1'
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 4
+    Remove-Item Env:TERRA_MOCK_IMPLEMENTATION_PROGRESS -ErrorAction SilentlyContinue
+    $afterUncompletedLimit = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
+    if ($afterUncompletedLimit.Count -ne ($beforeUncompletedLimit + 2)) { throw 'Uncompleted implementation limit did not stop after the configured number of iterations.' }
+    $uncompletedLimitSummary = Get-Content -Raw -LiteralPath ($afterUncompletedLimit | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).FullName | ConvertFrom-Json
+    if ($uncompletedLimitSummary.stoppedReason -notmatch '^wip-without-roadmap-progress: 2 ' -or $uncompletedLimitSummary.consecutiveUncompletedImplementationIterations -ne 2) { throw 'Uncompleted implementation stop reason or counter was not recorded.' }
+    Write-Host 'PASS: repeated partial implementation stops after the configured safety limit.' -ForegroundColor Green
+    $cfg.execution.maxConsecutiveUncompletedImplementationIterations = 6
+    $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
+
     # A successful worker can leave an incomplete implementation for the next
     # iteration. Terra must checkpoint it with ordinary hooks, push it, and
     # count it as progress without ticking a roadmap item.

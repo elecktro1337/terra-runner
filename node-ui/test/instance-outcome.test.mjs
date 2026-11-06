@@ -47,6 +47,20 @@ test('explains a safety stop only after roadmap and implementation progress are 
   assert.match(outcome.reason, /^Safety stop — 3 consecutive iteration\(s\) made no roadmap, code, or test progress/);
 });
 
+test('stops a repeated partial implementation without pretending the planned task ran', () => {
+  const outcome = instanceOutcome(
+    { state: 'stopped', runStartedAt: '2026-11-06T19:53:12.996Z', endedAt: '2026-11-06T22:28:29.563Z' },
+    {
+      plannedTaskId: 'NTD-0010', displayTaskId: 'NTD-0010', selectedTaskId: '',
+      stoppedReason: 'wip-without-roadmap-progress: 6 consecutive implementation iteration(s) changed code, tests, or checkpoints but completed no roadmap task'
+    },
+    { available: true, completed: 176, pending: 73, total: 249 }
+  );
+  assert.match(outcome.reason, /^Safety stop — 6 consecutive implementation iteration/);
+  assert.equal(outcome.task, '');
+  assert.equal(outcome.duration, '2h 35m 16s');
+});
+
 test('reports unique completed roadmap tasks across the current run', () => {
   const outcome = instanceOutcome(
     { state: 'finished' },

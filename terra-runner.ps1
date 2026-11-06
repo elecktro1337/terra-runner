@@ -1261,6 +1261,8 @@ Require-PositiveNumber $cfg.logs.maxTotalMiBPerProject 'logs.maxTotalMiBPerProje
 if ($null -ne (Read-Member $cfg.logs 'reportRetainDays')) { Require-PositiveNumber $cfg.logs.reportRetainDays 'logs.reportRetainDays' | Out-Null }
 if ([int]$cfg.execution.maxConsecutiveNoProgress -lt 1) { throw 'maxConsecutiveNoProgress must be >= 1.' }
 if ($null -ne (Read-Member $cfg.execution 'maxConsecutiveDocumentationOnly') -and [int]$cfg.execution.maxConsecutiveDocumentationOnly -lt 1) { throw 'maxConsecutiveDocumentationOnly must be >= 1.' }
+$maxUncompletedImplementationIterations = if ($null -ne (Read-Member $cfg.execution 'maxConsecutiveUncompletedImplementationIterations')) { [int]$cfg.execution.maxConsecutiveUncompletedImplementationIterations } else { 6 }
+if ($maxUncompletedImplementationIterations -lt 1) { throw 'maxConsecutiveUncompletedImplementationIterations must be >= 1.' }
 $transientRetryDelaySeconds = if ($null -ne (Read-Member $cfg.execution 'transientRetryDelaySeconds')) { [int]$cfg.execution.transientRetryDelaySeconds } else { 30 }
 $maxTransientProviderRetries = if ($null -ne (Read-Member $cfg.execution 'maxTransientProviderRetries')) { [int]$cfg.execution.maxTransientProviderRetries } else { 3 }
 $transientProviderRetryDelaySeconds = if ($null -ne (Read-Member $cfg.execution 'transientProviderRetryDelaySeconds')) { [int]$cfg.execution.transientProviderRetryDelaySeconds } else { 30 }
@@ -1392,6 +1394,11 @@ try {
     # Continuous run stop after its first iteration.
     $noProgress = 0
     $docsOnly = 0
+    # A checkpoint preserves incomplete work, but it must not permit an
+    # unattended run to keep paying for an unfinished roadmap item forever.
+    # This counter is deliberately separate from noProgress: code/test changes
+    # remain useful progress, just not unlimited progress without a checkbox.
+    $uncompletedImplementationIterations = 0
     $transientProviderRetryCount = 0
     $activeChild = $null
     for ($i = 1; $i -le $maxCycles; $i++) {
@@ -1587,7 +1594,11 @@ try {
         # first item's title.
         $selectedTaskId = Get-WorkerSelectedTaskId $eventsPath $roadmap
         $selectedTaskTitle = Get-RoadmapTaskTitle $roadmap $selectedTaskId
-        $displayTaskId = if ($completedIds.Count -gt 0) { [string]$completedIds[0] } elseif ($selectedTaskId) { $selectedTaskId } else { $plannedTask.Id }
+        # Do not claim that the first unchecked item was worked on when the
+        # worker did not emit a validated selection marker. The planned task is
+        # still available in the summary for diagnostics, but history and the
+        # instance result must not mislabel it as the last completed/worked task.
+        $displayTaskId = if ($completedIds.Count -gt 0) { [string]$completedIds[0] } elseif ($selectedTaskId) { $selectedTaskId } else { '' }
         $displayTaskTitle = Get-RoadmapTaskTitle $roadmap $displayTaskId
         if (-not $displayTaskTitle) {
             if ($displayTaskId -eq $selectedTaskId) { $displayTaskTitle = $selectedTaskTitle }
@@ -1602,9 +1613,10 @@ try {
         $implementationProgressNow = ($doneAfter -gt $doneBefore) -or ($changedFiles.Code -gt 0) -or ($changedFiles.Tests -gt 0) -or -not [string]::IsNullOrWhiteSpace($checkpointCommit)
         $noProgressNow = (-not $implementationProgressNow) -and -not $transientNetworkFailure
         $noProgress = if ($transientNetworkFailure) { $noProgress } elseif ($noProgressNow) { $noProgress + 1 } else { 0 }
+        $uncompletedImplementationIterations = if ($doneAfter -gt $doneBefore) { 0 } elseif ($implementationProgressNow) { $uncompletedImplementationIterations + 1 } else { 0 }
         $docsOnlyNow = ($changedFiles.Docs -gt 0 -and $changedFiles.Code -eq 0 -and $changedFiles.Tests -eq 0)
         $docsOnly = if ($docsOnlyNow) { $docsOnly + 1 } else { 0 }
-        Save-Json $stateFile ([ordered]@{ noProgress=$noProgress; documentationOnly=$docsOnly; lastRunId=$runId; updatedAt=(Get-Date).ToString('o') })
+        Save-Json $stateFile ([ordered]@{ noProgress=$noProgress; documentationOnly=$docsOnly; uncompletedImplementationIterations=$uncompletedImplementationIterations; lastRunId=$runId; updatedAt=(Get-Date).ToString('o') })
         $docsLimit = if ($null -ne (Read-Member $cfg.execution 'maxConsecutiveDocumentationOnly')) { [int]$cfg.execution.maxConsecutiveDocumentationOnly } else { 12 }
         if (-not $termination -and $noTasksReported) {
             $pendingAfter = Count-Pending $roadmap $taskIdPattern
@@ -1612,6 +1624,9 @@ try {
         }
         elseif (-not $termination -and $noProgress -ge [int]$cfg.execution.maxConsecutiveNoProgress) {
             $termination = "no-verified-implementation-progress: $noProgress consecutive iteration(s) made no roadmap, code, or test progress"
+        }
+        elseif (-not $termination -and $uncompletedImplementationIterations -ge $maxUncompletedImplementationIterations) {
+            $termination = "wip-without-roadmap-progress: $uncompletedImplementationIterations consecutive implementation iteration(s) changed code, tests, or checkpoints but completed no roadmap task"
         }
         elseif (-not $termination -and $docsOnly -ge $docsLimit) {
             $termination = "documentation-only-progress: $docsOnly consecutive iteration(s) changed no code or tests"
@@ -1676,6 +1691,7 @@ try {
             documentationOnly = $docsOnlyNow
             consecutiveDocumentationOnly = $docsOnly
             consecutiveNoProgress = $noProgress
+            consecutiveUncompletedImplementationIterations = $uncompletedImplementationIterations
             transientNetworkFailure = $transientNetworkFailure
             transientProviderFailure = $(if ($null -ne $transientProviderFailure) { [string]$transientProviderFailure.Type } else { '' })
             transientProviderMessage = $(if ($null -ne $transientProviderFailure) { 'provider response interruption' } else { '' })

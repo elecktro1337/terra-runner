@@ -1,6 +1,9 @@
 function durationText(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
-  return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainder = total % 60;
+  return hours ? `${hours}h ${String(minutes).padStart(2, '0')}m ${String(remainder).padStart(2, '0')}s` : `${minutes}m ${String(remainder).padStart(2, '0')}s`;
 }
 
 export function formatInstanceTime(value) {
@@ -25,6 +28,8 @@ function formatSafetyReason(value) {
   if (noProgress) return `Safety stop — ${noProgress[1]} consecutive iteration(s) completed no roadmap task.`;
   const noImplementationProgress = reason.match(/^no-verified-implementation-progress:\s*(\d+)/i);
   if (noImplementationProgress) return `Safety stop — ${noImplementationProgress[1]} consecutive iteration(s) made no roadmap, code, or test progress.`;
+  const wipWithoutRoadmapProgress = reason.match(/^wip-without-roadmap-progress:\s*(\d+)/i);
+  if (wipWithoutRoadmapProgress) return `Safety stop — ${wipWithoutRoadmapProgress[1]} consecutive implementation iteration(s) changed code, tests, or checkpoints without completing a roadmap task.`;
   if (/^no-actionable-roadmap-task$/i.test(reason)) return 'Safety stop — OpenCode reported no actionable roadmap task.';
   if (/^agent-stopped-cleanly$/i.test(reason)) return 'Agent ended the iteration cleanly without a provider or tool error.';
   if (/^roadmap-complete$/i.test(reason)) return 'Roadmap complete.';
@@ -60,14 +65,21 @@ export function instanceOutcome(instance = {}, summary = null, roadmap = {}, run
   // The runner records a terse process status as stopReason and a separately
   // redacted, actionable diagnosis as error. Prefer the diagnosis.
   if (state === 'failed') reason = String(instance.error || reason || 'Runner failed.');
-  if (state === 'stopped' || state === 'aborted') reason = formatSafetyReason(reason || (state === 'aborted' ? 'Emergency abort completed.' : 'Graceful stop completed.'));
+  if (state === 'stopped' || state === 'aborted') reason = formatSafetyReason(reason || String(summary?.stoppedReason || '') || (state === 'aborted' ? 'Emergency abort completed.' : 'Graceful stop completed.'));
   const taskIds = Array.isArray(summary?.completedTaskIds) ? summary.completedTaskIds.filter(Boolean) : [];
   const run = runTotals(runSummaries);
+  const plannedOnlyDisplay = summary?.displayTaskId && summary?.displayTaskId === summary?.plannedTaskId && !summary?.selectedTaskId && !taskIds.length;
+  const lastTask = taskIds.join(', ') || String(summary?.selectedTaskId || '') || (plannedOnlyDisplay ? '' : String(summary?.displayTaskId || ''));
+  const runStartedAt = Date.parse(String(instance.runStartedAt || instance.createdAt || ''));
+  const runEndedAt = Date.parse(String(instance.endedAt || instance.updatedAt || ''));
+  const runElapsedSeconds = Number.isFinite(runStartedAt) && Number.isFinite(runEndedAt) && runEndedAt >= runStartedAt
+    ? (runEndedAt - runStartedAt) / 1000
+    : summary?.elapsedSeconds;
   return {
     kind, reason,
     roadmap: roadmap.available ? `${completed}/${total} complete  |  ${pending} pending${total ? `  |  ${((completed / total) * 100).toFixed(1)}%` : ''}` : '',
-    task: taskIds.join(', ') || String(summary?.plannedTaskId || ''),
-    duration: summary?.elapsedSeconds == null ? '' : durationText(summary.elapsedSeconds),
+    task: lastTask,
+    duration: runElapsedSeconds == null ? '' : durationText(runElapsedSeconds),
     commit: latestCommit(summary),
     runCompletedTasks: run.completed,
     runIterations: run.iterations
