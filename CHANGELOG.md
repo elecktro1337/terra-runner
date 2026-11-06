@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Raised configuration to schema v12 and added an optional, repository-relative project integration harness. Workers receive only the harness path and the standard suite command; the harness owns local secrets and Compose lifecycle.
+- Added immediate WIP checkpoints for successful, clean partial work. Terra validates the staged diff, uses normal Git hooks, pushes `wip(terra): checkpoint …`, keeps roadmap checkboxes unchanged, and lets Continuous continue from that implementation progress.
+- Tightened worker task markers: only a complete ID that exists as a roadmap checkbox can be displayed.
+
 - Terminal instance reports now show local MSK start and end times. New records persist an immutable end timestamp; legacy records fall back to their final update timestamp. Coordinator-watchdog stops retain their specific heartbeat cause instead of being indistinguishable from a manual stop.
 - Continuous runs now retry a narrowly classified transient provider interruption (including `provider.invalid-output` / “response ended unexpectedly”) up to three times with bounded exponential backoff. A retry requires a clean, published Git state; One iteration and all other error classes continue to stop safely.
 - Refresh the live Development header every second and after every iteration with roadmap counts, run duration, last task, and last commit; fixed dispatcher instances calculating the duration from a persisted ISO timestamp.

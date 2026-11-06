@@ -10,6 +10,16 @@ export function validateProjectInstructionsPath(value) {
   return '';
 }
 
+export function validateProjectIntegrationHarnessPath(value) {
+  const filename = String(value || '').trim();
+  if (!filename) return '';
+  if (/^(?:[A-Za-z]:[\\/]|[\\/])/.test(filename)) return 'Integration harness must be a relative path inside the project.';
+  if (filename.split(/[\\/]+/).some(part => part === '..')) return 'Integration harness path must not leave the project directory.';
+  if (/[\0]/.test(filename)) return 'Integration harness path is invalid.';
+  if (!/\.ps1$/i.test(filename)) return 'Integration harness must be a PowerShell .ps1 file.';
+  return '';
+}
+
 export function normalizeProjects(settings) {
   const projects = Array.isArray(settings.projects) ? settings.projects : [];
   delete settings.activeProjectId;
@@ -17,6 +27,8 @@ export function normalizeProjects(settings) {
     if (!project || typeof project !== 'object') continue;
     const candidate = String(project?.instructions || '').trim();
     project.instructions = validateProjectInstructionsPath(candidate) ? DEFAULT_PROJECT_INSTRUCTIONS : candidate;
+    const harness = String(project?.integrationHarness || '').trim();
+    project.integrationHarness = validateProjectIntegrationHarnessPath(harness) ? '' : harness;
   }
   return projects;
 }

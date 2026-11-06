@@ -27,6 +27,12 @@ During a run, Terra Runner shows roadmap completion and percentage, the task sel
 
 Every project has a `PROJECT-INSTRUCTIONS.md` alongside its roadmap and progress files. It is mandatory for Development and contains the project's own environment, Docker/Compose, testing, debugging, and architecture guidance. **Projects** provides explicit actions to open instructions, the roadmap, or progress in Notepad. Development never opens an existing instructions file automatically. If instructions are missing, it offers to create the empty template and open it; restart Development after saving it. The file may be new or modified when Development starts, but it must be the only local Git change: the worker stages and commits that existing file in a separate documentation commit before task work. A later committed update is read by the next continuous iteration. Project instructions supplement, but cannot weaken, Terra Runner's global safety policy, and the development agent never edits them.
 
+### Optional integration harness
+
+A project can additionally configure one project-owned PowerShell harness (for example, `tests/tools/terra-integration.ps1`) in **Projects**. The path is always repository-relative and optional; projects without one continue to use normal unit/static work. When present, Development and Dry run verify that the file exists, but Terra never runs it by itself. The worker receives only the relative path and invokes it for database, migration, Redis, queue, repository, or persistence evidence with `pwsh -NoProfile -ExecutionPolicy Bypass -File <harness> -Suite <id>`.
+
+The harness owns any local `.env` loading, Compose health checks, and disposable test schemas. It must never print secrets, expose them in arguments or logs, touch production/staging, or remove containers/volumes it did not create. A failed harness means the required evidence is absent; it cannot be replaced by a fake check.
+
 ## Profiles, snapshots, and limits
 
 A profile combines an OpenCode account, model, reasoning level, and execution policy.
@@ -81,6 +87,10 @@ shown in the live status and recorded below the project data directory.
 Terra never performs this automatic commit without its matching marker. A dirty
 worktree without one can be manual work, so it remains blocked for review.
 
+### WIP checkpoints
+
+When an iteration exits successfully without an OpenCode stream error but leaves useful uncommitted work in a worktree that was clean at the start, Terra validates the staged diff, runs the repository's normal Git hooks/secret scanning through a standard commit, and pushes `wip(terra): checkpoint <task-id> <run-id>`. This preserves partial implementation without ticking a roadmap checkbox; Continuous treats the pushed checkpoint as implementation progress and proceeds to the next iteration. Any failed diff check, hook, provider/error event, abort, or unavailable push stops with the precise reason and leaves the work for review. The interrupted-run marker remains the fallback for process/computer failure.
+
 ## Safe CLI commands
 
 All public commands use named parameters. OpenCode starts only with an explicit execution command.
@@ -93,7 +103,7 @@ pwsh -File .\terra-runner.ps1 -Project my-project -ProfileId my-profile -Status
 pwsh -File .\terra-runner.ps1 -Project my-project -Report
 ```
 
-In schema v11, model execution and `-Status` require `-ProfileId`; `-Report`, proxy commands and controls do not. `-Status`, `-Report`, preflight, configuration actions, cancelled menus, and an invocation without an execution command never launch `opencode run`.
+In schema v12, model execution and `-Status` require `-ProfileId`; `-Report`, proxy commands and controls do not. `-Status`, `-Report`, preflight, configuration actions, cancelled menus, and an invocation without an execution command never launch `opencode run`.
 
 ## Tests
 
@@ -106,12 +116,13 @@ The test suites use local mocks and temporary repositories. They make no paid Op
 
 ## Upgrade to 2.4
 
-On first dispatcher start, configuration is migrated to schema v11. Existing
+On first dispatcher start, configuration is migrated to schema v12. Existing
 legacy model, account, reasoning and budget values are preserved in profiles;
 global profile/account selections and project default profiles are removed. Each
 project receives the default instructions path `PROJECT-INSTRUCTIONS.md`; the
 file itself is not created by migration and must be created before
-Development starts.
+Development starts. Existing projects receive an empty optional
+`integrationHarness` setting; migration never creates or runs a harness.
 The first Development launch of a cloud profile creates that project's private
 store and streams only that provider's current OpenCode credential into it.
 It does not copy credentials during migration and does not require another

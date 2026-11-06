@@ -4,7 +4,7 @@ Terra Runner 2.4 stores normal configuration and runtime state in `%LOCALAPPDATA
 
 ## Dispatcher runtime and automatic OpenCode storage
 
-Schema v11 includes `openCode.stores[]` with
+Schema v12 includes `openCode.stores[]` with
 `profiles[].authStoreId`. Runtime instance records, heartbeats and addressable
 controls live next to the configuration under `runtime/`; they contain no
 provider secrets or Terra budget/quota values.
@@ -37,6 +37,8 @@ other projects' managed stores are not removed.
 ## Projects
 
 Each project has a stable ID, absolute path, expected Git branch, roadmap filename, progress filename, and an `instructions` filename. `instructions` defaults to `PROJECT-INSTRUCTIONS.md`, is relative to the project root, and cannot escape it. The file must exist before Dry run, One iteration, or Continuous can start. It may be new, staged, or modified only when it is the sole local Git change: the worker stages and commits exactly that existing file in its own documentation commit before task work. **Projects** has separate explicit actions for **Open project instructions**, **Open roadmap**, and **Open progress**. Opening an existing file is always user-initiated; Development only offers to create and open instructions when the file is missing. The worker rereads instructions before each new iteration, so a newly committed update applies to the next iteration.
+
+`integrationHarness` is an optional relative `.ps1` path inside the same repository. It is intentionally empty for legacy projects. Dry run and Development fail closed if a configured harness is missing, but Terra never invokes it automatically. The worker receives only its path and the contract command `pwsh -NoProfile -ExecutionPolicy Bypass -File <harness> -Suite <id>`; credentials, `.env` contents, Compose options, and service output are not copied into Terra configuration, process arguments, events, or summaries. A configured harness is mandatory evidence for integration work involving DB/migrations/Redis/queues/repositories; ordinary unit/static work remains possible without it.
 
 `taskIdPattern` is optional. Without it, every Markdown checkbox is a roadmap task. When it is absent, Terra Runner still recognises conventional IDs such as `NTD-0109` in newly completed roadmap entries.
 
@@ -91,3 +93,11 @@ a `chore(terra): recover interrupted run …` commit and pushes it with the
 normal non-force retry policy. `last-recovery.json` records the resulting
 commit. A clean successful iteration clears the marker. Dirty worktrees with
 no valid marker are never auto-committed.
+
+After a successful worker exit with no stream error, a clean-start worktree that
+contains uncommitted partial implementation is handled sooner: Terra stages the
+changes, validates `git diff --cached --check`, uses normal repository hooks by
+creating `wip(terra): checkpoint <task-id> <run-id>`, and verifies its
+non-force push. The checkpoint intentionally does not change the roadmap. A
+hook/diff/event/abort/push failure stops the run with a specific reason for
+review; recovery markers remain the power-loss fallback.

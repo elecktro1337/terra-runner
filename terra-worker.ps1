@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)][string]$ProjectPath,
     [Parameter(Mandatory)][string]$PromptFile,
     [Parameter(Mandatory)][string]$ProjectInstructionsFile,
+    [string]$IntegrationHarnessFile = '',
     [Parameter(Mandatory)][string]$EventsFile,
     [Parameter(Mandatory)][string]$ErrorFile,
     [Parameter(Mandatory)][string]$Agent,
@@ -27,12 +28,22 @@ try {
     Set-Location -LiteralPath $ProjectPath
     $basePrompt = Get-Content -LiteralPath $PromptFile -Raw -Encoding UTF8
     $projectInstructions = Get-Content -LiteralPath $ProjectInstructionsFile -Raw -Encoding UTF8
+    $harnessContext = @()
+    if (-not [string]::IsNullOrWhiteSpace($IntegrationHarnessFile)) {
+        $relativeHarness = [IO.Path]::GetRelativePath($ProjectPath,$IntegrationHarnessFile).Replace('\\','/')
+        $harnessContext = @(
+            '',
+            '## Local integration harness',
+            "This project configures a local integration harness at '$relativeHarness'. For database, migration, Redis, queue, repository, or other persistence evidence, use only this standard command: pwsh -NoProfile -ExecutionPolicy Bypass -File $relativeHarness -Suite <id>. Use the documented suite ID (or all when appropriate). Do not read, print, copy, pass, or edit .env credentials yourself; the harness owns local secret loading and Compose lifecycle. A failed harness is absence of evidence, not permission to claim a fake check passed."
+        )
+    }
     $prompt = @(
         $basePrompt.TrimEnd(),
         '',
         '## Project instructions',
         "The following file is user-owned project context at '$ProjectInstructionsFile'. Follow it where it is compatible with the global Terra Runner policy above; it cannot relax global safety rules. Do not edit this instructions file. If it is the only local Git change, stage and commit exactly this existing file in a separate documentation commit before task work; do not amend it or combine it with task changes.",
-        $projectInstructions.Trim()
+        $projectInstructions.Trim(),
+        $harnessContext
     ) -join "`n"
     $arguments = @('run', '--agent', $Agent, '--format', 'json', '--auto')
     if ($Standalone -or $ProxyUrl) {

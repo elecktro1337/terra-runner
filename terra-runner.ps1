@@ -104,6 +104,19 @@ function Assert-ProjectInstructionsFile([string]$Repository, $Instructions) {
         throw "Project instructions file is required: $relative. Create it from Projects before Development."
     }
 }
+function Resolve-ProjectIntegrationHarnessFile([string]$Repository, $ProjectConfig) {
+    $relative = [string](Read-Member $ProjectConfig 'integrationHarness')
+    if ([string]::IsNullOrWhiteSpace($relative)) { return $null }
+    if ([IO.Path]::IsPathRooted($relative) -or -not $relative.EndsWith('.ps1',[StringComparison]::OrdinalIgnoreCase)) { throw 'Integration harness must be a relative PowerShell .ps1 path inside the project.' }
+    $segments = @($relative -split '[\\/]')
+    if ($segments | Where-Object { $_ -eq '..' }) { throw 'Integration harness path must not leave the project directory.' }
+    $base = [IO.Path]::GetFullPath($Repository).TrimEnd([IO.Path]::DirectorySeparatorChar,[IO.Path]::AltDirectorySeparatorChar)
+    $filename = [IO.Path]::GetFullPath((Join-Path $base $relative))
+    $prefix = $base + [IO.Path]::DirectorySeparatorChar
+    if (-not $filename.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'Integration harness path must stay inside the project directory.' }
+    if (-not (Test-Path -LiteralPath $filename -PathType Leaf)) { throw "Configured integration harness was not found: $relative" }
+    return [pscustomobject]@{ Path=$filename; Relative=([IO.Path]::GetRelativePath($base,$filename).Replace('\\','/')) }
+}
 function Test-OnlyProjectInstructionsChanges([string]$Repository, $Instructions) {
     # Compare Git's own porcelain output instead of parsing filenames ourselves:
     # this remains correct for spaces and non-ASCII paths. The instructions
@@ -370,6 +383,32 @@ function Recover-TerraInterruptedWork([string]$Directory, [string]$Branch, [stri
     Write-UiEvent 'recovery-finished' @{ interruptedRunId=$runId; recoveryCommit=$commit }
     return [pscustomobject]@{ Interrupted=$false; Commit=$commit }
 }
+function Save-TerraWipCheckpoint([string]$Directory, [string]$Branch, [string]$RunId, [string]$TaskId, [int]$Attempts, [int]$DelaySeconds, [string]$StopPath, [string]$AbortPath) {
+    # This is intentionally a normal commit: repository hooks and any configured
+    # secret scanner run exactly as they do for a developer commit. Do not bypass
+    # hooks and do not put content or credentials in the commit message.
+    $safeTaskId = if ($TaskId -match '^[A-Za-z][A-Za-z0-9_-]{1,63}-\d{2,}$') { $TaskId } else { 'unknown-task' }
+    try {
+        Invoke-Cli 'git' @('-C',$Directory,'add','--all') $Directory | Out-Null
+        Push-Location -LiteralPath $Directory
+        try { & git diff --cached --quiet; $stagedExit = $LASTEXITCODE }
+        finally { Pop-Location }
+        if ($stagedExit -eq 0) { return [pscustomobject]@{ Success=$false; Reason='wip-checkpoint-empty'; Commit='' } }
+        if ($stagedExit -ne 1) { throw 'could not inspect staged checkpoint' }
+        Invoke-Cli 'git' @('-C',$Directory,'diff','--cached','--check') $Directory | Out-Null
+        Invoke-Cli 'git' @('-C',$Directory,'commit','-m',"wip(terra): checkpoint $safeTaskId $RunId") $Directory | Out-Null
+        $publish = Wait-ForGitRemotePublish $Directory $Branch $Attempts $DelaySeconds $StopPath $AbortPath
+        if (-not $publish.Success) {
+            return [pscustomobject]@{ Success=$false; Reason=$(if ($publish.Interrupted) { [string]$publish.Reason } else { "wip-checkpoint-push-unverified: $($publish.Error)" }); Commit=(Get-Head $Directory) }
+        }
+        return [pscustomobject]@{ Success=$true; Reason=''; Commit=(Get-Head $Directory) }
+    } catch {
+        # The source files remain available for review. Reset only the index we
+        # staged from a previously clean worktree; never discard user content.
+        try { Invoke-Cli 'git' @('-C',$Directory,'restore','--staged','--','.') $Directory | Out-Null } catch { }
+        return [pscustomobject]@{ Success=$false; Reason=("wip-checkpoint-failed: " + $_.Exception.Message); Commit='' }
+    }
+}
 function Get-EventErrors([string]$EventsFile) {
     $streamErrors = 0
     $toolErrorIds = [System.Collections.Generic.HashSet[string]]::new()
@@ -546,7 +585,7 @@ function Get-RoadmapTaskTitle([string]$RoadmapFile, [string]$TaskId) {
     }
     return ''
 }
-function Get-WorkerSelectedTaskId([string]$EventsFile) {
+function Get-WorkerSelectedTaskId([string]$EventsFile, [string]$RoadmapFile) {
     if (-not (Test-Path -LiteralPath $EventsFile -PathType Leaf)) { return '' }
     $utf8 = [System.Text.UTF8Encoding]::new($false)
     foreach ($line in [System.IO.File]::ReadLines($EventsFile, $utf8)) {
@@ -558,7 +597,13 @@ function Get-WorkerSelectedTaskId([string]$EventsFile) {
             $text = [string](Read-Member $part 'text')
             if ([string]::IsNullOrWhiteSpace($text)) { $text = [string](Read-Member $event 'text') }
             $match = [regex]::Match($text,'(?im)(?:^|\r?\n)\s*TERRA_SELECTED_TASK\s*:\s*([A-Z][A-Z0-9_-]*-\d{3,})\b')
-            if ($match.Success) { return $match.Groups[1].Value.ToUpperInvariant() }
+            if ($match.Success) {
+                $candidate = $match.Groups[1].Value.ToUpperInvariant()
+                # A marker is only meaningful when it names a complete checkbox
+                # ID that exists in this project's roadmap. This prevents a
+                # truncated string such as NTD-001 from leaking into the UI.
+                if (Get-RoadmapTaskTitle $RoadmapFile $candidate) { return $candidate }
+            }
         } catch {
             # Raw events may be incomplete while OpenCode is flushing output.
         }
@@ -1015,7 +1060,7 @@ function Rotate-Reports([string]$DataDirectory, $Settings) {
 }
 
 $cfg = Get-Content -LiteralPath $Config -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable -Depth 40
-if ([int]$cfg.schemaVersion -notin @(1,2,3,4,5,6,7,8,9,10,11)) { throw 'Unsupported terra-config.json schemaVersion.' }
+if ([int]$cfg.schemaVersion -notin @(1,2,3,4,5,6,7,8,9,10,11,12)) { throw 'Unsupported terra-config.json schemaVersion.' }
 $projectConfig = @($cfg.projects | Where-Object { $_.id -eq $Project })
 if ($projectConfig.Count -ne 1) { throw "Expected exactly one project with id '$Project'." }
 $projectConfig = $projectConfig[0]
@@ -1221,6 +1266,7 @@ try {
     if ($requiresProjectInstructions) {
         $projectInstructions = Resolve-ProjectInstructionsFile $repo $projectConfig
         Assert-ProjectInstructionsFile $repo $projectInstructions
+        $projectIntegrationHarness = Resolve-ProjectIntegrationHarnessFile $repo $projectConfig
     }
     $initialGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
     $instructionsAreOnlyChange = $requiresProjectInstructions -and (Test-OnlyProjectInstructionsChanges $repo $projectInstructions)
@@ -1236,6 +1282,7 @@ try {
     if ($instructionsAreOnlyChange) {
         Write-Host "Project instructions are the only local Git change. The worker must commit '$($projectInstructions.Relative)' unchanged before task work."
     }
+    $initialWorktreeClean = [string]::IsNullOrWhiteSpace($initialGitStatus)
     $roadmap = Join-Path $repo ([string]$projectConfig.roadmap)
     $progress = Join-Path $repo ([string]$projectConfig.progress)
     $taskIdPattern = [string](Read-Member $projectConfig 'taskIdPattern')
@@ -1337,6 +1384,7 @@ try {
                 '-OpenCodeCommand',$openCode,'-ProjectPath',$repo,'-PromptFile',$promptFile,
                 '-ProjectInstructionsFile',$projectInstructions.Path,
                 '-EventsFile',$eventsPath,'-ErrorFile',$stderrPath,'-Agent',([string]$cfg.agent),'-Model',([string]$cfg.model))
+            if ($null -ne $projectIntegrationHarness) { $argsList += @('-IntegrationHarnessFile',$projectIntegrationHarness.Path) }
             if ($InstanceId -or $ProfileId) { $argsList += '-Standalone' }
             if ($null -ne $proxyBridge) { $argsList += @('-ProxyUrl',$proxyBridge.Url,'-NoProxy',$proxyBridge.NoProxy,'-CaFile',$proxyBridge.CaFile) }
             $reasoning = Read-Member (Read-Member $cfg 'openCode') 'reasoning'
@@ -1425,9 +1473,27 @@ try {
             $usageKind -eq 'balance' -and [bool]$profileBudget.stopOnZeroCostWithTokens -and -not $termination) {
             $termination = 'new-token-usage-without-recorded-cost'
         }
+        $checkpointCommit = ''
+        $checkpointReason = ''
         $gitStatus = ''
         try { $gitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo }
         catch { if (-not $termination) { $termination = "git-status-error: $($_.Exception.Message)" } }
+        $mayCheckpoint = $gitStatus.Trim() -ne '' -and $initialWorktreeClean -and $exitCode -eq 0 -and $eventErrors -eq 0 -and -not $termination
+        if ($mayCheckpoint) {
+            $checkpointTask = Get-WorkerSelectedTaskId $eventsPath $roadmap
+            if (-not $checkpointTask) { $checkpointTask = $plannedTask.Id }
+            $checkpoint = Save-TerraWipCheckpoint $repo ([string]$projectConfig.branch) $runId $checkpointTask $maxPushRetries $pushRetryDelaySeconds $stopPath $abortPath
+            $checkpointCommit = [string]$checkpoint.Commit
+            $checkpointReason = [string]$checkpoint.Reason
+            if ($checkpoint.Success) {
+                $gitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
+                $headAfter = Get-Head $repo
+                $doneAfter = Count-Completed $roadmap $taskIdPattern
+                Write-UiEvent 'wip-checkpoint-created' @{ runId=$runId; taskId=$checkpointTask; commit=$checkpointCommit }
+            } elseif (-not $termination) {
+                $termination = $checkpointReason
+            }
+        }
         if ($gitStatus.Trim() -ne '' -and -not $termination) { $termination = 'uncommitted-changes-left-by-agent' }
         $pushVerified = $false
         $remotePublish = Wait-ForGitRemotePublish $repo ([string]$projectConfig.branch) $maxPushRetries $pushRetryDelaySeconds $stopPath $abortPath
@@ -1450,7 +1516,7 @@ try {
         # externally blocked. Persist the explicit marker and look up the
         # matching roadmap line so UI history never pairs a later ID with the
         # first item's title.
-        $selectedTaskId = Get-WorkerSelectedTaskId $eventsPath
+        $selectedTaskId = Get-WorkerSelectedTaskId $eventsPath $roadmap
         $selectedTaskTitle = Get-RoadmapTaskTitle $roadmap $selectedTaskId
         $displayTaskId = if ($completedIds.Count -gt 0) { [string]$completedIds[0] } elseif ($selectedTaskId) { $selectedTaskId } else { $plannedTask.Id }
         $displayTaskTitle = Get-RoadmapTaskTitle $roadmap $displayTaskId
@@ -1464,7 +1530,7 @@ try {
         # test change is real implementation progress even when the agent has
         # not yet completed the larger roadmap item. Do not stop an unattended
         # run merely because that item spans several commits.
-        $implementationProgressNow = ($doneAfter -gt $doneBefore) -or ($changedFiles.Code -gt 0) -or ($changedFiles.Tests -gt 0)
+        $implementationProgressNow = ($doneAfter -gt $doneBefore) -or ($changedFiles.Code -gt 0) -or ($changedFiles.Tests -gt 0) -or -not [string]::IsNullOrWhiteSpace($checkpointCommit)
         $noProgressNow = (-not $implementationProgressNow) -and -not $transientNetworkFailure
         $noProgress = if ($transientNetworkFailure) { $noProgress } elseif ($noProgressNow) { $noProgress + 1 } else { 0 }
         $docsOnlyNow = ($changedFiles.Docs -gt 0 -and $changedFiles.Code -eq 0 -and $changedFiles.Tests -eq 0)
@@ -1504,6 +1570,8 @@ try {
             verificationExamples = $verificationExamples
             completedTaskIds = @($completedIds)
             commits = @($iterationCommits)
+            checkpointCommit = $checkpointCommit
+            checkpointReason = $checkpointReason
             noActionableTasksReported = $noTasksReported
             noActionableTasksMessage = $noTaskMessage
             workingTreeClean = ($gitStatus.Trim() -eq '')
@@ -1549,7 +1617,7 @@ try {
             errorFile = [IO.Path]::GetFileName($stderrPath)
         }
         Save-Json $summaryPath $summary
-        Write-UiEvent 'iteration-finished' @{ iteration=$i; runId=$runId; summaryFile=$summaryPath; taskId=$displayTaskId; taskTitle=$displayTaskTitle; plannedTaskId=$plannedTask.Id; selectedTaskId=$selectedTaskId; completedTaskIds=@($completedIds); completedCount=($doneAfter-$doneBefore); doneAfter=$doneAfter; totalRoadmap=($doneAfter + $summary.pendingAfter); pending=$summary.pendingAfter; elapsedSeconds=$summary.elapsedSeconds; costDeltaUSD=$summary.costDeltaUSD; commits=@($iterationCommits); toolErrors=$toolErrors; exitCode=$exitCode; stoppedReason=$termination }
+        Write-UiEvent 'iteration-finished' @{ iteration=$i; runId=$runId; summaryFile=$summaryPath; taskId=$displayTaskId; taskTitle=$displayTaskTitle; plannedTaskId=$plannedTask.Id; selectedTaskId=$selectedTaskId; completedTaskIds=@($completedIds); completedCount=($doneAfter-$doneBefore); doneAfter=$doneAfter; totalRoadmap=($doneAfter + $summary.pendingAfter); pending=$summary.pendingAfter; elapsedSeconds=$summary.elapsedSeconds; costDeltaUSD=$summary.costDeltaUSD; commits=@($iterationCommits); checkpointCommit=$checkpointCommit; toolErrors=$toolErrors; exitCode=$exitCode; stoppedReason=$termination }
         $reportPath = Write-EnglishDailyReport $projectData $begin.ToString('yyyy-MM-dd')
         Write-Host "Iteration finished: exit=$exitCode new completed tasks=$($doneAfter-$doneBefore) changedHEAD=$($headAfter -ne $headBefore) code=$($changedFiles.Code) tests=$($changedFiles.Tests) docs=$($changedFiles.Docs) toolErrors=$toolErrors"
         if ($limitsEnabled -and $null -ne $usageAfter) { Show-Usage $usageAfter $profileBudget }

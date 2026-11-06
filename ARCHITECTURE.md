@@ -28,6 +28,15 @@ staged diff, commits and non-force pushes the checkpoint. This keeps a power
 loss from permanently blocking the project without treating an arbitrary dirty
 worktree as Terra-owned.
 
+Projects may opt into a single repository-owned PowerShell integration harness.
+The dispatcher validates the safe relative path and the worker sees only that
+path plus its `-Suite` invocation contract. The harness, never the prompt or
+Terra state, owns local `.env` loading, loopback Compose lifecycle and
+disposable test schemas. A successful worker that leaves partial work in a
+clean-start worktree is checkpointed immediately with a normal hooked WIP
+commit and verified push; it becomes implementation progress but cannot tick a
+roadmap checkbox.
+
 Terra Runner separates presentation, execution, and persistent project evidence.
 
 ## Components
@@ -60,4 +69,4 @@ Terminal instance records are runtime metadata, not historical evidence. Selecti
 
 ## Safety boundaries
 
-Only `-Once` and `-Continuous` start an agent. Status, reports, setup, preflight, cancelled prompts, and configuration edits are read-only with respect to OpenCode execution. `STOP` requests finish the current iteration; `ABORT` requests terminate it on the next poll. The UI clears stale flags only when the user explicitly starts a new run. The versioned task prompt is composed in the worker from immutable global policy plus the project-owned `PROJECT-INSTRUCTIONS.md`, which is reread for every worker process. The instructions file may be the sole local Git change at launch; the worker stages and commits that unchanged file separately before task work. Project instructions cannot relax global safety policy and are not editable by the agent. The global prompt grants a bounded local-infrastructure capability: it may start and await already-installed development dependencies required by the selected task, but may not install or reconfigure system software, elevate privileges, alter network/security settings, touch production, or remove resources it did not start.
+Only `-Once` and `-Continuous` start an agent. Status, reports, setup, preflight, cancelled prompts, and configuration edits are read-only with respect to OpenCode execution. `STOP` requests finish the current iteration; `ABORT` requests terminate it on the next poll. The UI clears stale flags only when the user explicitly starts a new run. The versioned task prompt is composed in the worker from immutable global policy plus the project-owned `PROJECT-INSTRUCTIONS.md`, which is reread for every worker process. The instructions file may be the sole local Git change at launch; the worker stages and commits that unchanged file separately before task work. Project instructions cannot relax global safety policy and are not editable by the agent. A configured integration harness is the exclusive route for persistence evidence: the worker must not inspect `.env` or credentials directly. The global prompt grants a bounded local-infrastructure capability: it may start and await already-installed development dependencies required by the selected task, but may not install or reconfigure system software, elevate privileges, alter network/security settings, touch production, or remove resources it did not start.

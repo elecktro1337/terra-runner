@@ -69,6 +69,22 @@ Describe 'Terra Runner safe command dispatch' {
         $source = Get-Content -LiteralPath $runner -Raw
         $source | Should Match 'function Test-OnlyProjectInstructionsChanges'
     }
+    It 'validates an optional project-owned integration harness and passes only its path to the worker' {
+        $worker = Get-Content -LiteralPath (Join-Path $here 'terra-worker.ps1') -Raw
+        $worker | Should Match '\[string\]\$IntegrationHarnessFile'
+        $worker | Should Match 'Do not read, print, copy, pass, or edit \.env credentials'
+        $source = Get-Content -LiteralPath $runner -Raw
+        $source | Should Match 'function Resolve-ProjectIntegrationHarnessFile'
+        $source | Should Match 'Configured integration harness was not found'
+        $source | Should Match "'-IntegrationHarnessFile'"
+    }
+    It 'creates a normal hooked WIP checkpoint only after a clean worker result' {
+        $source = Get-Content -LiteralPath $runner -Raw
+        $source | Should Match 'function Save-TerraWipCheckpoint'
+        $source | Should Match 'wip\(terra\): checkpoint'
+        $source | Should Match "'diff','--cached','--check'"
+        $source | Should Match '\$exitCode -eq 0 -and \$eventErrors -eq 0'
+    }
     It 'requires an explicit selected-task marker before OpenCode tool use' {
         $prompt = Get-Content -LiteralPath (Join-Path $here 'terra-prompt.md') -Raw
         $prompt | Should Match 'TERRA_SELECTED_TASK: <task ID>'

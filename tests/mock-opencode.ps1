@@ -88,6 +88,17 @@ if ($cmd -eq 'run') {
         '{"type":"text","part":{"text":"Mock implementation progress"}}'
         exit 0
     }
+    if ($env:TERRA_MOCK_UNCOMMITTED_PROGRESS -eq '1') {
+        $source = Join-Path $repo 'src/MockWipImplementation.php'
+        $test = Join-Path $repo 'tests/MockWipImplementationTest.php'
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $source))
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $test))
+        $stamp = [guid]::NewGuid().ToString('N')
+        [IO.File]::AppendAllText($source,"<?php // WIP implementation $stamp`n")
+        [IO.File]::AppendAllText($test,"<?php // WIP test $stamp`n")
+        '{"type":"text","part":{"text":"Mock clean partial implementation; checkpoint required"}}'
+        exit 0
+    }
     $roadmap = Join-Path $repo 'NTD-ROADMAP.md'
     $text = Get-Content -LiteralPath $roadmap -Raw
     $text = $text.Replace('[ ]','[x]')

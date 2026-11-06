@@ -271,6 +271,23 @@ try {
     if (-not $implementationSummary.implementationProgress -or $implementationSummary.consecutiveNoProgress -ne 0 -or $implementationSummary.stoppedReason) { throw 'Code/test progress was incorrectly treated as no roadmap progress.' }
     Write-Host 'PASS: code/test progress keeps continuous development running without a roadmap checkbox.' -ForegroundColor Green
 
+    # A successful worker can leave an incomplete implementation for the next
+    # iteration. Terra must checkpoint it with ordinary hooks, push it, and
+    # count it as progress without ticking a roadmap item.
+    $beforeWip = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
+    $roadmapBeforeWip = Get-Content -LiteralPath (Join-Path $repo 'NTD-ROADMAP.md') -Raw
+    $env:TERRA_MOCK_UNCOMMITTED_PROGRESS = '1'
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once
+    Remove-Item Env:TERRA_MOCK_UNCOMMITTED_PROGRESS -ErrorAction SilentlyContinue
+    $afterWip = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
+    if ($afterWip.Count -ne ($beforeWip + 1)) { throw 'WIP checkpoint did not produce a summary.' }
+    if ((& git -C $repo status --porcelain)) { throw 'WIP checkpoint left the worktree dirty.' }
+    $wipSummary = Get-Content -Raw -LiteralPath ($afterWip | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).FullName | ConvertFrom-Json
+    if (-not $wipSummary.checkpointCommit -or -not $wipSummary.implementationProgress -or $wipSummary.completedTaskIds.Count -ne 0) { throw 'WIP checkpoint summary is incomplete or marked a roadmap task complete.' }
+    if ((& git -C $repo log -1 --pretty=%s) -notmatch '^wip\(terra\): checkpoint NTD-\d{4} ') { throw 'WIP checkpoint commit message is missing.' }
+    if ((Get-Content -LiteralPath (Join-Path $repo 'NTD-ROADMAP.md') -Raw) -cne $roadmapBeforeWip) { throw 'WIP checkpoint unexpectedly modified the roadmap.' }
+    Write-Host 'PASS: clean partial work becomes a pushed WIP checkpoint without a roadmap tick.' -ForegroundColor Green
+
     # A TLS interruption must be checked and retried without counting as no progress.
     $beforeTls = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
     $env:TERRA_MOCK_TLS_ONCE = '1'

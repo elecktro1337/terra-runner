@@ -11,9 +11,14 @@ The Node UI displays a short reason and next step instead of a PowerShell stack 
 - **Snapshot missing or stale**: start the run again and enter a current provider observation when prompted.
 - **Project authentication storage could not be prepared**: reconnect the selected profile through normal OpenCode authentication, then launch again. Terra will recreate the private project store automatically; do not copy tokens or database files by hand.
 - **Project instructions file is required**: use **Projects → Open project instructions**. Terra can create its empty template when missing. Save it and start Development again; an existing instructions file is not opened automatically when a run starts.
+- **Configured integration harness was not found**: correct or clear the optional PowerShell path in **Projects**. Do not substitute an `.env` command or put a password into Terra settings.
 - **Uncommitted or untracked files after a crash**: start One iteration or Continuous normally. If they belong to an interrupted Terra run, its matching recovery marker causes Terra to checkpoint and non-force push them automatically. If no matching marker exists, the files may be manual work; review and resolve them yourself.
 
 Use **Development → Dry run** to check the project path, branch, roadmap, progress file, instructions, OpenCode command, provider snapshot, and working-tree cleanliness without launching an agent.
+
+## A WIP checkpoint stopped the run
+
+Terra only creates a WIP checkpoint after a worker exits normally without a stream error and leaves a previously clean worktree dirty. The checkpoint runs the repository's normal commit hooks and does not mark a roadmap checkbox complete. If its diff check, hook, or push fails, inspect the reported reason and existing local work; Terra does not delete it. After the checkpoint is pushed, Continuous can safely use it as implementation progress on the next iteration.
 
 ## A previous stop blocks a new run
 

@@ -10,7 +10,7 @@ import chalk from 'chalk';
 import figlet from 'figlet';
 import ora from 'ora';
 import { defaultApiLimits, isLocalModel, migrateProfiles, profileFrom } from './lib/profiles.mjs';
-import { DEFAULT_PROJECT_INSTRUCTIONS, normalizeProjects, validateProjectId, validateProjectInstructionsPath } from './lib/projects.mjs';
+import { DEFAULT_PROJECT_INSTRUCTIONS, normalizeProjects, validateProjectId, validateProjectInstructionsPath, validateProjectIntegrationHarnessPath } from './lib/projects.mjs';
 import { dailyReports, latestIterationSummary, iterationSummariesSince, projectDataRoot } from './lib/reports.mjs';
 import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, redactedRoute, validateProxyRoute } from './lib/proxy.mjs';
 import { authStorePath, canFinalizeStalledInstance, cleanupLegacyReservations, clearTerminalInstances, createInstance, deleteTerminalInstance, isTerminalInstance, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
@@ -263,7 +263,7 @@ async function runWithTui(runnerArgs, settings, project, profile, mode, header) 
   }
 }
 async function load() { try { const settings = JSON.parse(await fs.readFile(configPath, 'utf8')); settings.openCode ||= { accounts: [] }; settings.openCode.accounts ||= []; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); return settings; } catch (error) { throw new Error(`Cannot load ${configPath}. Run the setup wizard once or pass --config <file>. ${error.message}`); } }
-async function save(settings) { settings.schemaVersion = 11; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
+async function save(settings) { settings.schemaVersion = 12; migrateProfiles(settings); normalizeProjects(settings); normalizeRuntime(settings); normalizeProxy(settings); await fs.mkdir(path.dirname(configPath), { recursive: true }); const temp = `${configPath}.${process.pid}.tmp`; await fs.writeFile(temp, `${JSON.stringify(settings, null, 2)}\n`, 'utf8'); await fs.rename(temp, configPath); }
 function parseModels(text) { return [...new Set(text.split(/\r?\n/).map(v => v.trim()).filter(v => /^[a-z0-9_.-]+\/.+/i.test(v)))]; }
 function storeEnvironment(storeId) { return storeId && storeId !== 'legacy-shared' ? { OPENCODE_DB: authStorePath(configPath, storeId) } : null; }
 function authStore(settings, id) { return (settings.openCode?.stores || []).find(store => store.id === id) || null; }
@@ -668,6 +668,18 @@ function projectInstructionsPath(project) {
   const error = validateProjectInstructionsPath(relative); if (error) throw new Error(error);
   return projectFilePath(project, relative, 'Instructions');
 }
+function projectIntegrationHarnessPath(project) {
+  const relative = String(project.integrationHarness || '').trim();
+  if (!relative) return '';
+  const error = validateProjectIntegrationHarnessPath(relative); if (error) throw new Error(error);
+  return projectFilePath(project, relative, 'Integration harness');
+}
+async function projectIntegrationHarnessStatus(project) {
+  const filename = projectIntegrationHarnessPath(project);
+  if (!filename) return { configured: false, exists: false, filename: '' };
+  try { return { configured: true, exists: (await fs.stat(filename)).isFile(), filename }; }
+  catch { return { configured: true, exists: false, filename }; }
+}
 function projectFilePath(project, relative, label) {
   const filenameValue = String(relative || '').trim();
   if (!filenameValue) throw new Error(`${label} filename is required.`);
@@ -734,7 +746,9 @@ async function editProject(settings, project, isNew = false) {
   const progress = (await input({ message: 'Progress filename', default: project.progress || 'PROGRESS.md' })).trim();
   const instructions = (await input({ message: 'Project instructions filename', default: project.instructions || DEFAULT_PROJECT_INSTRUCTIONS })).trim();
   const instructionsError = validateProjectInstructionsPath(instructions); if (instructionsError) { console.log(chalk.red(instructionsError)); return pause(); }
-  const updated = { id, path: projectPath, branch, roadmap, progress, instructions };
+  const integrationHarness = (await input({ message: 'Integration harness PowerShell path (optional)', default: project.integrationHarness || '' })).trim();
+  const harnessError = validateProjectIntegrationHarnessPath(integrationHarness); if (harnessError) { console.log(chalk.red(harnessError)); return pause(); }
+  const updated = { id, path: projectPath, branch, roadmap, progress, instructions, integrationHarness };
   if (isNew) projects.push(updated); else Object.assign(project, updated);
   await save(settings); console.log(chalk.green(`Project '${id}' saved.`)); return pause();
 }
@@ -746,9 +760,11 @@ async function projectsMenu(settings) {
       { name: chalk.cyan('+ Add project'), value: 'add' }
     ]);
     if (!action) return;
-    if (action === 'add') { await editProject(settings, { path: '', branch: '', roadmap: '', progress: '', instructions: DEFAULT_PROJECT_INSTRUCTIONS }, true); continue; }
+    if (action === 'add') { await editProject(settings, { path: '', branch: '', roadmap: '', progress: '', instructions: DEFAULT_PROJECT_INSTRUCTIONS, integrationHarness: '' }, true); continue; }
     const project = projects.find(item => item.id === action.slice('project:'.length)); if (!project) continue;
-    const detail = await pick(`Project: ${project.id}`, [
+    const harness = await projectIntegrationHarnessStatus(project);
+    const harnessLabel = !harness.configured ? chalk.gray('Integration harness: not configured') : harness.exists ? chalk.green(`Integration harness: ${project.integrationHarness}`) : chalk.yellow(`Integration harness missing: ${project.integrationHarness}`);
+    const detail = await pick(`Project: ${project.id} · ${harnessLabel}`, [
       { name: 'Edit project configuration', value: 'edit' },
       { name: 'Open project instructions', value: 'instructions' },
       { name: 'Open roadmap', value: 'roadmap' },
