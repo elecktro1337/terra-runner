@@ -19,9 +19,9 @@ Use **Development → Dry run** to check the project path, branch, roadmap, prog
 ## I need roadmap, progress, and instructions for a new project
 
 Open **Projects → Open default project bootstrap prompt**. Append the intended
-project goal in its final **Запрос пользователя** block, supply the repository
+project goal in its final **User request** block, supply the repository
 tree and relevant source/documentation to a model, then save the three returned
-files in the repository. Models that cannot attach files must return complete
+English-language files in the repository. Models that cannot attach files must return complete
 Markdown blocks for `PREFIX-ROADMAP.md`, `PREFIX-PROGRESS.md`, and
 `PROJECT-INSTRUCTIONS.md`. Add the project through **Projects** only after the
 files are saved; Terra does not import generated documents automatically.

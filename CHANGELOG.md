@@ -9,7 +9,7 @@
 - Paginated **Development → Active instances** in groups of eight, with explicit next/previous navigation and safe page clamping after cleanup.
 - Made proxy diagnostics extract a redacted, readable CONNECT failure reason instead of displaying a truncated PowerShell source-location trace.
 - Kept live iteration activity and retry/checkpoint details on one compact status row while retaining a separate graceful-stop notice.
-- Added the versioned Russian `PROJECT-BOOTSTRAP-PROMPT.md` template and **Projects → Open default project bootstrap prompt**. It guides any model to inspect a repository and return downloadable (or complete fenced) roadmap, progress, and instructions Markdown files in the NTD/ERP-compatible contract.
+- Expanded `PROJECT-BOOTSTRAP-PROMPT.md` into a detailed English-only, evidence-first template and **Projects → Open default project bootstrap prompt**. It guides any model to inspect a repository and return downloadable (or complete fenced) roadmap, progress, and instructions Markdown files in the NTD/ERP-compatible contract.
 
 - Terminal instance reports now show local MSK start and end times. New records persist an immutable end timestamp; legacy records fall back to their final update timestamp. Coordinator-watchdog stops retain their specific heartbeat cause instead of being indistinguishable from a manual stop.
 - Continuous runs now retry a narrowly classified transient provider interruption (including `provider.invalid-output` / “response ended unexpectedly”) up to three times with bounded exponential backoff. A retry requires a clean, published Git state; One iteration and all other error classes continue to stop safely.

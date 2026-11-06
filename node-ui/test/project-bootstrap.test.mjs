@@ -9,7 +9,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 
 test('ships a complete project bootstrap prompt with the Terra documentation contract', async () => {
   const text = await fs.readFile(path.join(root, PROJECT_BOOTSTRAP_PROMPT_FILE), 'utf8');
-  for (const required of ['PREFIX-ROADMAP.md', 'PREFIX-PROGRESS.md', 'PROJECT-INSTRUCTIONS.md', 'Запрос пользователя', 'fenced Markdown-блока', '## A. Продукт, границы и термины', '## B. Архитектурные решения и инварианты', '## C. Матрица модулей', '## D. Definition of Done', '## E. Поэтапный TODO', '## Entry template']) assert.match(text, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  for (const required of ['PREFIX-ROADMAP.md', 'PREFIX-PROGRESS.md', 'PROJECT-INSTRUCTIONS.md', 'All generated prose', 'User request', 'downloadable file attachments', 'fenced', '## A. Product boundaries and terminology', '## B. Architectural decisions and invariants', '## C. Module and integration matrix', '## D. Definition of Done', '## E. Phased delivery backlog', '## Entry template', 'Quality gate before returning the files']) assert.match(text, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.doesNotMatch(text, /[\u0400-\u04FF]/u);
 });
 
 test('exposes the global bootstrap prompt before project-specific choices', () => {

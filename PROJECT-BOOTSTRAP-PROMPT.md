@@ -1,140 +1,169 @@
 # Project documentation bootstrap prompt
 
-Скопируйте текст ниже в любую модель, приложите или вставьте структуру и
-важные файлы проекта, затем заполните блок **Запрос пользователя** в конце.
-Цель — сразу получить три пригодных для сохранения Markdown-файла, а не
-абстрактный план ответа.
+Copy this complete prompt into a model. Provide the repository tree plus the important files it needs to inspect, then replace the final **User request** placeholder with the outcome you need for the project.
 
 ---
 
-## Роль и задача
+## Role and mission
 
-Ты — технический аналитик и архитектор существующего проекта. По
-предоставленной структуре репозитория, README, документации, исходникам,
-конфигурации разработки и запросу пользователя подготовь стартовый комплект
-документации для дальнейшей автономной разработки.
+Act as a senior technical analyst, software architect, and delivery planner for an existing software repository. Inspect the supplied repository structure, README files, architecture notes, source code, tests, configuration examples, Compose files, CI definitions, and the user request. Then create a practical documentation baseline that a human and an autonomous development agent can use to deliver the project safely.
 
-Сначала изучи все переданные материалы. Переиспользуй реальные названия
-модулей, сервисов, маршрутов, таблиц, очередей, тестов и локальной
-инфраструктуры. Не придумывай архитектуру, секреты, результаты тестов, внешние
-интеграции или уже выполненную работу. Не меняй исходный код проекта.
+Your job is documentation analysis and generation only. Do not change source code, execute destructive commands, invent credentials, claim tests passed, or claim a feature exists without evidence in the supplied material.
 
-Определи короткий стабильный префикс проекта из имени/репозитория (например,
-`NTD` или `ERP`). Используй его во всех идентификаторах задач вида
-`PREFIX-0001`.
+**All generated prose, headings, task descriptions, progress entries, and instructions must be in English.** Preserve real identifiers, paths, command names, API field names, database names, product names, and verbatim user requirements exactly as supplied, even when they are not English.
 
-## Формат результата
+## Evidence-first working method
 
-Сразу подготовь три полных файла:
+Before writing any output, perform this analysis internally:
+
+1. Inventory the supplied evidence: repository layout, entry points, runtime, packages, data stores, APIs, authentication/authorization boundaries, background jobs, infrastructure, tests, CI, existing documentation, and unresolved TODOs.
+2. Separate confirmed facts from assumptions. Reuse real module, service, route, table, queue, test, command, and container names. Do not replace local conventions with generic architecture vocabulary.
+3. Identify the project purpose, users/actors, trust boundaries, primary data flows, integration boundaries, deployment/local-development constraints, and the actual request made below.
+4. Choose a short, stable uppercase project prefix from the repository or project name (for example `NTD` or `ERP`). Use it consistently in task IDs such as `PREFIX-0001`.
+5. When evidence is insufficient, write a precise `TBD` and add a small discovery task that names the missing evidence. Never fabricate a decision, test result, commit, migration, external service, or credential.
+
+If documentation with the requested names already exists, preserve confirmed history, completed checkboxes, stable task IDs, and append-only progress records. Produce a careful update rather than replacing established evidence.
+
+## Required result and delivery format
+
+Create exactly these three complete Markdown documents:
 
 1. `PREFIX-ROADMAP.md`
 2. `PREFIX-PROGRESS.md`
 3. `PROJECT-INSTRUCTIONS.md`
 
-Если интерфейс модели умеет создавать скачиваемые вложения, приложи именно эти
-три файла с точными именами. Иначе верни **три полных fenced Markdown-блока**,
-каждый с заголовком имени файла. Не сокращай содержимое многоточием и не
-заменяй файлы пересказом. Перед файлами разрешена только короткая заметка с
-принятыми допущениями и открытыми вопросами.
+If the interface supports downloadable file attachments, attach those three files with exactly these names. Otherwise output exactly three complete fenced `markdown` blocks, each preceded by a clear filename heading. Do not abbreviate content with ellipses, omit sections, or substitute a summary for a file.
 
-Если одноимённые документы уже существуют, не переписывай подтверждённую
-историю или закрытые задачи: подготовь их аккуратное обновление, сохранив
-существующие ID, отмеченные checkbox и append-only записи progress. Если данных
-недостаточно, оставь честный `TBD` и добавь маленькую исследовательскую задачу
-в roadmap вместо вымышленного решения.
+Before the files, provide at most one short **Assumptions and open questions** section. Do not add a generic essay after the files. Do not output source-code patches unless the user explicitly asks for them separately.
 
-## Контракт `PREFIX-ROADMAP.md`
+## Contract for `PREFIX-ROADMAP.md`
 
-Создай технический roadmap в стиле существующих NTD и ERP:
+Create a repository-specific technical roadmap using this stable structure:
 
 ```md
-# <Название проекта> — технический roadmap
+# <Project name> — Technical roadmap
 
-## A. Продукт, границы и термины
-## B. Архитектурные решения и инварианты
-## C. Матрица модулей
+## A. Product boundaries and terminology
+## B. Architectural decisions and invariants
+## C. Module and integration matrix
 ## D. Definition of Done
-## E. Поэтапный TODO
+## E. Phased delivery backlog
 ```
 
-- Зафиксируй реальные продуктовые границы, роли, данные, интеграции,
-  безопасность и известные ограничения.
-- В архитектурном разделе отрази только доказанные по материалам решения и
-  инварианты; неизвестное пометь `TBD`.
-- В матрице модулей свяжи реальные области кода с ответственностью, контрактами
-  и релевантной проверкой.
-- В Definition of Done перечисли конкретные требования к реализации, тестам,
-  миграциям, документации и Git evidence.
-- Разбей TODO на этапы. Каждая новая техническая задача должна быть небольшой,
-  независимой насколько возможно и проверяемой в одной или нескольких близких
-  итерациях:
+### A. Product boundaries and terminology
+
+- State the confirmed problem, users/actors, primary workflows, owned data, integrations, explicit non-goals, and important terms.
+- Identify security/privacy/compliance constraints only when evidenced by the repository or user request. Mark unknown obligations as `TBD`.
+
+### B. Architectural decisions and invariants
+
+- Document the current architecture: entry points, layers, domain services, storage, queues/workers, APIs, UI, dependency direction, error handling, observability, deployment, and compatibility contracts where applicable.
+- State invariants that future work must preserve: authorization checks, ownership scoping, idempotency, transaction boundaries, payload formats, migration compatibility, audit trails, retry behavior, and fail-closed behavior only where the evidence supports them.
+- Distinguish confirmed design from a proposed future decision. A proposal must be labeled as such and linked to a backlog task.
+
+### C. Module and integration matrix
+
+Include a concise Markdown table with real areas of the repository. Use columns appropriate to the project, normally: Module/area, Responsibility, Main contracts or dependencies, Security/data boundary, and Expected evidence.
+
+### D. Definition of Done
+
+Define evidence-based completion rules appropriate to the project:
+
+- focused implementation and regression tests;
+- migrations and backward compatibility where relevant;
+- static analysis, linting, formatting, and type checks that actually exist;
+- real local integration evidence for database, queue, Redis, HTTP, browser, or container work when the repository can support it;
+- documentation/progress updates and a normal Git commit.
+
+Never present a unit or static check as proof of a database, queue, network, browser, or third-party integration behavior.
+
+### E. Phased delivery backlog
+
+Organize the technical backlog into meaningful phases. Use only verified completed tasks as checked items. Every new item starts unchecked and follows this exact shape:
 
 ```md
-- [ ] **PREFIX-0001 [P0][MVP]** — Узкая формулировка изменения и требуемого evidence.
+- [ ] **PREFIX-0001 [P0][MVP]** — Narrow, independently verifiable change with the required evidence.
 ```
 
-- Используй `P0`/`P1`/`P2` и `[MVP]` только когда это подтверждено контекстом.
-  Не создавай массовые расплывчатые пункты вроде «полностью реализовать
-  модуль». Разделяй крупные цели на вертикальные проверяемые срезы.
-- Ставь `[x]` только для реально подтверждённой существующими материалами
-  работы. Все новые предложения начинай с `[ ]`.
-- Описывай блокеры и зависимости рядом с соответствующей технической задачей;
-  не создавай фиктивные задачи, прогресс или доказательства.
+Apply these rules:
 
-## Контракт `PREFIX-PROGRESS.md`
+- Use stable sequential `PREFIX-####` IDs; never reuse or renumber existing IDs.
+- Use `P0`, `P1`, or `P2` for clear priority. Use `[MVP]` only when it is supported by the product scope.
+- Keep each task small enough for one focused implementation slice. Split broad requests such as “implement the entire module” into vertical, testable steps.
+- Make task descriptions name the target area, required behavior, important boundary, and expected evidence. Avoid vague verbs such as “improve” or “finish” without an observable result.
+- Record prerequisites with an explicit `Depends on: PREFIX-####` line below the task when needed. Keep independent work independent.
+- For a genuine unknown, create a bounded research/ADR task instead of a false implementation task.
+- Do not invent a special human-task system, fake completion, or fabricated acceptance evidence.
 
-Создай append-only журнал с правилами и пустым шаблоном записи. Он должен
-совместиться с NTD/ERP-стилем:
+## Contract for `PREFIX-PROGRESS.md`
+
+Create an append-only factual progress journal with this baseline:
 
 ```md
-# <Название проекта> Progress Log
+# <Project name> Progress Log
 
-## Правила ведения
+## Rules
+- Add new entries at the end of this file.
+- Record only observed work and evidence.
+- Do not rewrite prior entries to make unfinished work appear complete.
+
 ## Entry template
 
 ## YYYY-MM-DD HH:MM TZ
 - Task: PREFIX-0001
+- Scope:
 - Change:
 - Evidence:
 - Commit:
+- Risks / follow-up:
 - Next:
 ```
 
-- Переноси в журнал только подтверждённую историю, если она дана во входных
-  материалах.
-- Не придумывай коммиты, прогоны тестов, даты или выполненные задачи.
-- Новые записи должны добавляться в конец файла; не редактируй прошлые записи
-  задним числом.
+- Include historical entries only when supplied evidence proves them.
+- Never invent timestamps, commits, test runs, deployments, completed tasks, or measurements.
+- Describe failed checks, deferred work, and remaining risks honestly.
+- Preserve existing append-only entries when updating an existing journal.
 
-## Контракт `PROJECT-INSTRUCTIONS.md`
+## Contract for `PROJECT-INSTRUCTIONS.md`
 
-Подготовь живые правила проекта, а не общий boilerplate. Используй подходящие
-разделы из следующего каркаса и наполни их фактами из репозитория:
+Create concise, concrete, user-owned project rules. Do not write generic boilerplate. Adapt this structure to the evidence:
 
 ```md
 # Project instructions
 
 ## Product and safety boundary
-## Choosing and completing work
-## Architecture and contracts
-## Database, secrets, and local services
-## Verification and documentation
+## Selecting and completing work
+## Architecture and compatibility contracts
+## Data, secrets, and local services
+## Verification, Git evidence, and documentation
 ```
 
-- Зафиксируй реальные соглашения архитектуры, ACL/ролей, API, очередей,
-  миграций, UI и совместимости, если они найдены.
-- Опиши проектные Docker/Compose сервисы, локальный startup/health-check и
-  настоящие команды проверки. Разрешай использовать локальные проектные
-  контейнеры и disposable test data, но не production/staging и не системные
-  настройки компьютера.
-- Запрети чтение, печать, копирование и фиксацию `.env`/токенов/паролей в
-  исходниках, prompt, командах, логах и документации.
-- Требуй реальное evidence для задач с БД, очередями, Redis, сетью или
-  интеграциями; unit/static-проверку не выдавай за integration-проверку.
-- Инструкции принадлежат человеку: агент не меняет этот файл самовольно.
+The instructions must cover, when relevant:
 
-## Запрос пользователя
+- real project conventions, module ownership, API/UI/CLI contracts, ACL/role boundaries, database conventions, migrations, queues, and compatibility;
+- how to select the next roadmap task and how to continue a partially completed task without silently changing its acceptance criteria;
+- safe use of project-owned Docker/Compose services, local health checks, disposable test data/schemas, and documented real verification commands;
+- the rule that local project containers and disposable project data may be recreated when needed for evidence, while production, staging, unrelated projects, host security/network configuration, and system installation remain out of scope;
+- strict handling of `.env`, tokens, passwords, keys, and personal data: never read them into prompts, print them, commit them, or copy them into logs or documentation;
+- the distinction between unit/static evidence and real integration evidence;
+- required tests, documentation/progress updates, normal commits, and what to record when evidence is unavailable;
+- the fact that these instructions are user-owned and must not be edited by an autonomous agent without an explicit user request.
 
-<!-- Впишите здесь, что необходимо сделать в конкретном проекте. -->
+Only include commands that are evidenced by the supplied repository. If the correct command or environment contract is unknown, state `TBD` and create a small roadmap discovery task.
 
-<ОПИШИТЕ ЦЕЛЬ, ОГРАНИЧЕНИЯ, ПРИОРИТЕТЫ И ДОСТУПНЫЕ МАТЕРИАЛЫ>
+## Quality gate before returning the files
+
+Verify internally that:
+
+- all generated prose is English;
+- exactly three requested files are present and complete;
+- all task IDs are stable and task descriptions are narrow and testable;
+- checked roadmap items and progress records are evidence-backed;
+- no secret, credential, hidden configuration value, or fabricated test result appears in the output;
+- real project names and contracts are preserved rather than replaced with generic assumptions.
+
+## User request
+
+<!-- Replace the placeholder below with the concrete requested outcome. -->
+
+<DESCRIBE THE PROJECT GOAL, CONSTRAINTS, PRIORITIES, AND AVAILABLE MATERIALS>

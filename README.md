@@ -40,9 +40,9 @@ The harness owns any local `.env` loading, Compose health checks, and disposable
 
 **Projects → Open default project bootstrap prompt** opens the versioned
 `PROJECT-BOOTSTRAP-PROMPT.md` template. Copy it into any capable model, append
-the project goal in its final **Запрос пользователя** section, and provide the
+the project goal in its final **User request** section, and provide the
 repository tree and relevant files. The prompt requests three downloadable
-files—`PREFIX-ROADMAP.md`, `PREFIX-PROGRESS.md`, and
+English-language files—`PREFIX-ROADMAP.md`, `PREFIX-PROGRESS.md`, and
 `PROJECT-INSTRUCTIONS.md`—or three complete Markdown code blocks when file
 attachments are unavailable. Add the project normally through **Projects**
 after saving those files in its repository.
