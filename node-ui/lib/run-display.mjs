@@ -11,7 +11,8 @@ export function profileSnapshotSummary(profile = {}, now = Date.now()) {
 }
 function durationText(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
-  return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`;
+  const hours = Math.floor(total / 3600); const minutes = Math.floor((total % 3600) / 60); const remainder = total % 60;
+  return hours ? `${hours}h ${String(minutes).padStart(2, '0')}m ${String(remainder).padStart(2, '0')}s` : `${minutes}m ${String(remainder).padStart(2, '0')}s`;
 }
 export function elapsedSecondsSince(startedAt, now = Date.now()) {
   const started = typeof startedAt === 'number' ? startedAt : Date.parse(String(startedAt || ''));

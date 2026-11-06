@@ -44,6 +44,11 @@ test('includes live run duration, last task, and last commit when supplied', () 
   assert.match(rows, /Last commit\s+abc123456789.*issue confirmation token/);
 });
 
+test('formats a long live run with hours, minutes, and seconds', () => {
+  const rows = developmentHeaderRows({ project: { id: 'project-a' }, profile: {}, command: 'Continuous', roadmap: {}, includeTerraLimits: false, run: { elapsedSeconds: 4476, lastTask: '', lastCommit: null } });
+  assert.match(rows.at(-1), /1h 14m 36s/);
+});
+
 test('calculates elapsed live-run time from persisted ISO timestamps', () => {
   const now = Date.parse('2026-11-06T12:05:07.000Z');
   assert.equal(elapsedSecondsSince('2026-11-06T12:00:00.000Z', now), 307);

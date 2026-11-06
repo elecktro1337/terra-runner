@@ -5,9 +5,13 @@ Terra Runner 2.4 stores normal configuration and runtime state in `%LOCALAPPDATA
 ## Dispatcher runtime and automatic OpenCode storage
 
 Schema v12 includes `openCode.stores[]` with
-`profiles[].authStoreId`. Runtime instance records, heartbeats and addressable
-controls live next to the configuration under `runtime/`; they contain no
+`profiles[].authStoreId`. Runtime instance records and addressable controls
+live next to the configuration under `runtime/`; they contain no
 provider secrets or Terra budget/quota values.
+
+Dispatcher instances are autonomous after launch: closing or restarting the
+central dispatcher does not stop them. Choosing **Stop all and exit** remains
+an explicit graceful-stop operation for the active instances.
 
 Finished, failed, stopped, aborted, and orphaned instance manifests are disposable runtime records. Use **Development → Active instances** to remove one record or clear all terminal records. The cleanup also removes only that record's `STOP`/`ABORT` directory. It never removes active instance records, project logs, reports, control-state, OpenCode stores, or the configuration.
 

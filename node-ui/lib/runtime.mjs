@@ -90,12 +90,12 @@ export async function clearTerminalInstances(configPath) {
   for (const instance of instances) if (isTerminalInstance(instance) && await deleteTerminalInstance(configPath, instance.id)) removed++;
   return removed;
 }
-export async function createInstance(configPath, project, profile, proxyRoute, coordinatorId, launch) {
+export async function createInstance(configPath, project, profile, proxyRoute, launch) {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const instance = {
     id, projectId: project.id, projectPath: project.path, state: 'launching', createdAt: now, updatedAt: now,
-    coordinatorId, coordinatorHeartbeatAt: now, profile: sanitizeProfile(profile), proxyRoute: proxyRoute ? structuredClone(proxyRoute) : null,
+    profile: sanitizeProfile(profile), proxyRoute: proxyRoute ? structuredClone(proxyRoute) : null,
     launch: structuredClone(launch || { command: 'idle', maxIterations: 0 }),
     runnerPid: null, windowPid: null, iteration: null, activity: '', stopReason: '', error: '', logsPath: '', endedAt: ''
   };
@@ -125,14 +125,4 @@ export async function requestInstanceControl(configPath, id, kind) {
 }
 export async function clearInstanceControls(configPath, id) {
   await Promise.all(['STOP', 'ABORT'].map(async kind => { try { await fs.unlink(instanceControlPath(configPath, id, kind)); } catch (error) { if (error.code !== 'ENOENT') throw error; } }));
-}
-export async function writeCoordinatorHeartbeat(configPath, coordinatorId) {
-  await writeJson(path.join(runtimeRoot(configPath), 'coordinator.json'), { id: coordinatorId, pid: process.pid, updatedAt: new Date().toISOString() });
-}
-export async function readCoordinatorHeartbeat(configPath) {
-  try { return JSON.parse(await fs.readFile(path.join(runtimeRoot(configPath), 'coordinator.json'), 'utf8')); } catch { return null; }
-}
-export async function removeCoordinatorHeartbeat(configPath, coordinatorId) {
-  const file = path.join(runtimeRoot(configPath), 'coordinator.json'); const current = await readCoordinatorHeartbeat(configPath);
-  if (current?.id === coordinatorId) { try { await fs.unlink(file); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
 }

@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
 import figlet from 'figlet';
-import { clearInstanceControls, instanceRunnerFailure, isTerminalInstance, readCoordinatorHeartbeat, readInstance, requestInstanceControl, updateInstance } from './lib/runtime.mjs';
+import { clearInstanceControls, instanceRunnerFailure, isTerminalInstance, readInstance, requestInstanceControl, updateInstance } from './lib/runtime.mjs';
 import { activeProxyRoute } from './lib/proxy.mjs';
 import { LiveFooter, LiveHeaderBlock, LiveStatusBlock } from './lib/live-footer.mjs';
 import { developmentHeaderRows, elapsedSecondsSince } from './lib/run-display.mjs';
@@ -67,7 +67,7 @@ function renderRunHeader(settings, project, profile, command, roadmap) {
   const dynamic = developmentHeaderRows({ project, profile, command, roadmap, includeTerraLimits: false, run: { elapsedSeconds: 0, lastTask: '', lastCommit: null } });
   const rows = [...prefix, ...dynamic, rule];
   for (const row of rows) console.log(row);
-  return { statusRow: rows.reduce((count, row) => count + String(row).split(/\r?\n/).length, 0), liveHeaderRow: prefix.reduce((count, row) => count + String(row).split(/\r?\n/).length, 0), command };
+  return { statusRow: rows.reduce((count, row) => count + String(row).split(/\r?\n/).length, 0), liveHeaderRow: Math.max(0, prefix.reduce((count, row) => count + String(row).split(/\r?\n/).length, 0) - 1), command };
 }
 async function pick(message, choices) { try { return await select({ message, choices: [...choices, { name: '← Back', value: null }], loop: false }); } catch (error) { if (error?.name === 'ExitPromptError') return null; throw error; } }
 async function load() { const [settings, instance] = await Promise.all([fs.readFile(configPath, 'utf8').then(JSON.parse), readInstance(configPath, instanceId)]); if (!instance) throw new Error('The dispatcher instance record no longer exists.'); const project = (settings.projects || []).find(item => item.id === instance.projectId); if (!project) throw new Error(`Project '${instance.projectId}' was removed from the configuration.`); return { settings, instance, project }; }
@@ -164,16 +164,6 @@ async function preflight() {
   const { settings, instance, project } = await load(); renderRunHeader(settings, project, instance.profile || {}, 'Dry run', await readRoadmapProgress(project)); const child = spawn('pwsh.exe', ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'terra-runner.ps1'), '-Project', instance.projectId, '-Config', configPath, '-InstanceId', instanceId, '-DryRun'], { cwd: root, stdio: 'inherit' });
   await new Promise(resolve => child.once('close', resolve));
 }
-async function heartbeatWatch() {
-  const instance = await readInstance(configPath, instanceId); if (!instance || ['finished', 'failed', 'stopped', 'aborted'].includes(instance.state)) return;
-  if (['stopping', 'aborting'].includes(instance.state)) return;
-  const coordinator = await readCoordinatorHeartbeat(configPath); const age = coordinator?.updatedAt ? Date.now() - Date.parse(coordinator.updatedAt) : Infinity;
-  if (!coordinator || coordinator.id !== instance.coordinatorId || age > 20000) {
-    const cause = !coordinator ? 'Dispatcher heartbeat is missing.' : coordinator.id !== instance.coordinatorId ? 'Dispatcher coordinator changed.' : `Dispatcher heartbeat expired after ${Math.ceil(age / 1000)}s.`;
-    await request('STOP', `${cause} Graceful stop requested by instance watchdog.`);
-  }
-}
-const watch = setInterval(() => void heartbeatWatch(), 5000); watch.unref();
 async function main() {
   const initial = await readInstance(configPath, instanceId);
   if (!initial) throw new Error('The dispatcher instance record no longer exists.');

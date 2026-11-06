@@ -13,7 +13,7 @@ import { defaultApiLimits, isLocalModel, migrateProfiles, profileFrom } from './
 import { DEFAULT_PROJECT_INSTRUCTIONS, normalizeProjects, validateProjectId, validateProjectInstructionsPath, validateProjectIntegrationHarnessPath } from './lib/projects.mjs';
 import { dailyReports, latestIterationSummary, iterationSummariesSince, projectDataRoot } from './lib/reports.mjs';
 import { DIRECT_ROUTE_ID, PROXY_PROTOCOLS, activeProxyRoute, normalizeProxy, redactedRoute, validateProxyRoute } from './lib/proxy.mjs';
-import { authStorePath, canFinalizeStalledInstance, cleanupLegacyReservations, clearTerminalInstances, createInstance, deleteTerminalInstance, isTerminalInstance, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance, writeCoordinatorHeartbeat, removeCoordinatorHeartbeat } from './lib/runtime.mjs';
+import { authStorePath, canFinalizeStalledInstance, cleanupLegacyReservations, clearTerminalInstances, createInstance, deleteTerminalInstance, isTerminalInstance, listInstances, normalizeRuntime, readInstance, requestInstanceControl, updateInstance } from './lib/runtime.mjs';
 import { LiveFooter, LiveHeaderBlock, LiveStatusBlock } from './lib/live-footer.mjs';
 import { selectedRoadmapTaskFromEvent } from './lib/task-selection.mjs';
 import { developmentHeaderRows, elapsedSecondsSince } from './lib/run-display.mjs';
@@ -322,7 +322,9 @@ function renderDevelopmentHeader(project, profile, command, roadmap) {
   for (const row of rows) console.log(row);
   return {
     statusRow: rows.reduce((total, row) => total + String(row).split(/\r?\n/).length, 0),
-    liveHeaderRow: prefix.reduce((total, row) => total + String(row).split(/\r?\n/).length, 0),
+    // console.log advances after the printed prefix. Fixed cursor rows are
+    // zero-based, so rendering starts on the first dynamic header row.
+    liveHeaderRow: Math.max(0, prefix.reduce((total, row) => total + String(row).split(/\r?\n/).length, 0) - 1),
     command
   };
 }
@@ -533,7 +535,6 @@ async function chooseRunIterationLimit() {
     console.log(chalk.yellow('Enter a whole number from 0 to 1000, or leave blank to go back.'));
   }
 }
-const coordinatorId = crypto.randomUUID();
 async function chooseProject(settings) {
   const projects = normalizeProjects(settings); if (!projects.length) return null;
   const id = await pick('Project', projects.map(project => ({ name: project.id, value: project.id })));
@@ -577,7 +578,7 @@ async function startDispatcherInstance(settings, project, profile, launch) {
   let effectiveProfile;
   try { effectiveProfile = await prepareProjectProfile(settings, project, profile); }
   catch (error) { console.log(chalk.red(error.message)); return pause(); }
-  const route = activeProxyRoute(settings); const instance = await createInstance(configPath, project, effectiveProfile, route, coordinatorId, launch);
+  const route = activeProxyRoute(settings); const instance = await createInstance(configPath, project, effectiveProfile, route, launch);
   await updateInstance(configPath, instance.id, { state: 'launching', activity: 'Opening project terminal' });
   const launcherSpec = instanceTerminalLauncher({ comSpec: process.env.ComSpec || 'cmd.exe', title: `Terra ${project.id}`, nodePath: process.execPath, instancePath: path.join(root, 'node-ui', 'instance.mjs'), configPath, instanceId: instance.id });
   const launcher = spawn(launcherSpec.command, launcherSpec.args, { cwd: root, detached: true, stdio: 'ignore', windowsHide: false, env: { ...process.env, ...launcherSpec.env } });
@@ -655,7 +656,7 @@ async function showInstanceCompletionReport(settings, instance) {
 async function stopAllInstances() {
   const instances = await listInstances(configPath); const active = instances.filter(instance => !isTerminalInstance(instance));
   for (const instance of active) { await requestInstanceControl(configPath, instance.id, 'STOP'); await updateInstance(configPath, instance.id, { state: 'stopping', activity: 'Dispatcher is shutting down', stopReason: 'Dispatcher is shutting down; graceful stop requested.' }); }
-  if (active.length) console.log(chalk.yellow(`Graceful Stop requested for ${active.length} project instance(s). They will also stop if the dispatcher heartbeat expires.`));
+  if (active.length) console.log(chalk.yellow(`Graceful Stop requested for ${active.length} project instance(s).`));
 }
 async function readProjectId(message, projects, currentId = '') {
   while (true) { const id = (await input({ message, default: currentId })).trim(); const error = validateProjectId(id, projects, currentId); if (!error) return id; console.log(chalk.yellow(error)); }
@@ -885,18 +886,15 @@ async function systemMenu(settings) {
   }
 }
 async function main() {
-  const settings = await load(); await save(settings); await cleanupLegacyReservations(configPath); await writeCoordinatorHeartbeat(configPath, coordinatorId);
-  const heartbeat = setInterval(() => void writeCoordinatorHeartbeat(configPath, coordinatorId), 5000);
-  try {
-    while (true) {
-      header(settings); const action = await pick('Terra Runner', [
-        { name: 'Development', value: 'development' }, { name: 'Projects', value: 'projects' }, { name: 'Models and accounts', value: 'profiles' },
-        { name: 'Reports', value: 'reports' }, { name: 'System', value: 'system' }, { name: 'Stop all and exit', value: 'exit' }
-      ]);
-      if (!action || action === 'exit') { await save(settings); await stopAllInstances(); return; }
-      if (action === 'development') await developmentMenu(settings); if (action === 'profiles') await profilesMenu(settings); if (action === 'projects') await projectsMenu(settings); if (action === 'reports') await reportsMenu(settings); if (action === 'system') await systemMenu(settings);
-    }
-  } finally { clearInterval(heartbeat); await removeCoordinatorHeartbeat(configPath, coordinatorId); }
+  const settings = await load(); await save(settings); await cleanupLegacyReservations(configPath);
+  while (true) {
+    header(settings); const action = await pick('Terra Runner', [
+      { name: 'Development', value: 'development' }, { name: 'Projects', value: 'projects' }, { name: 'Models and accounts', value: 'profiles' },
+      { name: 'Reports', value: 'reports' }, { name: 'System', value: 'system' }, { name: 'Stop all and exit', value: 'exit' }
+    ]);
+    if (!action || action === 'exit') { await save(settings); await stopAllInstances(); return; }
+    if (action === 'development') await developmentMenu(settings); if (action === 'profiles') await profilesMenu(settings); if (action === 'projects') await projectsMenu(settings); if (action === 'reports') await reportsMenu(settings); if (action === 'system') await systemMenu(settings);
+  }
 }
 process.on('SIGINT', () => { process.exitCode = 0; });
 main().catch(error => { console.error(chalk.red(`\nTerra Runner could not start: ${error.message}`)); process.exitCode = 1; });

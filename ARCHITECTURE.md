@@ -2,7 +2,7 @@
 
 ## Dispatcher and project workspaces
 
-`node-ui/index.mjs` is the central dispatcher. It owns a heartbeat and a
+`node-ui/index.mjs` is the central dispatcher. It owns the project list and
 non-secret runtime registry beside `terra-config.json`. It has no global active
 project or profile: Development first selects a command, project, profile and run mode. Main-window mode invokes the
 runner directly; dispatcher-instance mode writes an immutable command snapshot

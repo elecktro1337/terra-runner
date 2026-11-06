@@ -19,7 +19,7 @@ test('v9 to v10 runtime migration assigns legacy auth storage without eagerly cr
 
 test('instance registry stores a command snapshot without profile limit fields', async () => {
   const root = await fixture(); const config = path.join(root, 'terra-config.json');
-  const instance = await createInstance(config, { id: 'project-a', path: 'C:\\work' }, { id: 'p1', model: 'openai/test', password: 'must-not-persist', limits: { dailyUsd: 5 }, usageSource: { remaining: 10 } }, null, 'coordinator', { command: 'continuous', maxIterations: 3 });
+  const instance = await createInstance(config, { id: 'project-a', path: 'C:\\work' }, { id: 'p1', model: 'openai/test', password: 'must-not-persist', limits: { dailyUsd: 5 }, usageSource: { remaining: 10 } }, null, { command: 'continuous', maxIterations: 3 });
   const loaded = await readInstance(config, instance.id);
   assert.equal(loaded.projectId, 'project-a'); assert.equal(loaded.profile.password, undefined); assert.equal(loaded.profile.limits, undefined); assert.deepEqual(loaded.launch, { command: 'continuous', maxIterations: 3 });
   await requestInstanceControl(config, instance.id, 'STOP'); assert.equal(await fs.stat(instanceControlPath(config, instance.id, 'STOP')).then(() => true), true);
@@ -50,12 +50,12 @@ test('redacts runner stderr into a safe actionable instance failure', () => {
 
 test('removes only terminal instance records and preserves active instances', async () => {
   const root = await fixture(); const config = path.join(root, 'terra-config.json');
-  const terminal = await createInstance(config, { id: 'finished', path: 'C:\\finished' }, { id: 'p1' }, null, 'coordinator', {});
-  const active = await createInstance(config, { id: 'running', path: 'C:\\running' }, { id: 'p1' }, null, 'coordinator', {});
+  const terminal = await createInstance(config, { id: 'finished', path: 'C:\\finished' }, { id: 'p1' }, null, {});
+  const active = await createInstance(config, { id: 'running', path: 'C:\\running' }, { id: 'p1' }, null, {});
   await updateInstance(config, terminal.id, { state: 'finished' }); await updateInstance(config, active.id, { state: 'running' });
   assert.equal(await deleteTerminalInstance(config, terminal.id), true);
   await assert.rejects(deleteTerminalInstance(config, active.id), /Only a completed/);
-  const another = await createInstance(config, { id: 'failed', path: 'C:\\failed' }, { id: 'p1' }, null, 'coordinator', {}); await updateInstance(config, another.id, { state: 'failed' });
+  const another = await createInstance(config, { id: 'failed', path: 'C:\\failed' }, { id: 'p1' }, null, {}); await updateInstance(config, another.id, { state: 'failed' });
   assert.equal(await clearTerminalInstances(config), 1);
   assert.equal((await listInstances(config)).length, 1);
   assert.equal((await listInstances(config))[0].projectId, 'running');
