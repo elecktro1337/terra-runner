@@ -106,6 +106,8 @@ Describe 'Terra Runner safe command dispatch' {
         $prompt = Get-Content -LiteralPath (Join-Path $here 'terra-prompt.md') -Raw
         $prompt | Should Match 'TERRA_SELECTED_TASK: <task ID>'
         $prompt | Should Match 'Before using any tool'
+        $source = Get-Content -LiteralPath $runner -Raw
+        $source | Should Match 'Test-RoadmapTaskPending \$RoadmapFile \$candidate'
     }
     It 'requires autonomous decomposition before a broad roadmap item becomes a WIP loop' {
         $prompt = Get-Content -LiteralPath (Join-Path $here 'terra-prompt.md') -Raw

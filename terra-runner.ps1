@@ -645,10 +645,11 @@ function Get-WorkerSelectedTaskId([string]$EventsFile, [string]$RoadmapFile) {
             $match = [regex]::Match($text,'(?im)(?:^|\r?\n)\s*TERRA_SELECTED_TASK\s*:\s*([A-Z][A-Z0-9_-]*-\d{3,})\b')
             if ($match.Success) {
                 $candidate = $match.Groups[1].Value.ToUpperInvariant()
-                # A marker is only meaningful when it names a complete checkbox
-                # ID that exists in this project's roadmap. This prevents a
-                # truncated string such as NTD-001 from leaking into the UI.
-                if (Get-RoadmapTaskTitle $RoadmapFile $candidate) { return $candidate }
+                # A marker is only meaningful when it names an existing,
+                # incomplete checkbox. A completed historical ID would make
+                # the live UI look as though the agent had resumed old work.
+                # This also rejects a truncated string such as NTD-001.
+                if (Test-RoadmapTaskPending $RoadmapFile $candidate) { return $candidate }
             }
         } catch {
             # Raw events may be incomplete while OpenCode is flushing output.
