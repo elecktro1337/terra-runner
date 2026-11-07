@@ -111,13 +111,16 @@ Describe 'Terra Runner safe command dispatch' {
         $source = Get-Content -LiteralPath $runner -Raw
         $source | Should Match 'Test-RoadmapTaskPending \$RoadmapFile \$candidate'
     }
-    It 'requires autonomous decomposition before a broad roadmap item becomes a WIP loop' {
+    It 'locks roadmap structure and requires the runner-assigned task in Autopilot' {
         $prompt = Get-Content -LiteralPath (Join-Path $here 'terra-prompt.md') -Raw
         $prompt | Should Match '## Roadmap task sizing'
-        $prompt | Should Match 'autonomously decompose it instead of making another WIP slice'
-        $prompt | Should Match 'non-checkbox.*parent'
-        $prompt | Should Match 'fresh unused `PREFIX-####` IDs'
+        $prompt | Should Match 'Never decompose, add, remove, reorder, reword'
+        $prompt | Should Match 'TERRA_TASK_DEFERRED: <task ID>'
         $prompt | Should Match 'Stay within the selected task''s direct scope'
+        $source = Get-Content -LiteralPath $runner -Raw
+        $source | Should Match 'Get-PendingRoadmapLeafTasks'
+        $source | Should Match 'autopilot-state\.json'
+        $source | Should Match 'autopilot-task-deferred'
     }
     It 'does not start an agent for Report' {
         & $runner -Project safe-project -Config $script:config -Report

@@ -147,7 +147,8 @@ try {
     & git -C $repo push -q origin codex/terra
     $env:TERRA_MOCK_UPDATE_INSTRUCTIONS_ONCE = '1'
     $env:TERRA_MOCK_STATE_DIR = Join-Path $tempRoot 'instruction-state'
-    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 2
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once
     Remove-Item Env:TERRA_MOCK_UPDATE_INSTRUCTIONS_ONCE -ErrorAction SilentlyContinue
     Remove-Item Env:TERRA_MOCK_STATE_DIR -ErrorAction SilentlyContinue
     if ((Get-Content -LiteralPath $env:TERRA_MOCK_CALL_LOG -Raw) -notmatch 'Updated instruction: use the refreshed check') { throw 'The next worker did not receive the newly committed project instructions.' }
@@ -234,7 +235,8 @@ try {
     if (-not $blocked) { throw 'Balance model must reject decreasing lifetime usage.' }
     Write-Host 'PASS: missing consistency in lifetime usage fails closed.' -ForegroundColor Green
 
-    # NO_ACTIONABLE_TASKS must stop after one attempt even when roadmap checkboxes remain.
+    # One iteration remains strict: a NO_ACTIONABLE_TASKS signal finishes that
+    # single requested attempt even when roadmap checkboxes remain.
     $cfg.budget.mode = 'daily'
     $cfg.execution.maxConsecutiveNoProgress = 3
     $cfg.execution.transientRetryDelaySeconds = 1
@@ -250,14 +252,14 @@ try {
     $summaryDirectory = Join-Path $tempRoot 'project-data/mock-project/logs'
     $beforeNoAction = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
     $env:TERRA_MOCK_NO_ACTIONABLE = '1'
-    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 2
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Once
     Remove-Item Env:TERRA_MOCK_NO_ACTIONABLE -ErrorAction SilentlyContinue
     $afterNoAction = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
-    if ($afterNoAction.Count -ne ($beforeNoAction + 1)) { throw 'NO_ACTIONABLE_TASKS did not stop before a second paid iteration.' }
+    if ($afterNoAction.Count -ne ($beforeNoAction + 1)) { throw 'NO_ACTIONABLE_TASKS did not finish the one requested attempt.' }
     if ((Get-Content -Raw -LiteralPath (Join-Path $repo 'NTD-ROADMAP.md')) -notmatch '\[ \]') { throw 'NO_ACTIONABLE_TASKS simulation unexpectedly changed the roadmap.' }
     $noActionSummary = Get-Content -Raw -LiteralPath ($afterNoAction | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).FullName | ConvertFrom-Json
     if (-not $noActionSummary.noActionableTasksReported) { throw 'NO_ACTIONABLE_TASKS signal was not recorded.' }
-    Write-Host 'PASS: NO_ACTIONABLE_TASKS stops before a second paid iteration.' -ForegroundColor Green
+    Write-Host 'PASS: NO_ACTIONABLE_TASKS remains strict for One iteration.' -ForegroundColor Green
 
     # A clean OpenCode stop is a successful iteration result. It must not
     # create a special human task or block future autonomous work.
@@ -279,6 +281,19 @@ try {
     & git -C $repo commit -qm 'test: reset tasks after clean-stop scenario'
     & git -C $bare fetch -q $repo codex/terra:refs/heads/codex/terra
 
+    # A blocked/empty task is persisted as cooldown instead of terminating the
+    # project after a no-progress count.
+    $beforeDeferred = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
+    $env:TERRA_MOCK_BLOCKED = '1'
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 1
+    Remove-Item Env:TERRA_MOCK_BLOCKED -ErrorAction SilentlyContinue
+    $afterDeferred = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
+    if ($afterDeferred.Count -ne ($beforeDeferred + 1)) { throw 'Autopilot did not persist the deferred task attempt.' }
+    $deferredState = Get-Content -Raw -LiteralPath (Join-Path $tempRoot 'project-data/mock-project/autopilot-state.json') | ConvertFrom-Json -AsHashtable
+    if ($deferredState.tasks['NTD-0101'].state -ne 'cooldown') { throw 'Autopilot did not persist a cooldown record for the deferred leaf task.' }
+    Write-Host 'PASS: Autopilot defers blocked leaf tasks without stopping the project.' -ForegroundColor Green
+    Remove-Item -LiteralPath (Join-Path $tempRoot 'project-data/mock-project/autopilot-state.json') -Force
+
     # A larger roadmap task can span several commits. Code/test changes must
     # keep Continuous moving even before that task's checkbox is completed.
     $beforeImplementationProgress = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
@@ -291,19 +306,21 @@ try {
     if (-not $implementationSummary.implementationProgress -or $implementationSummary.consecutiveNoProgress -ne 0 -or $implementationSummary.stoppedReason) { throw 'Code/test progress was incorrectly treated as no roadmap progress.' }
     Write-Host 'PASS: code/test progress keeps continuous development running without a roadmap checkbox.' -ForegroundColor Green
 
-    # Checkpoints preserve partial work, but a continuous run must not make
-    # unlimited paid iterations when no roadmap checkbox ever closes.
+    # Autopilot preserves partial work but no longer terminates the whole
+    # project after a bounded focused-work window. It cools the task and keeps
+    # using other eligible leaf work until the requested launch limit.
     $beforeUncompletedLimit = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
     $cfg.execution.maxConsecutiveUncompletedImplementationIterations = 2
     $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
     $env:TERRA_MOCK_IMPLEMENTATION_PROGRESS = '1'
-    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 4
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 2
     Remove-Item Env:TERRA_MOCK_IMPLEMENTATION_PROGRESS -ErrorAction SilentlyContinue
     $afterUncompletedLimit = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
-    if ($afterUncompletedLimit.Count -ne ($beforeUncompletedLimit + 2)) { throw 'Uncompleted implementation limit did not stop after the configured number of iterations.' }
+    if ($afterUncompletedLimit.Count -ne ($beforeUncompletedLimit + 2)) { throw 'Autopilot did not complete the configured partial-work window.' }
     $uncompletedLimitSummary = Get-Content -Raw -LiteralPath ($afterUncompletedLimit | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).FullName | ConvertFrom-Json
-    if ($uncompletedLimitSummary.stoppedReason -notmatch '^wip-without-roadmap-progress: 2 ' -or $uncompletedLimitSummary.consecutiveUncompletedImplementationIterations -ne 2) { throw 'Uncompleted implementation stop reason or counter was not recorded.' }
-    Write-Host 'PASS: repeated partial implementation stops after the configured safety limit.' -ForegroundColor Green
+    $autopilotState = Get-Content -Raw -LiteralPath (Join-Path $tempRoot 'project-data/mock-project/autopilot-state.json') | ConvertFrom-Json -AsHashtable
+    if ($uncompletedLimitSummary.stoppedReason -or $autopilotState.tasks['NTD-0101'].state -ne 'cooldown') { throw 'Autopilot did not defer repeated partial implementation into cooldown.' }
+    Write-Host 'PASS: repeated partial implementation enters Autopilot cooldown without stopping the project.' -ForegroundColor Green
     $cfg.execution.maxConsecutiveUncompletedImplementationIterations = 6
     $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
 
@@ -371,13 +388,13 @@ try {
     & git -C $bare fetch -q $repo codex/terra:refs/heads/codex/terra
     $beforeBlocked = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json').Count
     $env:TERRA_MOCK_BLOCKED = '1'
-    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 2
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -Continuous -MaxIterations 1
     Remove-Item Env:TERRA_MOCK_BLOCKED -ErrorAction SilentlyContinue
     $afterBlocked = @(Get-ChildItem -LiteralPath $summaryDirectory -Recurse -Filter '*.summary.json')
-    if ($afterBlocked.Count -ne ($beforeBlocked + 1)) { throw 'Explicit blocker should stop before a second paid iteration.' }
+    if ($afterBlocked.Count -ne ($beforeBlocked + 1)) { throw 'Explicit blocker should be recorded as one Autopilot attempt.' }
     $blockedSummary = Get-Content -Raw -LiteralPath ($afterBlocked | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).FullName | ConvertFrom-Json
     if ($blockedSummary.noActionableTasksMessage -notmatch 'Docker daemon is unavailable') { throw 'Blocker reason was not preserved in the summary.' }
-    Write-Host 'PASS: explicit roadmap blocker is displayed and stops safely.' -ForegroundColor Green
+    Write-Host 'PASS: explicit roadmap blocker is displayed and deferred safely.' -ForegroundColor Green
     Write-Host 'ALL OFFLINE SELF-TESTS PASSED' -ForegroundColor Green
 }
 finally {

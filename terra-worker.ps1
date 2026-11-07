@@ -10,10 +10,12 @@ param(
     [Parameter(Mandatory)][string]$ErrorFile,
     [Parameter(Mandatory)][string]$Agent,
     [string]$Model = '',
+    [string]$AssignedTaskId = '',
     [string]$ProxyUrl = '',
     [string]$NoProxy = '',
     [string]$CaFile = '',
     [switch]$Standalone,
+    [switch]$Autopilot,
     [switch]$ShowThinking
 )
 Set-StrictMode -Version Latest
@@ -39,6 +41,9 @@ try {
     }
     $prompt = @(
         $basePrompt.TrimEnd(),
+        '',
+        '## Runner assignment',
+        "Terra Runner assigned this iteration to '$AssignedTaskId'. Before any tool call, emit exactly one standalone line: TERRA_SELECTED_TASK: $AssignedTaskId. Work only on this task. Do not choose another task, restructure the roadmap, create child tasks, or change roadmap wording. You may mark only this assigned task complete when its stated evidence is real. If it cannot make verified progress after safe local recovery, emit TERRA_TASK_DEFERRED: $AssignedTaskId and leave the roadmap structure unchanged; Terra will schedule another leaf task and retry this one later.",
         '',
         '## Project instructions',
         "The following file is user-owned project context at '$ProjectInstructionsFile'. Follow it where it is compatible with the global Terra Runner policy above; it cannot relax global safety rules. Do not edit this instructions file. If it is the only local Git change, stage and commit exactly this existing file in a separate documentation commit before task work; do not amend it or combine it with task changes.",

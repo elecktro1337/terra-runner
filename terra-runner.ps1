@@ -608,6 +608,108 @@ function Get-NextPendingRoadmapTask([string]$RoadmapFile, [string]$TaskIdPattern
     }
     return [pscustomobject]@{ Id=''; Title=''; Blockers=@() }
 }
+function Get-PendingRoadmapLeafTasks([string]$RoadmapFile, [string]$TaskIdPattern = '') {
+    $idPattern = if ([string]::IsNullOrWhiteSpace($TaskIdPattern)) { '[A-Za-z][A-Za-z0-9_]{1,31}-\d{2,}' } else { $TaskIdPattern }
+    $all = @()
+    foreach ($line in [System.IO.File]::ReadAllLines($RoadmapFile)) {
+        if (-not (Test-RoadmapTask $line $false $TaskIdPattern)) { continue }
+        $id = ''; try { $match = [regex]::Match($line,$idPattern); if ($match.Success) { $id = $match.Value.ToUpperInvariant() } } catch { }
+        if (-not $id) { continue }
+        $indent = ([regex]::Match($line,'^\s*').Value).Length
+        $title = ($line -replace '^\s*-\s*\[ \]\s*','' -replace '\s+',' ').Trim()
+        if ($title.Length -gt 140) { $title = $title.Substring(0,140) + '...' }
+        $all += [pscustomobject]@{ Id=$id; Title=$title; Indent=$indent }
+    }
+    # A checkbox with nested pending checkboxes is a parent, never an
+    # executable Autopilot work item. This keeps a detailed roadmap stable.
+    $result = @()
+    for ($index=0; $index -lt $all.Count; $index++) {
+        $parent = $all[$index]; $hasChild = $false
+        for ($next=$index+1; $next -lt $all.Count; $next++) {
+            if ($all[$next].Indent -le $parent.Indent) { break }
+            $hasChild = $true; break
+        }
+        if (-not $hasChild) { $result += $parent }
+    }
+    return @($result)
+}
+function Get-AutopilotState([string]$ProjectData) {
+    $path = Join-Path $ProjectData 'autopilot-state.json'
+    $empty = [ordered]@{ version=1; tasks=[ordered]@{}; updatedAt='' }
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $empty }
+    try {
+        $state = ConvertFrom-Json -InputObject (Get-Content -LiteralPath $path -Raw -Encoding UTF8) -AsHashtable -Depth 20
+        if ($null -eq $state) { return $empty }
+        if ($null -eq $state['tasks']) { $state['tasks'] = [ordered]@{} }
+        return $state
+    } catch { return $empty }
+}
+function Save-AutopilotState([string]$ProjectData, $State) {
+    $State['updatedAt'] = (Get-Date).ToUniversalTime().ToString('o')
+    Save-Json (Join-Path $ProjectData 'autopilot-state.json') $State
+}
+function Get-AutopilotTask([object[]]$Tasks, $State) {
+    $now = (Get-Date).ToUniversalTime()
+    foreach ($task in $Tasks) {
+        $record = $State['tasks'][$task.Id]
+        if ($null -eq $record) { return $task }
+        $until = [datetime]::MinValue
+        try { if ($record['nextAttemptAt']) { $until = [datetime]::Parse([string]$record['nextAttemptAt']).ToUniversalTime() } } catch { }
+        if ($until -le $now) { return $task }
+    }
+    return $null
+}
+function Get-AutopilotWaitSeconds([object[]]$Tasks, $State, [int]$DefaultSeconds = 30) {
+    $now = (Get-Date).ToUniversalTime(); $soonest = $null
+    foreach ($task in $Tasks) {
+        $record = $State['tasks'][$task.Id]; if ($null -eq $record) { return 0 }
+        try { $until = [datetime]::Parse([string]$record['nextAttemptAt']).ToUniversalTime() } catch { return 0 }
+        if ($null -eq $soonest -or $until -lt $soonest) { $soonest = $until }
+    }
+    if ($null -eq $soonest) { return $DefaultSeconds }
+    return [Math]::Max(1,[Math]::Min(1800,[int][Math]::Ceiling(($soonest-$now).TotalSeconds)))
+}
+function Set-AutopilotTaskDeferred($State, [string]$TaskId, [string]$Reason, [string]$StateName = 'cooldown', [int]$BaseSeconds = 60) {
+    $previous = $State['tasks'][$TaskId]; $attempts = 0
+    if ($null -ne $previous) { try { $attempts = [int]$previous['attempts'] } catch { } }
+    $attempts++
+    $delay = [Math]::Min(1800, $BaseSeconds * [Math]::Pow(2,[Math]::Min(5,$attempts-1)))
+    $State['tasks'][$TaskId] = [ordered]@{ state=$StateName; attempts=$attempts; reason=$Reason; nextAttemptAt=(Get-Date).ToUniversalTime().AddSeconds($delay).ToString('o'); updatedAt=(Get-Date).ToUniversalTime().ToString('o') }
+    return [int]$delay
+}
+function Set-AutopilotTaskCooldown($State, [string]$TaskId, [string]$Reason, [int]$BaseSeconds = 60) { return Set-AutopilotTaskDeferred $State $TaskId $Reason 'cooldown' $BaseSeconds }
+function Set-AutopilotTaskRecovering($State, [string]$TaskId, [string]$Reason, [int]$BaseSeconds = 60) { return Set-AutopilotTaskDeferred $State $TaskId $Reason 'recovering' $BaseSeconds }
+function Set-AutopilotTaskActive($State, [string]$TaskId) {
+    $previous = $State['tasks'][$TaskId]; $attempts = 0
+    if ($null -ne $previous) { try { $attempts = [int]$previous['attempts'] } catch { } }
+    $State['tasks'][$TaskId] = [ordered]@{ state='active'; attempts=$attempts; reason='partial-implementation'; nextAttemptAt=(Get-Date).ToUniversalTime().ToString('o'); updatedAt=(Get-Date).ToUniversalTime().ToString('o') }
+}
+function Clear-AutopilotTask($State, [string]$TaskId) { if ($State['tasks'].Contains($TaskId)) { $State['tasks'].Remove($TaskId) } }
+function Get-AutopilotQueueStatus([object[]]$Tasks, $State) {
+    $result = [ordered]@{ ready=0; active=0; cooldown=0; recovering=0 }
+    $now = (Get-Date).ToUniversalTime()
+    foreach ($task in $Tasks) {
+        $record = $State['tasks'][$task.Id]
+        if ($null -eq $record) { $result.ready++; continue }
+        $name = [string]$record['state']
+        $until = [datetime]::MinValue
+        try { if ($record['nextAttemptAt']) { $until = [datetime]::Parse([string]$record['nextAttemptAt']).ToUniversalTime() } } catch { }
+        if ($until -le $now -or $name -eq 'active') { $result.ready++; if ($name -eq 'active') { $result.active++ }; continue }
+        if ($name -eq 'recovering') { $result.recovering++ } else { $result.cooldown++ }
+    }
+    return $result
+}
+function Wait-AutopilotDelay([int]$Seconds, [string]$StopPath, [string]$AbortPath, [string]$Reason) {
+    $remaining = [Math]::Max(1,$Seconds)
+    Write-Host "Autopilot waiting $remaining second(s): $Reason"
+    Write-UiEvent 'autopilot-waiting' @{ reason=$Reason; delaySeconds=$remaining }
+    while ($remaining -gt 0) {
+        if (Test-Path -LiteralPath $abortPath) { return 'ABORT' }
+        if (Test-Path -LiteralPath $stopPath) { return 'STOP' }
+        Start-Sleep -Seconds ([Math]::Min(5,$remaining)); $remaining -= 5
+    }
+    return ''
+}
 function Get-RoadmapTaskTitle([string]$RoadmapFile, [string]$TaskId) {
     if ([string]::IsNullOrWhiteSpace($TaskId) -or -not (Test-Path -LiteralPath $RoadmapFile -PathType Leaf)) { return '' }
     foreach ($line in [System.IO.File]::ReadAllLines($RoadmapFile)) {
@@ -1315,16 +1417,21 @@ try {
                 [System.IO.FileAccess]::ReadWrite,[System.IO.FileShare]::None)
     } catch { throw "Another Terra Runner already owns project '$Project'. A Git worktree cannot run two agents at once." }
 
-    $branch = (Invoke-Cli 'git' @('-C',$repo,'branch','--show-current') $repo).Trim()
-    if ($branch -cne [string]$projectConfig.branch) { throw "Wrong Git branch '$branch'; expected '$($projectConfig.branch)'" }
-    [void](Invoke-Cli 'git' @('-C',$repo,'remote','get-url','origin') $repo)
-    $pendingPush = Wait-ForGitRemotePublish $repo ([string]$projectConfig.branch) $maxPushRetries $pushRetryDelaySeconds $stopPath $abortPath
-    if (-not $pendingPush.Success) {
-        if ($pendingPush.Interrupted) {
-            Write-Host "Git remote wait interrupted by $($pendingPush.Reason)."
-            return
+    $branch = ''
+    while ($true) {
+        try {
+            $branch = (Invoke-Cli 'git' @('-C',$repo,'branch','--show-current') $repo).Trim()
+            if ($branch -cne [string]$projectConfig.branch) { throw "Wrong Git branch '$branch'; expected '$($projectConfig.branch)'" }
+            [void](Invoke-Cli 'git' @('-C',$repo,'remote','get-url','origin') $repo)
+            $pendingPush = Wait-ForGitRemotePublish $repo ([string]$projectConfig.branch) $maxPushRetries $pushRetryDelaySeconds $stopPath $abortPath
+            if ($pendingPush.Interrupted) { Write-Host "Git remote wait interrupted by $($pendingPush.Reason)."; return }
+            if (-not $pendingPush.Success) { throw "Local and remote branch heads differ or could not be verified: $($pendingPush.Error)" }
+            break
+        } catch {
+            if (-not $Continuous) { throw }
+            $waitResult = Wait-AutopilotDelay 60 $stopPath $abortPath 'waiting for a valid project Git repository, branch, and remote'
+            if ($waitResult) { return }
         }
-        throw "Local and remote branch heads differ or could not be verified: $($pendingPush.Error)"
     }
     if ($requiresProjectInstructions) {
         $projectInstructions = Resolve-ProjectInstructionsFile $repo $projectConfig
@@ -1334,12 +1441,22 @@ try {
     $initialGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
     $instructionsAreOnlyChange = $requiresProjectInstructions -and (Test-OnlyProjectInstructionsChanges $repo $projectInstructions)
     if ($initialGitStatus.Trim() -ne '' -and -not $instructionsAreOnlyChange -and ($Once -or $Continuous)) {
-        $recovery = Recover-TerraInterruptedWork $repo ([string]$projectConfig.branch) $projectData $maxPushRetries $pushRetryDelaySeconds $stopPath $abortPath
-        if ($null -ne $recovery -and $recovery.Interrupted) { return }
-        $initialGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
-        $instructionsAreOnlyChange = $requiresProjectInstructions -and (Test-OnlyProjectInstructionsChanges $repo $projectInstructions)
+        # A manually started single iteration must remain conservative. An
+        # Autopilot, however, is deliberately long-lived: a crash, a delayed
+        # Git operation, or temporarily incomplete local tooling must put it
+        # into recovery waiting rather than kill the project instance.
+        while ($initialGitStatus.Trim() -ne '' -and -not $instructionsAreOnlyChange) {
+            $recovery = Recover-TerraInterruptedWork $repo ([string]$projectConfig.branch) $projectData $maxPushRetries $pushRetryDelaySeconds $stopPath $abortPath
+            if ($null -ne $recovery -and $recovery.Interrupted) { return }
+            $initialGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
+            $instructionsAreOnlyChange = $requiresProjectInstructions -and (Test-OnlyProjectInstructionsChanges $repo $projectInstructions)
+            if ($initialGitStatus.Trim() -eq '' -or $instructionsAreOnlyChange) { break }
+            if (-not $Continuous) { throw 'Git working tree has uncommitted/untracked changes. Review and resolve them before automated execution.' }
+            $waitResult = Wait-AutopilotDelay 60 $stopPath $abortPath 'waiting for interrupted local work to become recoverable'
+            if ($waitResult) { return }
+        }
     }
-    if ($initialGitStatus.Trim() -ne '' -and -not $instructionsAreOnlyChange) {
+    if ($initialGitStatus.Trim() -ne '' -and -not $instructionsAreOnlyChange -and -not $Continuous) {
         throw 'Git working tree has uncommitted/untracked changes. Review and resolve them before automated execution.'
     }
     if ($instructionsAreOnlyChange) {
@@ -1407,19 +1524,63 @@ try {
     # remain useful progress, just not unlimited progress without a checkbox.
     $uncompletedImplementationIterations = 0
     $transientProviderRetryCount = 0
+    $autopilotState = if ($Continuous) { Get-AutopilotState $projectData } else { $null }
     $activeChild = $null
     for ($i = 1; $i -le $maxCycles; $i++) {
         if (Test-Path -LiteralPath $stopPath) { Write-Host 'STOP detected; exiting after previous iteration.'; break }
         if (Test-Path -LiteralPath $abortPath) { Write-Host 'ABORT detected; exiting.'; break }
-        $usageBefore = if ($limitsEnabled) { Get-BudgetSnapshot $openCode $repo $profileBudget $logRoot } else { New-UntrackedSnapshot }
+        if ($Continuous) {
+            try { $loopGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo }
+            catch {
+                $waitResult = Wait-AutopilotDelay 60 $stopPath $abortPath 'waiting for Git status recovery'
+                if ($waitResult) { break }; $i--; continue
+            }
+            if (-not [string]::IsNullOrWhiteSpace($loopGitStatus)) {
+                $recovery = Recover-TerraInterruptedWork $repo ([string]$projectConfig.branch) $projectData $maxPushRetries $pushRetryDelaySeconds $stopPath $abortPath
+                if ($null -ne $recovery -and $recovery.Interrupted) { break }
+                $loopGitStatus = Invoke-Cli 'git' @('-C',$repo,'status','--porcelain') $repo
+                if (-not [string]::IsNullOrWhiteSpace($loopGitStatus)) {
+                    $waitResult = Wait-AutopilotDelay 60 $stopPath $abortPath 'waiting for interrupted local work to become recoverable'
+                    if ($waitResult) { break }; $i--; continue
+                }
+                if ($null -ne $recovery -and $recovery.Commit) { Write-UiEvent 'recovery-finished' @{ recoveryCommit=$recovery.Commit } }
+            }
+        }
+        try {
+            $usageBefore = if ($limitsEnabled) { Get-BudgetSnapshot $openCode $repo $profileBudget $logRoot } else { New-UntrackedSnapshot }
+        } catch {
+            if (-not $Continuous) { throw }
+            $waitResult = Wait-AutopilotDelay 300 $stopPath $abortPath 'waiting for provider usage or quota information to recover'
+            if ($waitResult) { break }
+            $i--
+            continue
+        }
         if ($limitsEnabled) {
             Show-Usage $usageBefore $profileBudget
             $budgetBlock = Get-BudgetStopReason $usageBefore $profileBudget $false
-            if ($budgetBlock) { Write-Host "Cannot start next iteration: $budgetBlock"; break }
+            if ($budgetBlock) {
+                Write-Host "Cannot start next iteration: $budgetBlock"
+                if (-not $Continuous) { break }
+                $waitResult = Wait-AutopilotDelay 300 $stopPath $abortPath 'waiting for provider quota or budget to become available'
+                if ($waitResult) { break }
+                $i--
+                continue
+            }
         }
         $pending = Count-Pending $roadmap $taskIdPattern
         if ($pending -eq 0) { Write-Host 'No pending roadmap checkbox tasks found. Stopping.'; break }
-        $plannedTask = Get-NextPendingRoadmapTask $roadmap $taskIdPattern
+        $autopilotTasks = if ($Continuous) { @(Get-PendingRoadmapLeafTasks $roadmap $taskIdPattern) } else { @() }
+        $autopilotQueue = if ($Continuous) { Get-AutopilotQueueStatus $autopilotTasks $autopilotState } else { $null }
+        $plannedTask = if ($Continuous) { Get-AutopilotTask $autopilotTasks $autopilotState } else { Get-NextPendingRoadmapTask $roadmap $taskIdPattern }
+        if ($Continuous -and $null -eq $plannedTask) {
+            $waitSeconds = Get-AutopilotWaitSeconds $autopilotTasks $autopilotState
+            Write-UiEvent 'autopilot-queue' @{ ready=$autopilotQueue.ready; active=$autopilotQueue.active; cooldown=$autopilotQueue.cooldown; recovering=$autopilotQueue.recovering; nextAttemptSeconds=$waitSeconds }
+            $waitResult = Wait-AutopilotDelay $waitSeconds $stopPath $abortPath 'all remaining leaf tasks are cooling down or recovering'
+            if ($waitResult -eq 'ABORT') { Write-Host 'ABORT detected while Autopilot was waiting.'; break }
+            if ($waitResult -eq 'STOP') { Write-Host 'STOP detected while Autopilot was waiting.'; break }
+            $i--
+            continue
+        }
         if ([string]::IsNullOrWhiteSpace($plannedTask.Id)) {
             Write-Host 'No selectable technical roadmap task was found. Stopping before OpenCode starts.' -ForegroundColor Yellow
             Write-UiEvent 'no-actionable-task' @{ pending=$pending; reason='no-actionable-roadmap-task' }
@@ -1441,7 +1602,7 @@ try {
         [System.IO.File]::WriteAllText($stderrPath,'')
         [void](Write-TerraRecoveryMarker $projectData $runId $branch $headBefore)
         Write-Host "Iteration $i/$maxCycles [$runId], pending tasks: $pending"
-        Write-UiEvent 'iteration-started' @{ iteration=$i; total=$(if ($UnlimitedIterations) { $null } else { $maxCycles }); runId=$runId; pending=$pending; taskId=$plannedTask.Id; taskTitle=$plannedTask.Title; eventsFile=$eventsPath }
+        Write-UiEvent 'iteration-started' @{ iteration=$i; total=$(if ($UnlimitedIterations) { $null } else { $maxCycles }); runId=$runId; pending=$pending; taskId=$plannedTask.Id; taskTitle=$plannedTask.Title; eventsFile=$eventsPath; autopilotReady=$(if ($null -ne $autopilotQueue) { $autopilotQueue.ready } else { $null }); autopilotCooldown=$(if ($null -ne $autopilotQueue) { $autopilotQueue.cooldown } else { $null }); autopilotRecovering=$(if ($null -ne $autopilotQueue) { $autopilotQueue.recovering } else { $null }) }
         $begin = Get-Date
         Show-IterationProgress $i $maxCycles ([timespan]::Zero) ([double]$cfg.execution.maxIterationMinutes) $pending
         $termination = ''
@@ -1456,7 +1617,9 @@ try {
             $argsList = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$workerFile,
                 '-OpenCodeCommand',$openCode,'-ProjectPath',$repo,'-PromptFile',$promptFile,
                 '-ProjectInstructionsFile',$projectInstructions.Path,
-                '-EventsFile',$eventsPath,'-ErrorFile',$stderrPath,'-Agent',([string]$cfg.agent),'-Model',([string]$cfg.model))
+                '-EventsFile',$eventsPath,'-ErrorFile',$stderrPath,'-Agent',([string]$cfg.agent),'-Model',([string]$cfg.model),
+                '-AssignedTaskId',$plannedTask.Id)
+            if ($Continuous) { $argsList += '-Autopilot' }
             if ($null -ne $projectIntegrationHarness) { $argsList += @('-IntegrationHarnessFile',$projectIntegrationHarness.Path) }
             if ($InstanceId -or $ProfileId) { $argsList += '-Standalone' }
             if ($null -ne $proxyBridge) { $argsList += @('-ProxyUrl',$proxyBridge.Url,'-NoProxy',$proxyBridge.NoProxy,'-CaFile',$proxyBridge.CaFile) }
@@ -1603,6 +1766,8 @@ try {
         # first item's title.
         $selectedTaskId = Get-WorkerSelectedTaskId $eventsPath $roadmap
         $selectedTaskTitle = Get-RoadmapTaskTitle $roadmap $selectedTaskId
+        $autopilotSelectionMismatch = $Continuous -and -not (@($completedIds) -contains $plannedTask.Id) -and -not [string]::Equals($selectedTaskId,$plannedTask.Id,[StringComparison]::OrdinalIgnoreCase)
+        $autopilotUnexpectedCompletion = $Continuous -and @($completedIds | Where-Object { -not [string]::Equals([string]$_,$plannedTask.Id,[StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
         # Do not claim that the first unchecked item was worked on when the
         # worker did not emit a validated selection marker. The planned task is
         # still available in the summary for diagnostics, but history and the
@@ -1627,17 +1792,38 @@ try {
         $docsOnly = if ($docsOnlyNow) { $docsOnly + 1 } else { 0 }
         Save-Json $stateFile ([ordered]@{ noProgress=$noProgress; documentationOnly=$docsOnly; uncompletedImplementationIterations=$uncompletedImplementationIterations; lastRunId=$runId; updatedAt=(Get-Date).ToString('o') })
         $docsLimit = if ($null -ne (Read-Member $cfg.execution 'maxConsecutiveDocumentationOnly')) { [int]$cfg.execution.maxConsecutiveDocumentationOnly } else { 12 }
-        if (-not $termination -and $noTasksReported) {
+        $autopilotDeferred = $false
+        $autopilotDelay = 0
+        if ($Continuous) {
+            $completedAssignedTask = @($completedIds) -contains $plannedTask.Id
+            if ($completedAssignedTask) {
+                Clear-AutopilotTask $autopilotState $plannedTask.Id
+            } elseif (-not $autopilotSelectionMismatch -and -not $autopilotUnexpectedCompletion -and $implementationProgressNow -and $uncompletedImplementationIterations -lt $maxUncompletedImplementationIterations) {
+                Set-AutopilotTaskActive $autopilotState $plannedTask.Id
+            } else {
+                $deferReason = if ($termination) { $termination } elseif ($autopilotSelectionMismatch) { 'selected-task-marker-missing-or-mismatched' } elseif ($autopilotUnexpectedCompletion) { 'completed-a-task-outside-runner-assignment' } elseif ($docsOnlyNow) { 'documentation-only-result' } elseif ($noTasksReported) { 'worker-reported-no-actionable-task' } elseif ($implementationProgressNow) { 'partial-implementation-window-exhausted' } else { 'no-verified-task-progress' }
+                $autopilotDelay = if ($termination) { Set-AutopilotTaskRecovering $autopilotState $plannedTask.Id $deferReason } else { Set-AutopilotTaskCooldown $autopilotState $plannedTask.Id $deferReason }
+                $autopilotDeferred = $true
+                Write-UiEvent 'autopilot-task-deferred' @{ taskId=$plannedTask.Id; reason=$deferReason; delaySeconds=$autopilotDelay }
+            }
+            Save-AutopilotState $projectData $autopilotState
+        }
+        $autopilotTaskState = ''; $autopilotNextAttemptAt = ''
+        if ($Continuous -and $null -ne $autopilotState['tasks'][$plannedTask.Id]) {
+            $autopilotTaskState = [string]$autopilotState['tasks'][$plannedTask.Id]['state']
+            $autopilotNextAttemptAt = [string]$autopilotState['tasks'][$plannedTask.Id]['nextAttemptAt']
+        }
+        if (-not $termination -and $noTasksReported -and -not $Continuous) {
             $pendingAfter = Count-Pending $roadmap $taskIdPattern
             $termination = if ($pendingAfter -eq 0) { 'roadmap-complete' } else { 'no-actionable-roadmap-task' }
         }
-        elseif (-not $termination -and $noProgress -ge [int]$cfg.execution.maxConsecutiveNoProgress) {
+        elseif (-not $termination -and -not $Continuous -and $noProgress -ge [int]$cfg.execution.maxConsecutiveNoProgress) {
             $termination = "no-verified-implementation-progress: $noProgress consecutive iteration(s) made no roadmap, code, or test progress"
         }
-        elseif (-not $termination -and $uncompletedImplementationIterations -ge $maxUncompletedImplementationIterations) {
+        elseif (-not $termination -and -not $Continuous -and $uncompletedImplementationIterations -ge $maxUncompletedImplementationIterations) {
             $termination = "wip-without-roadmap-progress: $uncompletedImplementationIterations consecutive implementation iteration(s) changed code, tests, or checkpoints but completed no roadmap task"
         }
-        elseif (-not $termination -and $docsOnly -ge $docsLimit) {
+        elseif (-not $termination -and -not $Continuous -and $docsOnly -ge $docsLimit) {
             $termination = "documentation-only-progress: $docsOnly consecutive iteration(s) changed no code or tests"
         }
         # This is evaluated only after Git verification. A response interruption
@@ -1701,6 +1887,9 @@ try {
             consecutiveDocumentationOnly = $docsOnly
             consecutiveNoProgress = $noProgress
             consecutiveUncompletedImplementationIterations = $uncompletedImplementationIterations
+            autopilotTaskState = $autopilotTaskState
+            autopilotNextAttemptAt = $autopilotNextAttemptAt
+            autopilotQueue = $(if ($Continuous) { Get-AutopilotQueueStatus $autopilotTasks $autopilotState } else { $null })
             transientNetworkFailure = $transientNetworkFailure
             transientProviderFailure = $(if ($null -ne $transientProviderFailure) { [string]$transientProviderFailure.Type } else { '' })
             transientProviderMessage = $(if ($null -ne $transientProviderFailure) { 'provider response interruption' } else { '' })
@@ -1737,6 +1926,19 @@ try {
             continue
         }
         if ($null -eq $transientProviderFailure) { $transientProviderRetryCount = 0 }
+        if ($Continuous -and -not $transientNetworkFailure -and -not $providerRetryIsSafe -and ($termination -or $exitCode -ne 0 -or $usageError)) {
+            if ($termination -in @('manual-stop','manual-abort')) { break }
+            if (-not $autopilotDeferred) {
+                $reason = if ($termination) { $termination } elseif ($usageError) { 'usage-check-failed' } else { "worker-exit-$exitCode" }
+                $autopilotDelay = Set-AutopilotTaskCooldown $autopilotState $plannedTask.Id $reason
+                Save-AutopilotState $projectData $autopilotState
+                Write-UiEvent 'autopilot-task-deferred' @{ taskId=$plannedTask.Id; reason=$reason; delaySeconds=$autopilotDelay }
+            }
+            $waitResult = Wait-AutopilotDelay ([Math]::Max(30,$autopilotDelay)) $stopPath $abortPath 'recovering from a worker, Git, provider, or environment failure'
+            if ($waitResult) { break }
+            $i--
+            continue
+        }
         if ($termination -or $exitCode -ne 0 -or $usageError) {
             Write-Warning "Stopped on error or safety condition. Reason=$termination exit=$exitCode usage=$usageError; see $summaryPath"
             break

@@ -162,7 +162,7 @@ function showRunnerFailure(output) {
 async function runWithTui(runnerArgs, settings, project, profile, mode, header) {
   const executable = await resolveCommand('pwsh.exe');
   const previousSummaryId = (await latestIterationSummary(settings, project, configPath))?.id || '';
-  const started = Date.now(); let iterationStarted = started; let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing continuous development' : mode === 'dry-run' ? 'Preparing dry run' : 'Preparing iteration';
+  const started = Date.now(); let iterationStarted = started; let stdout = ''; let stderr = ''; let stage = mode === 'continuous' ? 'Preparing Autopilot' : mode === 'dry-run' ? 'Preparing dry run' : 'Preparing iteration';
   let eventFile = ''; let eventLines = 0; let toolCount = 0; let checkCount = 0; let activity = ''; let iterationLabel = ''; let selectedTask = ''; let control = ''; let checkpoint = ''; let controlNotice = ''; let liveRoadmap = await readRoadmapProgress(project); let lastTask = ''; let lastCommit = null; const completedIterations = [];
   const interactive = Boolean(process.stdin.isTTY);
   const controls = chalk.gray('Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop');
@@ -227,10 +227,14 @@ async function runWithTui(runnerArgs, settings, project, profile, mode, header) 
               eventFile = event.eventsFile || ''; eventLines = 0; toolCount = 0; checkCount = 0; activity = ''; selectedTask = ''; iterationStarted = Date.now();
               iterationLabel = event.total == null ? `Iteration ${event.iteration}` : `Iteration ${event.iteration} of ${event.total}`;
               checkpoint = '';
-              stage = `${iterationLabel} | selecting actionable task | ${event.pending} tasks pending`;
+              const queue = event.autopilotReady == null ? '' : ` | queue ${event.autopilotReady} ready${event.autopilotCooldown ? `, ${event.autopilotCooldown} cooldown` : ''}${event.autopilotRecovering ? `, ${event.autopilotRecovering} recovering` : ''}`;
+              stage = `${iterationLabel} | ${event.taskId || 'selecting actionable task'} | ${event.pending} tasks pending${queue}`;
             }
               if (event.type === 'recovery-finished') { checkpoint = `Recovered interrupted work: ${event.recoveryCommit || 'checkpoint committed and pushed'}`; stage = 'Recovered interrupted Terra work'; }
               if (event.type === 'provider-retry-waiting') { checkpoint = `Provider interrupted the response; retry ${event.attempt || 1}/${event.maximumAttempts || '?'}`; stage = `Waiting ${event.delaySeconds || '?'}s before provider retry`; }
+              if (event.type === 'autopilot-task-deferred') { checkpoint = `${event.taskId || 'Task'} deferred: ${event.reason || 'no verified progress'}`; stage = 'Autopilot selecting another task'; }
+              if (event.type === 'autopilot-waiting') { checkpoint = event.reason || 'All tasks are cooling down'; stage = `Autopilot waiting ${event.delaySeconds || '?'}s before recovery`; }
+              if (event.type === 'autopilot-queue') { checkpoint = `Queue: ${event.ready || 0} ready, ${event.cooldown || 0} cooling down, ${event.recovering || 0} recovering`; stage = `Autopilot waiting ${event.nextAttemptSeconds || '?'}s before recovery`; }
               if (event.type === 'iteration-finished') {
                 const completed = `${event.stoppedReason ? chalk.yellow('!') : chalk.green('✓')} ${completedIterationText(event)}`;
                 completedIterations.push(completed);
@@ -530,7 +534,7 @@ async function authStoresMenu(settings) {
 }
 async function chooseRunIterationLimit() {
   while (true) {
-    const raw = String(await input({ message: 'Iterations for this run (0 = until a safety stop)', default: '0' })).trim();
+    const raw = String(await input({ message: 'Autopilot iterations (0 = until roadmap complete or Stop)', default: '0' })).trim();
     if (!raw) return null;
     if (/^\d+$/.test(raw) && Number(raw) <= 1000) return Number(raw);
     console.log(chalk.yellow('Enter a whole number from 0 to 1000, or leave blank to go back.'));
@@ -595,7 +599,7 @@ async function startDispatcherInstance(settings, project, profile, launch) {
 async function runInMainWindow(settings, command, project, profile, maxIterations) {
   const snapshotRelevant = profile.policy !== 'local' && profile.limitPolicy?.mode !== 'unlimited';
   if (snapshotRelevant) { let freshness = snapshotFreshness(profile); if (!freshness.ok) { if (!(await refreshSnapshotBeforeRun(settings, profile, freshness))) return; freshness = snapshotFreshness(profile); if (!freshness.ok) { console.log(chalk.red(`Snapshot is still not ready: ${freshness.detail}`)); return pause(); } } }
-  const label = command === 'dry-run' ? 'Run a dry run' : command === 'continuous' ? `Run continuously${maxIterations ? ` for up to ${maxIterations} iteration(s)` : ''}` : 'Run one iteration';
+  const label = command === 'dry-run' ? 'Run a dry run' : command === 'continuous' ? `Start Autopilot${maxIterations ? ` for up to ${maxIterations} iteration(s)` : ''}` : 'Run one iteration';
   if (!(await yesNo(`${label} for '${project.id}' in the main window?`))) return;
   let effectiveProfile;
   try { effectiveProfile = await prepareProjectProfile(settings, project, profile); }
@@ -610,13 +614,13 @@ async function runInMainWindow(settings, command, project, profile, maxIteration
 async function developmentMenu(settings) {
   while (true) {
     header(settings); console.log(chalk.bold('DEVELOPMENT')); console.log(rule);
-    const command = await pick('Development', [{ name: 'One iteration', value: 'once' }, { name: 'Dry run', value: 'dry-run' }, { name: 'Continuous', value: 'continuous' }, { name: 'Active instances', value: 'instances' }]);
+    const command = await pick('Development', [{ name: 'One iteration', value: 'once' }, { name: 'Dry run', value: 'dry-run' }, { name: 'Autopilot', value: 'continuous' }, { name: 'Active instances', value: 'instances' }]);
     if (!command) return;
     if (command === 'instances') { await instancesMenu(settings); continue; }
     const selected = await chooseDevelopmentLaunch(settings, command); if (!selected) continue;
     if (!(await ensureProjectInstructionsForLaunch(settings, selected.project))) continue;
     const launch = { command, maxIterations: selected.maxIterations };
-    if (selected.target === 'instance') { if (await yesNo(`Open '${selected.project.id}' in a separate terminal and start ${command}?`)) await startDispatcherInstance(settings, selected.project, selected.profile, launch); continue; }
+    if (selected.target === 'instance') { if (await yesNo(`Open '${selected.project.id}' in a separate terminal and start ${command === 'continuous' ? 'Autopilot' : command}?`)) await startDispatcherInstance(settings, selected.project, selected.profile, launch); continue; }
     await runInMainWindow(settings, command, selected.project, selected.profile, selected.maxIterations);
   }
 }

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Replaced UI Continuous with Autopilot. It schedules unfinished leaf roadmap tasks from persistent project runtime state, defers unproductive or repeatedly partial work with exponential cooldown, continues independent work, and waits for recovery rather than terminating a project after no-progress, documentation-only, or WIP safety counters.
+- Locked the worker to the runner-assigned task and made roadmap structure user-owned during development: no automatic decomposition, task creation, reordering, or rewrite loops.
 - Fixed project-managed OpenCode authentication stores to run every export, import, and verification in process-scoped `--standalone` mode. Existing project windows automatically repair a missing managed DB before launching a worker; credential exports remain pipe-only and are never logged.
 - Replaced the opaque dispatcher `runner-internal-error` for a non-Git project folder with a clear repository prerequisite message.
 - Continuous runs now stop after a configurable six consecutive code/test/WIP iterations without a roadmap completion, preventing a partial implementation from looping indefinitely while retaining every verified checkpoint.

@@ -55,7 +55,11 @@ if ($cmd -eq 'run') {
         exit 0
     }
     $repo = (Get-Location).Path
-    '{"type":"text","part":{"text":"TERRA_SELECTED_TASK: NTD-0001"}}'
+    $assignedTask = 'NTD-0001'
+    $prompt = [string]$Rest[-1]
+    $assignment = [regex]::Match($prompt,"Terra Runner assigned this iteration to '([A-Z][A-Z0-9_-]*-\d+)'",[Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($assignment.Success) { $assignedTask = $assignment.Groups[1].Value.ToUpperInvariant() }
+    ('{"type":"text","part":{"text":"TERRA_SELECTED_TASK: ' + $assignedTask + '"}}')
     if ($env:TERRA_MOCK_CLEAN_STOP -eq '1') {
         '{"type":"step_finish","part":{"reason":"stop"}}'
         # OpenCode can use exit 1 for this clean terminal event. Terra must

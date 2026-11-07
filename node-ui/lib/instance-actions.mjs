@@ -22,7 +22,7 @@ export function instanceActionPlan(instance = {}, { canFinalize = false } = {}) 
 export function projectWindowActionPlan(instance = {}) {
   const actions = [
     { name: 'Run one development iteration', value: 'once' },
-    { name: 'Run continuously', value: 'continuous' },
+    { name: 'Start Autopilot', value: 'continuous' },
     { name: 'Dry run', value: 'preflight' }
   ];
   if (!TERMINAL_STATES.has(String(instance.state || ''))) {
