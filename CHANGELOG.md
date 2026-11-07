@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed project-managed OpenCode authentication stores to run every export, import, and verification in process-scoped `--standalone` mode. Existing project windows automatically repair a missing managed DB before launching a worker; credential exports remain pipe-only and are never logged.
+- Replaced the opaque dispatcher `runner-internal-error` for a non-Git project folder with a clear repository prerequisite message.
 - Continuous runs now stop after a configurable six consecutive code/test/WIP iterations without a roadmap completion, preventing a partial implementation from looping indefinitely while retaining every verified checkpoint.
 - Workers now autonomously decompose an oversized roadmap checkbox into a non-checkbox parent and small, ordered child checkboxes before implementation, rather than repeatedly WIP-checkpointing project-wide or multi-system work.
 - Instance results now retain the last successful task and commit after a terminal failed iteration, and explain recognised provider access failures using only a redacted error type. Older local summaries are safely enriched from their colocated event stream without displaying provider payloads.

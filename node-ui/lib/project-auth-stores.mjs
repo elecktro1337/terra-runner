@@ -28,9 +28,14 @@ function launch(executable, args, cwd, env, acceptsStdin = false) {
   const batch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(executable);
   const stdio = [acceptsStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'];
   if (!batch) return spawn(executable, args, { cwd, shell: false, stdio, env: { ...process.env, ...env } });
+  // auth commands use only a resolved OpenCode shim and fixed/safe arguments.
+  // Reject cmd metacharacters before forming the one command line needed for a
+  // Windows .cmd shim; this avoids both injection and Node's broken nested
+  // quoting for `cmd /c` when the working directory contains Unicode.
+  if ([executable, ...args].some(value => /[&|<>()^%!\r\n]/.test(String(value)))) throw new Error('Unsafe OpenCode authentication command.');
   const quote = value => `"${String(value).replace(/"/g, '""')}"`;
-  const commandLine = `"${quote(executable)} ${args.map(quote).join(' ')}"`;
-  return spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', commandLine], { cwd, shell: false, windowsVerbatimArguments: true, stdio, env: { ...process.env, ...env } });
+  const commandLine = [quote(executable), ...args.map(quote)].join(' ');
+  return spawn(commandLine, { cwd, shell: true, stdio, env: { ...process.env, ...env } });
 }
 
 function waitFor(child) {
@@ -57,8 +62,11 @@ async function withLock(configPath, storeId, action) {
 }
 
 async function streamProviderCredentials({ executable, cwd, provider, sourceEnv, targetEnv }) {
-  const exporter = launch(executable, ['auth', 'export', provider], cwd, sourceEnv);
-  const importer = launch(executable, ['auth', 'import'], cwd, targetEnv, true);
+  // `auth export`/`import` must be process-scoped. Without --standalone an
+  // already-running shared OpenCode service can acknowledge the commands
+  // while ignoring OPENCODE_DB, leaving a managed-store record with no DB.
+  const exporter = launch(executable, ['--standalone', 'auth', 'export', provider], cwd, sourceEnv);
+  const importer = launch(executable, ['--standalone', 'auth', 'import'], cwd, targetEnv, true);
   // Credentials are intentionally piped process-to-process. Do not collect,
   // decode, print, or persist the export stream in Terra Runner.
   exporter.stdout.pipe(importer.stdin);
@@ -68,6 +76,31 @@ async function streamProviderCredentials({ executable, cwd, provider, sourceEnv,
     exporter.kill(); importer.kill();
     throw new Error('Project authentication setup failed. Reconnect the selected OpenCode profile and try again.');
   }
+}
+
+export async function readOpenCodeAuthAccounts({ executable, cwd, env = null, standalone = false }) {
+  const child = launch(executable, [...(standalone ? ['--standalone'] : []), 'auth', 'list', '--format', 'json'], cwd, env);
+  let output = '';
+  child.stdout.on('data', chunk => { output += String(chunk); });
+  child.stderr.resume();
+  await waitFor(child);
+  let providers;
+  try { providers = JSON.parse(output); }
+  catch { throw new Error('OpenCode returned an invalid account list.'); }
+  const accounts = [];
+  for (const provider of providers) {
+    for (const credential of provider.connections || []) {
+      accounts.push({
+        id: `${provider.id}:${credential.id}`,
+        provider: provider.id,
+        credentialId: credential.id,
+        label: credential.label || provider.name || provider.id,
+        authMethod: credential.method || '',
+        usageKind: credential.method === 'oauth' ? 'oauth' : 'balance'
+      });
+    }
+  }
+  return accounts;
 }
 
 export async function ensureProjectAuthStore({ settings, project, profile, configPath, executable, cwd, listAccounts }) {
@@ -86,7 +119,7 @@ export async function ensureProjectAuthStore({ settings, project, profile, confi
     await withLock(configPath, storeId, async () => {
       await fs.mkdir(path.dirname(targetDb), { recursive: true });
       await streamProviderCredentials({ executable, cwd, provider, sourceEnv, targetEnv });
-      const accounts = await listAccounts(targetEnv);
+      const accounts = await listAccounts(targetEnv, true);
       if (!accounts.some(account => account.provider === provider && account.credentialId === credentialId)) {
         throw new Error('The selected credential is no longer available in the source OpenCode profile.');
       }

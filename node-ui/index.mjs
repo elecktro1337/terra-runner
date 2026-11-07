@@ -19,7 +19,7 @@ import { selectedRoadmapTaskFromEvent } from './lib/task-selection.mjs';
 import { developmentHeaderRows, elapsedSecondsSince } from './lib/run-display.mjs';
 import { readRoadmapProgress } from './lib/roadmap.mjs';
 import { instanceTerminalLauncher } from './lib/instance-launcher.mjs';
-import { ensureProjectAuthStore, isProjectManagedStore, removeProjectAuthStore } from './lib/project-auth-stores.mjs';
+import { ensureProjectAuthStore, isProjectManagedStore, readOpenCodeAuthAccounts, removeProjectAuthStore } from './lib/project-auth-stores.mjs';
 import { completedIterationText } from './lib/iteration-history.mjs';
 import { instanceActivityText } from './lib/instance-display.mjs';
 import { instancePage } from './lib/instance-pagination.mjs';
@@ -269,8 +269,9 @@ async function save(settings) { settings.schemaVersion = 12; migrateProfiles(set
 function parseModels(text) { return [...new Set(text.split(/\r?\n/).map(v => v.trim()).filter(v => /^[a-z0-9_.-]+\/.+/i.test(v)))]; }
 function storeEnvironment(storeId) { return storeId && storeId !== 'legacy-shared' ? { OPENCODE_DB: authStorePath(configPath, storeId) } : null; }
 function authStore(settings, id) { return (settings.openCode?.stores || []).find(store => store.id === id) || null; }
-function parseAccounts(text) { const providers = JSON.parse(text); const accounts = []; for (const provider of providers) for (const credential of provider.connections || []) accounts.push({ id: `${provider.id}:${credential.id}`, provider: provider.id, credentialId: credential.id, label: credential.label || provider.name || provider.id, authMethod: credential.method || '', usageKind: credential.method === 'oauth' ? 'oauth' : 'balance' }); return accounts; }
-async function readOpenCodeAccounts(executable, env = null) { return parseAccounts(await execute(executable, ['auth', 'list', '--format', 'json'], root, false, env)); }
+async function readOpenCodeAccounts(executable, env = null, standalone = false) {
+  return readOpenCodeAuthAccounts({ executable: await resolveCommand(executable), cwd: root, env, standalone });
+}
 async function refreshOpenCode(settings, storeId = 'legacy-shared') {
   const spinner = ora('Reading OpenCode accounts and models…').start();
   try {
@@ -564,7 +565,7 @@ async function prepareProjectProfile(settings, project, profile) {
   const spinner = ora(`Preparing private OpenCode storage for '${project.id}'…`).start();
   try {
     const executable = await resolveCommand(settings.openCodeCommand || 'opencode');
-    const { storeId } = await ensureProjectAuthStore({ settings, project, profile, configPath, executable, cwd: root, listAccounts: env => readOpenCodeAccounts(executable, env) });
+    const { storeId } = await ensureProjectAuthStore({ settings, project, profile, configPath, executable, cwd: root, listAccounts: (env, standalone) => readOpenCodeAccounts(executable, env, standalone) });
     await save(settings); spinner.succeed(`Project authentication storage is ready for '${project.id}'.`);
     return { ...profile, authStoreId: storeId };
   } catch {

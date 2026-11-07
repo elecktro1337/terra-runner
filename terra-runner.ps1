@@ -1749,7 +1749,9 @@ catch {
     # Never leave a dispatcher instance with only an opaque process code. The
     # Node side deliberately uses a redacted classification, not raw exception
     # text, because a command/provider can include sensitive environment data.
-    Write-UiEvent 'runner-failed' @{ reason='runner-internal-error' }
+    $failureReason = 'runner-internal-error'
+    if ($_.Exception.Message -match 'not a git repository') { $failureReason = 'project-git-repository-required' }
+    Write-UiEvent 'runner-failed' @{ reason=$failureReason }
     Write-Error ("Terra Runner internal error: " + $_.Exception.Message)
     throw
 }

@@ -101,7 +101,8 @@ Describe 'Terra Runner safe command dispatch' {
 
     It 'emits a redacted runner failure event when internal result finalisation throws' {
         $source = Get-Content -LiteralPath $runner -Raw
-        $source | Should Match "Write-UiEvent 'runner-failed' @\{ reason='runner-internal-error' \}"
+        $source | Should Match "\$failureReason = 'runner-internal-error'"
+        $source | Should Match "project-git-repository-required"
     }
     It 'requires an explicit selected-task marker before OpenCode tool use' {
         $prompt = Get-Content -LiteralPath (Join-Path $here 'terra-prompt.md') -Raw

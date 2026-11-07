@@ -7,23 +7,28 @@ import { ensureProjectAuthStore, projectAuthStorePath, projectManagedStore, proj
 
 async function fixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'terra-project-auth-'));
-  const script = path.join(root, 'fake-auth.mjs'); const command = path.join(root, 'fake-opencode.cmd');
-  await fs.writeFile(script, `import fs from 'node:fs/promises';\nconst [,,group,action] = process.argv;\nif (group !== 'auth') process.exit(2);\nif (action === 'export') { process.stdout.write('credential-payload-for-test'); process.exit(0); }\nif (action === 'import') { let value=''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => value += chunk); process.stdin.on('end', async () => { await fs.mkdir(requirePath(process.env.OPENCODE_DB), { recursive:true }); await fs.writeFile(process.env.OPENCODE_DB, 'db'); await fs.writeFile(process.env.OPENCODE_DB + '.received', value); }); process.stdin.on('end', () => setTimeout(() => process.exit(0), 20)); }\nfunction requirePath(file) { return file.slice(0, Math.max(file.lastIndexOf('\\\\'), file.lastIndexOf('/'))); }\n`, 'utf8');
+  const script = path.join(root, 'fake-auth.mjs'); const command = path.join(root, 'fake-opencode.cmd'); const calls = path.join(root, 'calls.jsonl');
+  await fs.writeFile(script, `import fs from 'node:fs/promises';\nconst calls = ${JSON.stringify(calls)};\nconst args = process.argv.slice(2); const authIndex = args.indexOf('auth'); const [group,action] = args.slice(authIndex);\nawait fs.appendFile(calls, JSON.stringify(args) + '\\n');\nif (group !== 'auth') process.exit(2);\nif (action === 'export') { process.stdout.write('credential-payload-for-test'); process.exit(0); }\nif (action === 'import') { let value=''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => value += chunk); process.stdin.on('end', async () => { await fs.mkdir(requirePath(process.env.OPENCODE_DB), { recursive:true }); await fs.writeFile(process.env.OPENCODE_DB, 'db'); await fs.writeFile(process.env.OPENCODE_DB + '.received', value); }); process.stdin.on('end', () => setTimeout(() => process.exit(0), 20)); }\nfunction requirePath(file) { return file.slice(0, Math.max(file.lastIndexOf('\\\\'), file.lastIndexOf('/'))); }\n`, 'utf8');
   await fs.writeFile(command, `@echo off\r\nnode "%~dp0fake-auth.mjs" %*\r\n`, 'utf8');
-  return { root, command };
+  return { root, command, calls };
 }
 
 function settings() { return { openCode: { stores: [{ id: 'legacy-shared', name: 'Legacy', kind: 'legacy-shared' }] } }; }
 const cloud = { id: 'p', policy: 'oauth-managed', provider: 'openai', credentialId: 'credential-a', authStoreId: 'legacy-shared' };
 
 test('creates deterministic per-project stores and pipes provider credentials without serializing them into settings', async () => {
-  const { root, command } = await fixture(); const config = path.join(root, 'terra-config.json'); const state = settings();
-  const result = await ensureProjectAuthStore({ settings: state, project: { id: 'alpha' }, profile: cloud, configPath: config, executable: command, cwd: root, listAccounts: async () => [{ provider: 'openai', credentialId: 'credential-a' }] });
+  const { root, command, calls } = await fixture(); const config = path.join(root, 'terra-config.json'); const state = settings();
+  let checkedStandalone = false;
+  const result = await ensureProjectAuthStore({ settings: state, project: { id: 'alpha' }, profile: cloud, configPath: config, executable: command, cwd: root, listAccounts: async (_env, standalone) => { checkedStandalone = standalone; return [{ provider: 'openai', credentialId: 'credential-a' }]; } });
   assert.equal(result.storeId, projectManagedStoreId('alpha')); assert.equal(result.created, true);
   const store = projectManagedStore(state, { id: 'alpha' }); assert.equal(store.kind, 'project-managed'); assert.equal(store.projectId, 'alpha');
   const db = projectAuthStorePath(config, result.storeId); assert.equal(await fs.readFile(`${db}.received`, 'utf8'), 'credential-payload-for-test');
   assert.doesNotMatch(JSON.stringify(state), /credential-payload-for-test/);
   assert.equal((await fs.readdir(path.dirname(db))).some(name => name.endsWith('.json')), false);
+  assert.equal(checkedStandalone, true);
+  const commandCalls = (await fs.readFile(calls, 'utf8')).trim().split(/\r?\n/).map(JSON.parse);
+  assert.ok(commandCalls.some(args => args[0] === '--standalone' && args[1] === 'auth' && args[2] === 'export'));
+  assert.ok(commandCalls.some(args => args[0] === '--standalone' && args[1] === 'auth' && args[2] === 'import'));
 });
 
 test('keeps projects isolated, skips local profiles, and removes only the deleted project store', async () => {

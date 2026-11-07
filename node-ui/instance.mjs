@@ -20,6 +20,7 @@ import { iterationSummariesSince, latestIterationSummary, projectDataRoot } from
 import { selectedRoadmapTaskFromEvent } from './lib/task-selection.mjs';
 import { projectWindowActionPlan } from './lib/instance-actions.mjs';
 import { isCleanWorkerStopEventStream } from './lib/worker-stop.mjs';
+import { ensureProjectAuthStore, readOpenCodeAuthAccounts } from './lib/project-auth-stores.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -34,6 +35,42 @@ const rule = chalk.gray('─'.repeat(76));
 const controls = chalk.gray('Controls: [S] stop after this iteration  |  [X] emergency stop current iteration  |  [Ctrl+C] safe stop');
 function clear() { if (process.stdout.isTTY) process.stdout.write('\x1Bc'); }
 function durationText(milliseconds) { const seconds = Math.max(0, Math.floor(milliseconds / 1000)); return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`; }
+async function resolveCommand(name) {
+  if (path.isAbsolute(name) || /[\\/]/.test(name)) return name;
+  if (process.platform !== 'win32') return name;
+  const npmShim = path.join(process.env.APPDATA || '', 'npm', `${name}.cmd`);
+  try { await fs.access(npmShim); return npmShim; } catch { }
+  const locations = await new Promise((resolve, reject) => {
+    const child = spawn('where.exe', [name], { cwd: root, shell: false, stdio: ['ignore', 'pipe', 'pipe'] }); let stdout = '';
+    child.stdout.on('data', chunk => { stdout += String(chunk); }); child.once('error', reject);
+    child.once('close', code => code === 0 ? resolve(stdout) : reject(new Error(`Command '${name}' was not found on PATH.`)));
+  });
+  return locations.split(/\r?\n/).map(line => line.trim()).find(Boolean);
+}
+async function persistSettings(settings) {
+  const temporary = `${configPath}.${process.pid}.tmp`;
+  await fs.writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+  await fs.rename(temporary, configPath);
+}
+async function ensureInstanceAuthStore(settings, instance, project) {
+  const frozen = instance.profile || {};
+  if (frozen.policy === 'local') return;
+  const sourceProfile = (settings.openCode?.profiles || []).find(profile => profile.id === frozen.id);
+  if (!sourceProfile) throw new Error('The selected profile no longer exists in the dispatcher configuration. Start the project again from Development.');
+  const profile = {
+    ...sourceProfile,
+    policy: frozen.policy,
+    provider: frozen.provider,
+    credentialId: frozen.credentialId
+  };
+  const executable = await resolveCommand(settings.openCodeCommand || 'opencode');
+  const { storeId, created } = await ensureProjectAuthStore({
+    settings, project, profile, configPath, executable, cwd: root,
+    listAccounts: (env, standalone) => readOpenCodeAuthAccounts({ executable, cwd: root, env, standalone })
+  });
+  if (frozen.authStoreId && storeId !== frozen.authStoreId) throw new Error('The project authentication store changed. Start a new project instance from Development.');
+  if (created) await persistSettings(settings);
+}
 async function cleanWorkerStopFromFile(filename) {
   if (!filename) return false;
   try { return isCleanWorkerStopEventStream(await fs.readFile(filename, 'utf8')); } catch { return false; }
@@ -44,6 +81,10 @@ function limitSummary(profile = {}) {
   const policy = profile.limitPolicy || {};
   if (policy.mode === 'critical') return `minimum ${policy.amount ?? 0} ${profile.usageSource?.unit === 'usd' ? 'USD' : '%'}; reserve ${policy.reserve ?? 0}`;
   return policy.mode || 'not configured';
+}
+function runnerFailureText(reason, stderr, code) {
+  if (reason === 'project-git-repository-required') return 'The configured project folder is not a Git repository. Initialize Git in that folder or select the repository root.';
+  return reason && reason !== 'runner-internal-error' ? reason : instanceRunnerFailure(stderr, code);
 }
 function activityFromEvent(event) {
   if (event?.type !== 'tool_use') return '';
@@ -90,6 +131,8 @@ async function run(mode, limit = 1) {
     return;
   }
   if (['running', 'starting'].includes(instance.state)) { console.log(chalk.yellow('This instance already has an active runner.')); return; }
+  try { await ensureInstanceAuthStore(settings, instance, project); }
+  catch (error) { await safeUpdate({ state: 'failed', runnerPid: null, activity: '', error: error.message, stopReason: 'project authentication setup failed' }); throw error; }
   const runStartedAt = new Date().toISOString();
   await clearInstanceControls(configPath, instanceId); await safeUpdate({ state: 'starting', runnerPid: null, activity: 'Preparing OpenCode', runStartedAt });
   const command = mode === 'continuous' ? `Run continuously${limit ? ` for up to ${limit} iteration(s)` : ''}` : 'Run one iteration';
@@ -156,7 +199,7 @@ async function run(mode, limit = 1) {
     const [roadmapAfter, summaryAfter] = await Promise.all([readRoadmapProgress(project), latestIterationSummary(settings, project, configPath)]);
     const normalReason = cleanWorkerStop ? 'OpenCode ended with a verified clean stop event.' : roadmapAfter.available && roadmapAfter.pending === 0 ? `Roadmap complete — all ${roadmapAfter.total} task(s) are done.` : String(summaryAfter?.stoppedReason || '');
     const safetyStopped = effectiveCode === 0 && (cleanWorkerStop || (Boolean(summaryAfter?.stoppedReason) && summaryAfter.stoppedReason !== 'roadmap-complete'));
-    await safeUpdate({ state: aborted ? 'aborted' : stopped || safetyStopped ? 'stopped' : effectiveCode === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', error: failed ? (runnerFailure || instanceRunnerFailure(stderr, code)) : '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? String(current?.stopReason || 'Graceful stop completed.') : effectiveCode === 0 ? normalReason : `runner exit ${code}` });
+    await safeUpdate({ state: aborted ? 'aborted' : stopped || safetyStopped ? 'stopped' : effectiveCode === 0 ? 'finished' : 'failed', runnerPid: null, activity: '', error: failed ? runnerFailureText(runnerFailure, stderr, code) : '', stopReason: aborted ? 'Emergency abort completed.' : stopped ? String(current?.stopReason || 'Graceful stop completed.') : effectiveCode === 0 ? normalReason : `runner exit ${code}` });
   }).catch(async error => { await safeUpdate({ state: 'failed', runnerPid: null, error: error.message, activity: '' }); }).finally(() => {
     if (paint) clearInterval(paint); if (headerUpdate) clearInterval(headerUpdate); clearInterval(eventWatch); if (liveAttached) process.stdout.off('resize', onResize); liveHeader.clear(); status.clear(); footer.clear(); if (liveAttached) process.stdout.write('\x1b[?25h');
   });
