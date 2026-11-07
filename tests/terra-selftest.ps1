@@ -36,6 +36,26 @@ try {
     $cfg.logs.maxIterationsPerProject = 1
     $cfg.logs.retainDays = 1
     $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
+    # Autopilot must recover a configured project branch without requiring a
+    # user to create or select it first. Exercise both a remote-only branch
+    # checkout and a new non-force published work branch; all repositories
+    # here are isolated temporary test fixtures.
+    & git -C $repo checkout -qb bootstrap-base
+    & git -C $repo push -q -u origin bootstrap-base
+    & git -C $repo branch -D codex/terra
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun
+    if ((& git -C $repo branch --show-current).Trim() -cne 'codex/terra') { throw 'Autopilot did not check out the configured remote-only branch.' }
+    $cfg.projects[0].branch = 'codex/autopilot-bootstrap'
+    $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
+    & git -C $repo checkout -q bootstrap-base
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun
+    if ((& git -C $repo branch --show-current).Trim() -cne 'codex/autopilot-bootstrap') { throw 'Autopilot did not create the configured work branch.' }
+    & git -C $bare show-ref --verify --quiet refs/heads/codex/autopilot-bootstrap
+    if ($LASTEXITCODE -ne 0) { throw 'Autopilot did not publish the created work branch.' }
+    $cfg.projects[0].branch = 'codex/terra'
+    $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $cfgFile -Encoding UTF8
+    & (Join-Path $runnerRoot 'terra-runner.ps1') -Project mock-project -Config $cfgFile -DryRun
+    Write-Host 'PASS: Autopilot prepares configured Git work branches safely.' -ForegroundColor Green
     # Dry runs are validation only: they must not rotate user logs or touch budget snapshots.
     $rotationLogs = Join-Path $tempRoot 'project-data/mock-project/logs/rotation'
     [void][IO.Directory]::CreateDirectory($rotationLogs)

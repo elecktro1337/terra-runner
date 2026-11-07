@@ -122,6 +122,15 @@ Describe 'Terra Runner safe command dispatch' {
         $source | Should Match 'autopilot-state\.json'
         $source | Should Match 'autopilot-task-deferred'
     }
+    It 'prepares a configured Git work branch without initializing or resetting a project' {
+        $source = Get-Content -LiteralPath $runner -Raw
+        $source | Should Match 'function Ensure-ProjectWorkBranch'
+        $source | Should Match "'checkout','-b'"
+        $source | Should Match 'show-ref --verify --quiet'
+        $source | Should Match 'never initialises a directory, resets'
+        $source | Should Not Match 'git init'
+        $source | Should Not Match 'reset --hard'
+    }
     It 'does not start an agent for Report' {
         & $runner -Project safe-project -Config $script:config -Report
         (Test-Path -LiteralPath $script:calls) | Should Be $false

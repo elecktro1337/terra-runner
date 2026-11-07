@@ -231,6 +231,7 @@ async function runWithTui(runnerArgs, settings, project, profile, mode, header) 
               stage = `${iterationLabel} | ${event.taskId || 'selecting actionable task'} | ${event.pending} tasks pending${queue}`;
             }
               if (event.type === 'recovery-finished') { checkpoint = `Recovered interrupted work: ${event.recoveryCommit || 'checkpoint committed and pushed'}`; stage = 'Recovered interrupted Terra work'; }
+              if (event.type === 'project-branch-prepared') { checkpoint = `Work branch ${event.branch || 'configured branch'} ${event.action || 'prepared'}`; stage = 'Preparing Autopilot repository'; }
               if (event.type === 'provider-retry-waiting') { checkpoint = `Provider interrupted the response; retry ${event.attempt || 1}/${event.maximumAttempts || '?'}`; stage = `Waiting ${event.delaySeconds || '?'}s before provider retry`; }
               if (event.type === 'autopilot-task-deferred') { checkpoint = `${event.taskId || 'Task'} deferred: ${event.reason || 'no verified progress'}`; stage = 'Autopilot selecting another task'; }
               if (event.type === 'autopilot-waiting') { checkpoint = event.reason || 'All tasks are cooling down'; stage = `Autopilot waiting ${event.delaySeconds || '?'}s before recovery`; }

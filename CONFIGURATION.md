@@ -80,6 +80,8 @@ This is a local estimate only. It may include usage from other projects recorded
 
 The Autopilot iteration count is selected per launch and is not persisted in a profile. `0` means run until roadmap completion or explicit Stop/Abort; `1`–`1000` sets a limit for that one run. Its scheduler writes a project-local `autopilot-state.json` beside runtime logs, never into the project roadmap or Terra configuration. It schedules only unfinished leaf checkboxes and records each item as `ready`, `active`, `cooldown`, or `recovering`, with a redacted reason, attempt count, and next retry time. A failed, documentation-only, mismatched, or repeatedly partial attempt goes into exponential cooldown; Git, provider, Docker, and transient worker failures use `recovering`. When no task is currently eligible, the instance remains alive and waits until the earliest retry.
 
+For an existing repository with an `origin` remote, Autopilot makes the configured `projects[].branch` usable automatically: it checks out an existing local or remote branch, or creates a new branch from the current clean checked-out branch and publishes it through the ordinary non-force push path. A dirty worktree, detached `HEAD`, missing `origin`, or missing Git repository is never auto-repaired; Autopilot remains in recovery waiting instead.
+
 During a Node UI run, `S` or `Ctrl+C` creates a project `STOP` request and lets the current iteration finish. `X` creates an `ABORT` request and ends the active iteration at the next runner poll. A new UI launch clears stale control flags before execution.
 
 ## Recovery and retries

@@ -265,6 +265,42 @@ function Get-HourlyUsage([string]$Root) {
 function Get-Head([string]$Directory) {
     return (Invoke-Cli 'git' @('-C', $Directory, 'rev-parse', 'HEAD') $Directory).Trim()
 }
+function Ensure-ProjectWorkBranch([string]$Directory, [string]$ExpectedBranch) {
+    # Autopilot owns its configured work branch, not the repository itself.
+    # It may create or check out that branch only from a clean existing Git
+    # checkout with an origin remote. It never initialises a directory, resets
+    # a worktree, force-pushes, or overwrites an existing branch.
+    if ([string]::IsNullOrWhiteSpace($ExpectedBranch)) { throw 'Project Git branch is required.' }
+    & git check-ref-format --branch $ExpectedBranch *> $null
+    if ($LASTEXITCODE -ne 0) { throw "Unsafe configured Git branch '$ExpectedBranch'." }
+    $current = (Invoke-Cli 'git' @('-C',$Directory,'branch','--show-current') $Directory).Trim()
+    if ([string]::IsNullOrWhiteSpace($current)) { throw 'Project repository is in detached HEAD state; Autopilot will not choose a branch base automatically.' }
+    if ($current -ceq $ExpectedBranch) { return [pscustomobject]@{ Branch=$current; Created=$false; CheckedOut=$false } }
+    $status = Invoke-Cli 'git' @('-C',$Directory,'status','--porcelain') $Directory
+    if (-not [string]::IsNullOrWhiteSpace($status)) { throw "Project worktree is not clean; Autopilot will not switch from '$current' to '$ExpectedBranch'." }
+    [void](Invoke-Cli 'git' @('-C',$Directory,'remote','get-url','origin') $Directory)
+
+    & git -C $Directory show-ref --verify --quiet "refs/heads/$ExpectedBranch"
+    $localExists = $LASTEXITCODE -eq 0
+    if ($localExists) {
+        [void](Invoke-Cli 'git' @('-C',$Directory,'checkout',$ExpectedBranch) $Directory)
+        return [pscustomobject]@{ Branch=$ExpectedBranch; Created=$false; CheckedOut=$true }
+    }
+
+    $remoteLines = & git -C $Directory ls-remote --heads origin "refs/heads/$ExpectedBranch" 2>&1
+    if ($LASTEXITCODE -ne 0) { throw ([string]::Join("`n",[string[]]@($remoteLines))) }
+    $remoteExists = @($remoteLines | Where-Object { [string]$_ -match '^[0-9a-f]{40,64}\s+' }).Count -gt 0
+    if ($remoteExists) {
+        [void](Invoke-Cli 'git' @('-C',$Directory,'checkout','-b',$ExpectedBranch,'--track',"origin/$ExpectedBranch") $Directory)
+        return [pscustomobject]@{ Branch=$ExpectedBranch; Created=$false; CheckedOut=$true }
+    }
+
+    # The configured remote has no such branch. Create it from the clean,
+    # currently checked-out repository branch; Wait-ForGitRemotePublish below
+    # performs the ordinary non-force first push and confirmation.
+    [void](Invoke-Cli 'git' @('-C',$Directory,'checkout','-b',$ExpectedBranch) $Directory)
+    return [pscustomobject]@{ Branch=$ExpectedBranch; Created=$true; CheckedOut=$true }
+}
 function Confirm-RemotePush([string]$Directory, [string]$Branch) {
     $head = Get-Head $Directory
     $line = Invoke-Cli 'git' @('-C',$Directory,'ls-remote','--heads','origin',"refs/heads/$Branch") $Directory
@@ -1420,9 +1456,15 @@ try {
     $branch = ''
     while ($true) {
         try {
-            $branch = (Invoke-Cli 'git' @('-C',$repo,'branch','--show-current') $repo).Trim()
-            if ($branch -cne [string]$projectConfig.branch) { throw "Wrong Git branch '$branch'; expected '$($projectConfig.branch)'" }
-            [void](Invoke-Cli 'git' @('-C',$repo,'remote','get-url','origin') $repo)
+            $branchPreparation = Ensure-ProjectWorkBranch $repo ([string]$projectConfig.branch)
+            $branch = [string]$branchPreparation.Branch
+            if ($branchPreparation.Created) {
+                Write-Host "Created Autopilot work branch '$branch' from the clean current checkout."
+                Write-UiEvent 'project-branch-prepared' @{ branch=$branch; action='created' }
+            } elseif ($branchPreparation.CheckedOut) {
+                Write-Host "Checked out configured Autopilot work branch '$branch'."
+                Write-UiEvent 'project-branch-prepared' @{ branch=$branch; action='checked-out' }
+            }
             $pendingPush = Wait-ForGitRemotePublish $repo ([string]$projectConfig.branch) $maxPushRetries $pushRetryDelaySeconds $stopPath $abortPath
             if ($pendingPush.Interrupted) { Write-Host "Git remote wait interrupted by $($pendingPush.Reason)."; return }
             if (-not $pendingPush.Success) { throw "Local and remote branch heads differ or could not be verified: $($pendingPush.Error)" }
