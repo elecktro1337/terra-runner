@@ -474,7 +474,7 @@ function Get-EventErrors([string]$EventsFile) {
         }
     }
     return [pscustomobject]@{
-        Errors = $streamErrors; ErrorTypes = @($streamErrorTypes.ToArray()); ToolErrors = $toolErrorIds.Count
+        Errors = $streamErrors; ErrorTypes = @($streamErrorTypes | ForEach-Object { $_ }); ToolErrors = $toolErrorIds.Count
         ToolErrorExamples = @($toolExamples.ToArray()); NoTasks = $noTasks; NoTaskMessage = $noTaskMessage
         VerificationCommands = $verificationIds.Count; VerificationCommandErrors = $verificationErrors
         VerificationExamples = @($verificationExamples.ToArray())
