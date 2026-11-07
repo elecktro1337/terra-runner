@@ -21,7 +21,14 @@ function latestCommit(summary = {}) {
   return hash ? `${String(hash).slice(0, 12)}${subject ? `  ${subject}` : ''}` : '';
 }
 
-function formatSafetyReason(value) {
+function providerErrorReason(summary = {}) {
+  const types = Array.isArray(summary?.eventErrorTypes) ? summary.eventErrorTypes.map(value => String(value).toLowerCase()) : [];
+  if (types.includes('provider.auth')) return 'Provider rejected authentication, account access, or regional availability. Reconnect the account or use an available route, then retry.';
+  if (types.includes('provider.invalid-output')) return 'Provider interrupted its response. Continuous mode retries a clean, safe interruption automatically; otherwise retry the run.';
+  return '';
+}
+
+function formatSafetyReason(value, summary = {}) {
   const reason = String(value || '');
   if (/^HUM-\d+:/i.test(reason)) return 'Legacy external-prerequisite record; it no longer blocks development.';
   const noProgress = reason.match(/^no-roadmap-progress:\s*(\d+)/i);
@@ -30,6 +37,7 @@ function formatSafetyReason(value) {
   if (noImplementationProgress) return `Safety stop — ${noImplementationProgress[1]} consecutive iteration(s) made no roadmap, code, or test progress.`;
   const wipWithoutRoadmapProgress = reason.match(/^wip-without-roadmap-progress:\s*(\d+)/i);
   if (wipWithoutRoadmapProgress) return `Safety stop — ${wipWithoutRoadmapProgress[1]} consecutive implementation iteration(s) changed code, tests, or checkpoints without completing a roadmap task.`;
+  if (/^opencode-reported-\d+-errors$/i.test(reason)) return providerErrorReason(summary) || 'OpenCode reported an error. Review the local event log before retrying.';
   if (/^no-actionable-roadmap-task$/i.test(reason)) return 'Safety stop — OpenCode reported no actionable roadmap task.';
   if (/^agent-stopped-cleanly$/i.test(reason)) return 'Agent ended the iteration cleanly without a provider or tool error.';
   if (/^roadmap-complete$/i.test(reason)) return 'Roadmap complete.';
@@ -59,17 +67,20 @@ export function instanceOutcome(instance = {}, summary = null, roadmap = {}, run
   if (state === 'finished') {
     if (roadmap.available && pending === 0) { kind = 'complete'; reason = `Roadmap complete — all ${total || completed} task(s) are done.`; }
     else if (summary?.noActionableTasksReported) { kind = 'paused'; reason = 'OpenCode reported no actionable roadmap task.'; }
-    else if (summary?.stoppedReason) { kind = 'stopped'; reason = formatSafetyReason(summary.stoppedReason); }
+    else if (summary?.stoppedReason) { kind = 'stopped'; reason = formatSafetyReason(summary.stoppedReason, summary); }
     else if (!reason) reason = pending > 0 ? `Runner completed normally; ${pending} roadmap task(s) remain.` : 'Runner completed normally.';
   }
   // The runner records a terse process status as stopReason and a separately
   // redacted, actionable diagnosis as error. Prefer the diagnosis.
   if (state === 'failed') reason = String(instance.error || reason || 'Runner failed.');
-  if (state === 'stopped' || state === 'aborted') reason = formatSafetyReason(reason || String(summary?.stoppedReason || '') || (state === 'aborted' ? 'Emergency abort completed.' : 'Graceful stop completed.'));
+  if (state === 'stopped' || state === 'aborted') reason = formatSafetyReason(reason || String(summary?.stoppedReason || '') || (state === 'aborted' ? 'Emergency abort completed.' : 'Graceful stop completed.'), summary);
   const taskIds = Array.isArray(summary?.completedTaskIds) ? summary.completedTaskIds.filter(Boolean) : [];
   const run = runTotals(runSummaries);
-  const plannedOnlyDisplay = summary?.displayTaskId && summary?.displayTaskId === summary?.plannedTaskId && !summary?.selectedTaskId && !taskIds.length;
-  const lastTask = taskIds.join(', ') || String(summary?.selectedTaskId || '') || (plannedOnlyDisplay ? '' : String(summary?.displayTaskId || ''));
+  const priorUsefulSummary = [...runSummaries].reverse().find(item => Array.isArray(item?.completedTaskIds) && item.completedTaskIds.some(Boolean) || item?.selectedTaskId || Array.isArray(item?.commits) && item.commits.length) || null;
+  const taskSummary = taskIds.length || summary?.selectedTaskId || summary?.displayTaskId ? summary : priorUsefulSummary;
+  const displayTaskIds = Array.isArray(taskSummary?.completedTaskIds) ? taskSummary.completedTaskIds.filter(Boolean) : [];
+  const plannedOnlyDisplay = taskSummary?.displayTaskId && taskSummary?.displayTaskId === taskSummary?.plannedTaskId && !taskSummary?.selectedTaskId && !displayTaskIds.length;
+  const lastTask = displayTaskIds.join(', ') || String(taskSummary?.selectedTaskId || '') || (plannedOnlyDisplay ? '' : String(taskSummary?.displayTaskId || ''));
   const runStartedAt = Date.parse(String(instance.runStartedAt || instance.createdAt || ''));
   const runEndedAt = Date.parse(String(instance.endedAt || instance.updatedAt || ''));
   const runElapsedSeconds = Number.isFinite(runStartedAt) && Number.isFinite(runEndedAt) && runEndedAt >= runStartedAt
@@ -80,7 +91,7 @@ export function instanceOutcome(instance = {}, summary = null, roadmap = {}, run
     roadmap: roadmap.available ? `${completed}/${total} complete  |  ${pending} pending${total ? `  |  ${((completed / total) * 100).toFixed(1)}%` : ''}` : '',
     task: lastTask,
     duration: runElapsedSeconds == null ? '' : durationText(runElapsedSeconds),
-    commit: latestCommit(summary),
+    commit: latestCommit(summary) || latestCommit(priorUsefulSummary),
     runCompletedTasks: run.completed,
     runIterations: run.iterations
   };

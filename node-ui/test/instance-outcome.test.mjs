@@ -61,6 +61,21 @@ test('stops a repeated partial implementation without pretending the planned tas
   assert.equal(outcome.duration, '2h 35m 16s');
 });
 
+test('uses the last successful task and a redacted provider-access diagnosis after a terminal error', () => {
+  const outcome = instanceOutcome(
+    { state: 'stopped', stopReason: 'opencode-reported-1-errors' },
+    { stoppedReason: 'opencode-reported-1-errors', eventErrorTypes: ['provider.auth'], completedTaskIds: [], commits: [] },
+    { available: true, completed: 440, pending: 275, total: 715 },
+    [
+      { completedTaskIds: ['ERP-1712'], selectedTaskId: 'ERP-1685', commits: [{ hash: 'ed64fb7', subject: 'feat: migrate organization card sidepanel' }] },
+      { completedTaskIds: [], eventErrorTypes: ['provider.auth'], commits: [] }
+    ]
+  );
+  assert.match(outcome.reason, /regional availability/);
+  assert.equal(outcome.task, 'ERP-1712');
+  assert.equal(outcome.commit, 'ed64fb7  feat: migrate organization card sidepanel');
+});
+
 test('reports unique completed roadmap tasks across the current run', () => {
   const outcome = instanceOutcome(
     { state: 'finished' },

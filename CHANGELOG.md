@@ -4,6 +4,7 @@
 
 - Continuous runs now stop after a configurable six consecutive code/test/WIP iterations without a roadmap completion, preventing a partial implementation from looping indefinitely while retaining every verified checkpoint.
 - Workers now autonomously decompose an oversized roadmap checkbox into a non-checkbox parent and small, ordered child checkboxes before implementation, rather than repeatedly WIP-checkpointing project-wide or multi-system work.
+- Instance results now retain the last successful task and commit after a terminal failed iteration, and explain recognised provider access failures using only a redacted error type. Older local summaries are safely enriched from their colocated event stream without displaying provider payloads.
 - Instance reports use the actual run interval, render hours when needed, and no longer mislabel the first unchecked roadmap item as the last task when the worker emitted no valid task marker.
 - Raised configuration to schema v12 and added an optional, repository-relative project integration harness. Workers receive only the harness path and the standard suite command; the harness owns local secrets and Compose lifecycle.
 - Added immediate WIP checkpoints for successful, clean partial work. Terra validates the staged diff, uses normal Git hooks, pushes `wip(terra): checkpoint …`, keeps roadmap checkboxes unchanged, and lets Continuous continue from that implementation progress.

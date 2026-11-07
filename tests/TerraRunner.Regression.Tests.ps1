@@ -85,6 +85,12 @@ Describe 'Terra Runner safe command dispatch' {
         $source | Should Match "'diff','--cached','--check'"
         $source | Should Match '\$exitCode -eq 0 -and \$eventErrors -eq 0'
     }
+    It 'records only redacted OpenCode stream-error types in iteration summaries' {
+        $source = Get-Content -LiteralPath $runner -Raw
+        $source | Should Match '\$streamErrorTypes'
+        $source | Should Match 'ErrorTypes = @\(\$streamErrorTypes\.ToArray\(\)\)'
+        $source | Should Match 'eventErrorTypes = @\(\$eventErrorTypes\)'
+    }
     It 'recognises a clean OpenCode stop event without classifying it as a provider failure' {
         $source = Get-Content -LiteralPath $runner -Raw
         $source | Should Match 'function Test-CleanWorkerStop'

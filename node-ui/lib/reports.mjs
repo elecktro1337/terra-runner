@@ -7,6 +7,26 @@ export function projectDataRoot(settings, project, configPath) {
   return path.join(root, project.id);
 }
 
+async function readSummary(filename) {
+  const summary = JSON.parse(await fs.readFile(filename, 'utf8'));
+  if (Array.isArray(summary.eventErrorTypes) || !summary.eventsFile) return summary;
+  // Older summaries predate eventErrorTypes. Recover only the classified type
+  // from the colocated event stream so the UI can explain a provider stop
+  // without rendering provider bodies, credentials, or raw error text.
+  try {
+    const raw = await fs.readFile(path.join(path.dirname(filename), summary.eventsFile), 'utf8');
+    const types = new Set();
+    for (const line of raw.split(/\r?\n/)) {
+      try {
+        const event = JSON.parse(line);
+        if (event?.type === 'error' && typeof event?.error?.type === 'string' && event.error.type) types.add(event.error.type);
+      } catch { }
+    }
+    summary.eventErrorTypes = [...types];
+  } catch { summary.eventErrorTypes = []; }
+  return summary;
+}
+
 export async function latestIterationSummary(settings, project, configPath) {
   const logs = path.join(projectDataRoot(settings, project, configPath), 'logs');
   let entries;
@@ -18,7 +38,7 @@ export async function latestIterationSummary(settings, project, configPath) {
   }
   candidates.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
   if (!candidates.length) return null;
-  try { return JSON.parse(await fs.readFile(candidates[0].file, 'utf8')); } catch { return null; }
+  try { return await readSummary(candidates[0].file); } catch { return null; }
 }
 
 export async function iterationSummariesSince(settings, project, configPath, sinceMs) {
@@ -32,7 +52,7 @@ export async function iterationSummariesSince(settings, project, configPath, sin
     try {
       const stat = await fs.stat(file);
       if (stat.mtimeMs + 1000 < sinceMs) continue;
-      summaries.push(JSON.parse(await fs.readFile(file, 'utf8')));
+      summaries.push(await readSummary(file));
     } catch { }
   }
   return summaries.sort((a, b) => String(a.started || '').localeCompare(String(b.started || '')));

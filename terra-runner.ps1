@@ -423,6 +423,7 @@ function Save-TerraWipCheckpoint([string]$Directory, [string]$Branch, [string]$R
 }
 function Get-EventErrors([string]$EventsFile) {
     $streamErrors = 0
+    $streamErrorTypes = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $toolErrorIds = [System.Collections.Generic.HashSet[string]]::new()
     $verificationIds = [System.Collections.Generic.HashSet[string]]::new()
     $verificationErrors = 0
@@ -435,7 +436,12 @@ function Get-EventErrors([string]$EventsFile) {
         try { $event = ConvertFrom-Json -InputObject $line -AsHashtable -Depth 60 }
         catch { throw 'Malformed OpenCode JSON event detected. Review raw event log.' }
         $eventType = [string](Read-Member $event 'type')
-        if ($eventType -eq 'error') { $streamErrors++ }
+        if ($eventType -eq 'error') {
+            $streamErrors++
+            $error = Read-Member $event 'error'
+            $errorType = [string](Read-Member $error 'type')
+            if (-not [string]::IsNullOrWhiteSpace($errorType)) { [void]$streamErrorTypes.Add($errorType) }
+        }
         $part = Read-Member $event 'part'
         if ($eventType -eq 'tool_use') {
             $state = Read-Member $part 'state'
@@ -468,7 +474,7 @@ function Get-EventErrors([string]$EventsFile) {
         }
     }
     return [pscustomobject]@{
-        Errors = $streamErrors; ToolErrors = $toolErrorIds.Count
+        Errors = $streamErrors; ErrorTypes = @($streamErrorTypes.ToArray()); ToolErrors = $toolErrorIds.Count
         ToolErrorExamples = @($toolExamples.ToArray()); NoTasks = $noTasks; NoTaskMessage = $noTaskMessage
         VerificationCommands = $verificationIds.Count; VerificationCommandErrors = $verificationErrors
         VerificationExamples = @($verificationExamples.ToArray())
@@ -1501,6 +1507,7 @@ try {
         $headAfter = Get-Head $repo
         $doneAfter = Count-Completed $roadmap $taskIdPattern
         $eventErrors = 0
+        $eventErrorTypes = @()
         $toolErrors = 0
         $toolErrorExamples = @()
         $verificationCommandsObserved = 0
@@ -1512,6 +1519,7 @@ try {
         try {
             $eventsReview = Get-EventErrors $eventsPath
             $eventErrors = $eventsReview.Errors
+            $eventErrorTypes = @($eventsReview.ErrorTypes)
             $toolErrors = $eventsReview.ToolErrors
             $toolErrorExamples = @($eventsReview.ToolErrorExamples)
             $verificationCommandsObserved = $eventsReview.VerificationCommands
@@ -1647,7 +1655,7 @@ try {
             selectedTaskId = $selectedTaskId; selectedTaskTitle = $selectedTaskTitle
             displayTaskId = $displayTaskId; displayTaskTitle = $displayTaskTitle
             headBefore = $headBefore; headAfter = $headAfter
-            pushVerified = $pushVerified; eventErrors = $eventErrors
+            pushVerified = $pushVerified; eventErrors = $eventErrors; eventErrorTypes = @($eventErrorTypes)
             toolErrors = $toolErrors; toolErrorExamples = $toolErrorExamples
             verificationCommandsObserved = $verificationCommandsObserved
             verificationCommandErrors = $verificationCommandErrors
